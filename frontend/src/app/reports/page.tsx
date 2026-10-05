@@ -98,17 +98,75 @@ export default function ReportPage() {
     setToDate(`${y}-${m}-${d}`);
   }, []);
 
-  // Fetch filter dropdown options
+  // Fetch filter dropdown options:
+  // - Vehicle Number fetched directly from Page Vehicle Register (/vehicles)
+  // - Driver Name fetched directly from Page Driver Registry (/drivers)
   const fetchOptions = useCallback(async () => {
     try {
       setIsOptionsLoading(true);
-      const data = await apiRequest<{
-        vehicles: VehicleOption[];
-        drivers: DriverOption[];
-      }>('/reports/options');
-      setVehicles(data.vehicles || []);
-      setDrivers(data.drivers || []);
+
+      const [vehiclesRes, driversRes] = await Promise.allSettled([
+        apiRequest<any[]>('/vehicles'),
+        apiRequest<{ totalCount?: number; drivers?: any[] }>('/drivers'),
+      ]);
+
+      let vehicleList: VehicleOption[] = [];
+      let driverList: DriverOption[] = [];
+
+      if (vehiclesRes.status === 'fulfilled' && Array.isArray(vehiclesRes.value)) {
+        vehicleList = vehiclesRes.value
+          .map((v: any) => ({
+            id: String(v._id || v.id || v.vehicleNumber),
+            vehicleNumber: String(v.vehicleNumber || '').toUpperCase().trim(),
+            status: v.status || 'Active',
+          }))
+          .filter((v) => v.vehicleNumber.length > 0)
+          .sort((a, b) => a.vehicleNumber.localeCompare(b.vehicleNumber));
+      }
+
+      if (driversRes.status === 'fulfilled') {
+        const val = driversRes.value;
+        const rawDrivers = Array.isArray(val)
+          ? val
+          : Array.isArray(val?.drivers)
+          ? val.drivers
+          : [];
+
+        driverList = rawDrivers
+          .map((d: any) => ({
+            id: String(d._id || d.id),
+            driverName: d.driverName || 'Unnamed Driver',
+            dlNumber: d.dlNumber || '',
+            mobileNumber: d.mobileNumber || '',
+            status: d.status || 'Active',
+          }))
+          .filter((d) => d.driverName.length > 0)
+          .sort((a, b) => a.driverName.localeCompare(b.driverName));
+      }
+
+      // If either list was empty, attempt /reports/options as fallback
+      if (vehicleList.length === 0 || driverList.length === 0) {
+        try {
+          const fallbackData = await apiRequest<{
+            vehicles?: VehicleOption[];
+            drivers?: DriverOption[];
+          }>('/reports/options');
+
+          if (vehicleList.length === 0 && Array.isArray(fallbackData.vehicles)) {
+            vehicleList = fallbackData.vehicles;
+          }
+          if (driverList.length === 0 && Array.isArray(fallbackData.drivers)) {
+            driverList = fallbackData.drivers;
+          }
+        } catch {
+          // Ignore fallback error if primary already worked
+        }
+      }
+
+      setVehicles(vehicleList);
+      setDrivers(driverList);
     } catch (err: any) {
+      console.error('[Fetch Report Options Error]:', err);
       setAlert({
         type: 'error',
         message: err.message || 'Failed to load vehicle and driver options.',
@@ -401,7 +459,7 @@ export default function ReportPage() {
                     <option value="ALL">All Drivers</option>
                     {drivers.map((d) => (
                       <option key={d.id} value={d.id}>
-                        {d.driverName} ({d.dlNumber})
+                        {d.driverName} {d.dlNumber ? `(${d.dlNumber})` : ''} {d.mobileNumber ? `• ${d.mobileNumber}` : ''}
                       </option>
                     ))}
                   </select>
