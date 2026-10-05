@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const Page = require('../models/Page');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
 
 const router = express.Router();
@@ -8,35 +9,38 @@ const router = express.Router();
 // Require authenticated user with 'User Management' page permission
 router.use(verifyToken, checkPageAccess('User Management'));
 
-const SYSTEM_PAGES = [
-  'Dashboard',
-  'Plant',
-  'Vehicle Register',
-  'Driver Registry',
-  'GPS',
-  'Report',
-  'User Management',
-];
-
-// GET /api/users/pages - Get list of system pages for access management
+// GET /api/users/pages - Get list of system pages dynamically stored in MongoDB
 router.get('/pages', async (req, res) => {
-  res.json({ pages: SYSTEM_PAGES });
+  try {
+    await Page.ensureDefaultPages();
+    const activePages = await Page.find({ status: 'Active' }).sort({ order: 1 });
+    const pageNames = activePages.map((p) => p.pageName);
+    res.json({ pages: pageNames, pageDetails: activePages });
+  } catch (error) {
+    console.error('[Get Pages Error]:', error);
+    res.status(500).json({ error: 'Failed to retrieve system pages from database.' });
+  }
 });
 
 // GET /api/users - List all users
 router.get('/', async (req, res) => {
   try {
-    const users = await User.find()
-      .select('-passwordHash')
-      .populate('accessPlants', 'plantName location status')
-      .sort({ createdAt: -1 });
+    await Page.ensureDefaultPages();
+    const [users, activePages] = await Promise.all([
+      User.find()
+        .select('-passwordHash')
+        .populate('accessPlants', 'plantName location status')
+        .sort({ createdAt: -1 }),
+      Page.find({ status: 'Active' }).sort({ order: 1 }),
+    ]);
 
-    // Ensure Admin users always reflect all system pages in their accessPages list
+    const allPageNames = activePages.map((p) => p.pageName);
+
+    // Ensure Admin users always reflect all system pages stored in MongoDB
     const mappedUsers = users.map((u) => {
       const userObj = u.toObject();
       if (userObj.role === 'Admin') {
-        const pageSet = new Set([...(userObj.accessPages || []), ...SYSTEM_PAGES]);
-        userObj.accessPages = Array.from(pageSet);
+        userObj.accessPages = allPageNames;
       }
       return userObj;
     });
@@ -74,13 +78,13 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: `Username '${trimmedUsername}' is already taken.` });
     }
 
-    const userRole = role === 'Admin' ? 'Admin' : 'User';
+    const activePages = await Page.find({ status: 'Active' }).sort({ order: 1 });
+    const allPageNames = activePages.map((p) => p.pageName);
 
-    // If Admin, grant all system pages automatically
-    let finalPages = SYSTEM_PAGES;
+    // If Admin, grant all system pages automatically from MongoDB
+    let finalPages = allPageNames;
     if (userRole !== 'Admin') {
       if (Array.isArray(accessPages) && accessPages.length > 0) {
-        // Accept valid string pages (allows current SYSTEM_PAGES and any future added pages)
         finalPages = accessPages.filter((p) => typeof p === 'string' && p.trim().length > 0);
       } else {
         finalPages = ['Dashboard'];
@@ -115,7 +119,7 @@ router.post('/', async (req, res) => {
     });
   } catch (error) {
     console.error('[Create User Error]:', error);
-    res.status(500).json({ error: 'Failed to create user account.' });
+    res.status(500).json({ error: error.message || 'Failed to create user account.' });
   }
 });
 
@@ -161,15 +165,13 @@ router.put('/:id', async (req, res) => {
       user.role = role;
     }
 
-    // If user is Admin, they get all system pages
+    // If user is Admin, they get all system pages from MongoDB
     if (user.role === 'Admin') {
-      const pageSet = new Set([...(user.accessPages || []), ...SYSTEM_PAGES, ...(Array.isArray(accessPages) ? accessPages : [])]);
-      user.accessPages = Array.from(pageSet);
+      const activePages = await Page.find({ status: 'Active' }).sort({ order: 1 });
+      user.accessPages = activePages.map((p) => p.pageName);
     } else if (Array.isArray(accessPages)) {
       const finalPages = accessPages.filter((p) => typeof p === 'string' && p.trim().length > 0);
-      if (finalPages.length > 0) {
-        user.accessPages = finalPages;
-      }
+      user.accessPages = finalPages.length > 0 ? finalPages : ['Dashboard'];
     }
 
     if (Array.isArray(accessPlants)) {
@@ -192,7 +194,7 @@ router.put('/:id', async (req, res) => {
     });
   } catch (error) {
     console.error('[Update User Error]:', error);
-    res.status(500).json({ error: 'Failed to update user account.' });
+    res.status(500).json({ error: error.message || 'Failed to update user account.' });
   }
 });
 

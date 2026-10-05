@@ -41,13 +41,13 @@ interface UserRecord {
   updatedAt: string;
 }
 
-// Dynamically derive all available pages from central navigation items
-// Ensures any new page added in the future automatically appears here
-export const AVAILABLE_PAGES = NAV_ITEMS.map((item) => item.name);
+// Fallback system pages derived from central navigation
+export const DEFAULT_SYSTEM_PAGES = NAV_ITEMS.map((item) => item.name);
 
 export default function UserManagementPage() {
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [activePlants, setActivePlants] = useState<PlantOption[]>([]);
+  const [availablePages, setAvailablePages] = useState<string[]>(DEFAULT_SYSTEM_PAGES);
   const [isLoading, setIsLoading] = useState(true);
   const [alert, setAlert] = useState<AlertState | null>(null);
 
@@ -78,16 +78,20 @@ export default function UserManagementPage() {
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Fetch Users & Plants
+  // Fetch Users, Plants & System Pages from MongoDB database
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
-      const [usersData, plantsData] = await Promise.all([
+      const [usersData, plantsData, pagesData] = await Promise.all([
         apiRequest<UserRecord[]>('/users'),
         apiRequest<PlantOption[]>('/plants'),
+        apiRequest<{ pages: string[] }>('/users/pages').catch(() => null),
       ]);
       setUsers(usersData || []);
       setActivePlants((plantsData || []).filter((p) => p.status === 'Active'));
+      if (pagesData && Array.isArray(pagesData.pages) && pagesData.pages.length > 0) {
+        setAvailablePages(pagesData.pages);
+      }
     } catch (err: any) {
       setAlert({
         type: 'error',
@@ -129,7 +133,7 @@ export default function UserManagementPage() {
 
     const initialPages =
       user.role === 'Admin'
-        ? Array.from(new Set([...(user.accessPages || []), ...AVAILABLE_PAGES]))
+        ? Array.from(new Set([...(user.accessPages || []), ...availablePages]))
         : user.accessPages && user.accessPages.length > 0
         ? user.accessPages
         : ['Dashboard'];
@@ -155,7 +159,7 @@ export default function UserManagementPage() {
     setFormData((prev) => ({
       ...prev,
       role: newRole,
-      accessPages: newRole === 'Admin' ? [...AVAILABLE_PAGES] : prev.accessPages,
+      accessPages: newRole === 'Admin' ? [...availablePages] : prev.accessPages,
     }));
   };
 
@@ -176,7 +180,7 @@ export default function UserManagementPage() {
   const selectAllPages = () => {
     setFormData((prev) => ({
       ...prev,
-      accessPages: [...AVAILABLE_PAGES],
+      accessPages: [...availablePages],
     }));
   };
 
@@ -725,7 +729,7 @@ export default function UserManagementPage() {
                 )}
               </div>
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {AVAILABLE_PAGES.map((page) => {
+                {availablePages.map((page) => {
                   const isChecked = formData.role === 'Admin' || formData.accessPages.includes(page);
                   return (
                     <label
@@ -963,7 +967,7 @@ export default function UserManagementPage() {
                 )}
               </div>
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {AVAILABLE_PAGES.map((page) => {
+                {availablePages.map((page) => {
                   const isChecked = formData.role === 'Admin' || formData.accessPages.includes(page);
                   return (
                     <label

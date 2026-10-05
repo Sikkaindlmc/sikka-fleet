@@ -25,7 +25,6 @@ const userSchema = new mongoose.Schema(
     },
     accessPages: {
       type: [String],
-      enum: ['Dashboard', 'Plant', 'Vehicle Register', 'Driver Registry', 'GPS', 'User Management'],
       default: ['Dashboard'],
     },
     accessPlants: [
