@@ -4,6 +4,7 @@ const Vehicle = require('../models/Vehicle');
 const Driver = require('../models/Driver');
 const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
 const PlantEntryEvent = require('../models/PlantEntryEvent');
+const GpsSetting = require('../models/GpsSetting');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
 const {
   attachNearestDriversToVehicles,
