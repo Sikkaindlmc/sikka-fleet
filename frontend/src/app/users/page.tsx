@@ -19,6 +19,7 @@ import AppLayout from '../../components/AppLayout';
 import Modal from '../../components/Modal';
 import ConfirmationModal from '../../components/ConfirmationModal';
 import AlertBanner, { AlertState } from '../../components/AlertBanner';
+import { NAV_ITEMS } from '../../components/Sidebar';
 import { apiRequest } from '../../lib/api';
 import { formatDateTime } from '../../lib/formatters';
 
@@ -40,13 +41,9 @@ interface UserRecord {
   updatedAt: string;
 }
 
-const AVAILABLE_PAGES = [
-  'Dashboard',
-  'Plant',
-  'Vehicle Register',
-  'GPS',
-  'User Management',
-];
+// Dynamically derive all available pages from central navigation items
+// Ensures any new page added in the future automatically appears here
+export const AVAILABLE_PAGES = NAV_ITEMS.map((item) => item.name);
 
 export default function UserManagementPage() {
   const [users, setUsers] = useState<UserRecord[]>([]);
@@ -130,6 +127,13 @@ export default function UserManagementPage() {
       typeof p === 'string' ? p : p._id
     );
 
+    const initialPages =
+      user.role === 'Admin'
+        ? Array.from(new Set([...(user.accessPages || []), ...AVAILABLE_PAGES]))
+        : user.accessPages && user.accessPages.length > 0
+        ? user.accessPages
+        : ['Dashboard'];
+
     setFormData({
       fullName: user.fullName,
       username: user.username,
@@ -137,7 +141,7 @@ export default function UserManagementPage() {
       password: '',
       confirmPassword: '',
       accessPlants: assignedPlantIds,
-      accessPages: user.accessPages || ['Dashboard'],
+      accessPages: initialPages,
       status: user.status,
     });
     setFormError('');
@@ -146,8 +150,18 @@ export default function UserManagementPage() {
     setIsEditModalOpen(true);
   };
 
+  // Handle Role Change
+  const handleRoleChange = (newRole: 'Admin' | 'User') => {
+    setFormData((prev) => ({
+      ...prev,
+      role: newRole,
+      accessPages: newRole === 'Admin' ? [...AVAILABLE_PAGES] : prev.accessPages,
+    }));
+  };
+
   // Toggle Page Checkbox
   const togglePage = (page: string) => {
+    if (formData.role === 'Admin') return; // Admin always retains access to all pages
     setFormData((prev) => {
       const exists = prev.accessPages.includes(page);
       let updated = exists
@@ -156,6 +170,22 @@ export default function UserManagementPage() {
       if (updated.length === 0) updated = ['Dashboard']; // At least 1 page
       return { ...prev, accessPages: updated };
     });
+  };
+
+  // Select all pages
+  const selectAllPages = () => {
+    setFormData((prev) => ({
+      ...prev,
+      accessPages: [...AVAILABLE_PAGES],
+    }));
+  };
+
+  // Deselect all pages (reset to Dashboard)
+  const deselectAllPages = () => {
+    setFormData((prev) => ({
+      ...prev,
+      accessPages: ['Dashboard'],
+    }));
   };
 
   // Toggle Plant Checkbox
@@ -428,14 +458,20 @@ export default function UserManagementPage() {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex flex-wrap gap-1 max-w-[240px]">
-                          {u.accessPages.map((page) => (
-                            <span
-                              key={page}
-                              className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-700"
-                            >
-                              {page}
+                          {u.role === 'Admin' ? (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                              All Pages (Full Access)
                             </span>
-                          ))}
+                          ) : (
+                            u.accessPages.map((page) => (
+                              <span
+                                key={page}
+                                className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-700"
+                              >
+                                {page}
+                              </span>
+                            ))
+                          )}
                         </div>
                       </td>
                       <td className="px-6 py-4">
@@ -545,13 +581,19 @@ export default function UserManagementPage() {
                 </label>
                 <select
                   value={formData.role}
-                  onChange={(e) => setFormData({ ...formData, role: e.target.value as any })}
+                  onChange={(e) => handleRoleChange(e.target.value as any)}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden bg-white"
                   disabled={isSubmitting}
                 >
                   <option value="User">User / Plant Operator</option>
                   <option value="Admin">Administrator (Full System Access)</option>
                 </select>
+                {formData.role === 'Admin' && (
+                  <p className="mt-1.5 text-[11px] font-semibold text-emerald-700 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Admin automatically accesses all current & future pages</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -658,12 +700,33 @@ export default function UserManagementPage() {
 
             {/* Access Pages Selection */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Access Page
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Access Page
+                </label>
+                {formData.role !== 'Admin' && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={selectAllPages}
+                      className="text-[11px] font-bold text-emerald-600 hover:underline cursor-pointer"
+                    >
+                      Select All
+                    </button>
+                    <span className="text-slate-300 text-xs">|</span>
+                    <button
+                      type="button"
+                      onClick={deselectAllPages}
+                      className="text-[11px] font-bold text-slate-500 hover:underline cursor-pointer"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                )}
+              </div>
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {AVAILABLE_PAGES.map((page) => {
-                  const isChecked = formData.accessPages.includes(page);
+                  const isChecked = formData.role === 'Admin' || formData.accessPages.includes(page);
                   return (
                     <label
                       key={page}
@@ -672,14 +735,22 @@ export default function UserManagementPage() {
                       <input
                         type="checkbox"
                         checked={isChecked}
+                        disabled={formData.role === 'Admin'}
                         onChange={() => togglePage(page)}
-                        className="rounded-sm border-slate-300 text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                        className="rounded-sm border-slate-300 text-emerald-600 focus:ring-emerald-500 w-4 h-4 disabled:opacity-80"
                       />
-                      <span>{page}</span>
+                      <span className={formData.role === 'Admin' ? 'text-slate-900 font-bold' : ''}>
+                        {page}
+                      </span>
                     </label>
                   );
                 })}
               </div>
+              {formData.role === 'Admin' && (
+                <p className="mt-1.5 text-[11px] text-emerald-700 font-medium">
+                  Administrator role is automatically granted full access to all system pages, including any new pages added in the future.
+                </p>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
@@ -755,13 +826,19 @@ export default function UserManagementPage() {
                 </label>
                 <select
                   value={formData.role}
-                  onChange={(e) => setFormData({ ...formData, role: e.target.value as any })}
+                  onChange={(e) => handleRoleChange(e.target.value as any)}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden bg-white"
                   disabled={isSubmitting}
                 >
                   <option value="User">User / Plant Operator</option>
                   <option value="Admin">Administrator (Full System Access)</option>
                 </select>
+                {formData.role === 'Admin' && (
+                  <p className="mt-1.5 text-[11px] font-semibold text-emerald-700 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Admin automatically accesses all current & future pages</span>
+                  </p>
+                )}
               </div>
 
               <div>
@@ -861,12 +938,33 @@ export default function UserManagementPage() {
 
             {/* Access Pages Selection */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Access Page
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Access Page
+                </label>
+                {formData.role !== 'Admin' && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={selectAllPages}
+                      className="text-[11px] font-bold text-emerald-600 hover:underline cursor-pointer"
+                    >
+                      Select All
+                    </button>
+                    <span className="text-slate-300 text-xs">|</span>
+                    <button
+                      type="button"
+                      onClick={deselectAllPages}
+                      className="text-[11px] font-bold text-slate-500 hover:underline cursor-pointer"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                )}
+              </div>
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {AVAILABLE_PAGES.map((page) => {
-                  const isChecked = formData.accessPages.includes(page);
+                  const isChecked = formData.role === 'Admin' || formData.accessPages.includes(page);
                   return (
                     <label
                       key={page}
@@ -875,14 +973,22 @@ export default function UserManagementPage() {
                       <input
                         type="checkbox"
                         checked={isChecked}
+                        disabled={formData.role === 'Admin'}
                         onChange={() => togglePage(page)}
-                        className="rounded-sm border-slate-300 text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                        className="rounded-sm border-slate-300 text-emerald-600 focus:ring-emerald-500 w-4 h-4 disabled:opacity-80"
                       />
-                      <span>{page}</span>
+                      <span className={formData.role === 'Admin' ? 'text-slate-900 font-bold' : ''}>
+                        {page}
+                      </span>
                     </label>
                   );
                 })}
               </div>
+              {formData.role === 'Admin' && (
+                <p className="mt-1.5 text-[11px] text-emerald-700 font-medium">
+                  Administrator role is automatically granted full access to all system pages, including any new pages added in the future.
+                </p>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">

@@ -8,6 +8,20 @@ const router = express.Router();
 // Require authenticated user with 'User Management' page permission
 router.use(verifyToken, checkPageAccess('User Management'));
 
+const SYSTEM_PAGES = [
+  'Dashboard',
+  'Plant',
+  'Vehicle Register',
+  'Driver Registry',
+  'GPS',
+  'User Management',
+];
+
+// GET /api/users/pages - Get list of system pages for access management
+router.get('/pages', async (req, res) => {
+  res.json({ pages: SYSTEM_PAGES });
+});
+
 // GET /api/users - List all users
 router.get('/', async (req, res) => {
   try {
@@ -16,7 +30,17 @@ router.get('/', async (req, res) => {
       .populate('accessPlants', 'plantName location status')
       .sort({ createdAt: -1 });
 
-    res.json(users);
+    // Ensure Admin users always reflect all system pages in their accessPages list
+    const mappedUsers = users.map((u) => {
+      const userObj = u.toObject();
+      if (userObj.role === 'Admin') {
+        const pageSet = new Set([...(userObj.accessPages || []), ...SYSTEM_PAGES]);
+        userObj.accessPages = Array.from(pageSet);
+      }
+      return userObj;
+    });
+
+    res.json(mappedUsers);
   } catch (error) {
     console.error('[Get Users Error]:', error);
     res.status(500).json({ error: 'Failed to retrieve users.' });
@@ -26,7 +50,7 @@ router.get('/', async (req, res) => {
 // POST /api/users - Create new user
 router.post('/', async (req, res) => {
   try {
-    const { fullName, username, password, confirmPassword, accessPlants, accessPages, status } = req.body;
+    const { fullName, username, role, password, confirmPassword, accessPlants, accessPages, status } = req.body;
 
     if (!fullName || !fullName.trim()) {
       return res.status(400).json({ error: 'Full Name is required.' });
@@ -49,11 +73,18 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: `Username '${trimmedUsername}' is already taken.` });
     }
 
-    // Validate access pages
-    const validPages = ['Dashboard', 'Plant', 'Vehicle Register', 'Driver Registry', 'GPS', 'User Management'];
-    const finalPages = Array.isArray(accessPages)
-      ? accessPages.filter((p) => validPages.includes(p))
-      : ['Dashboard'];
+    const userRole = role === 'Admin' ? 'Admin' : 'User';
+
+    // If Admin, grant all system pages automatically
+    let finalPages = SYSTEM_PAGES;
+    if (userRole !== 'Admin') {
+      if (Array.isArray(accessPages) && accessPages.length > 0) {
+        // Accept valid string pages (allows current SYSTEM_PAGES and any future added pages)
+        finalPages = accessPages.filter((p) => typeof p === 'string' && p.trim().length > 0);
+      } else {
+        finalPages = ['Dashboard'];
+      }
+    }
 
     if (finalPages.length === 0) {
       return res.status(400).json({ error: 'At least one valid access page is required.' });
@@ -66,6 +97,7 @@ router.post('/', async (req, res) => {
     const newUser = await User.create({
       fullName: fullName.trim(),
       username: trimmedUsername,
+      role: userRole,
       passwordHash,
       accessPlants: Array.isArray(accessPlants) ? accessPlants : [],
       accessPages: finalPages,
@@ -124,10 +156,16 @@ router.put('/:id', async (req, res) => {
       user.passwordHash = await bcrypt.hash(password, salt);
     }
 
-    // Validate access pages
-    const validPages = ['Dashboard', 'Plant', 'Vehicle Register', 'Driver Registry', 'GPS', 'User Management'];
-    if (Array.isArray(accessPages)) {
-      const finalPages = accessPages.filter((p) => validPages.includes(p));
+    if (role && ['Admin', 'User'].includes(role)) {
+      user.role = role;
+    }
+
+    // If user is Admin, they get all system pages
+    if (user.role === 'Admin') {
+      const pageSet = new Set([...(user.accessPages || []), ...SYSTEM_PAGES, ...(Array.isArray(accessPages) ? accessPages : [])]);
+      user.accessPages = Array.from(pageSet);
+    } else if (Array.isArray(accessPages)) {
+      const finalPages = accessPages.filter((p) => typeof p === 'string' && p.trim().length > 0);
       if (finalPages.length > 0) {
         user.accessPages = finalPages;
       }
@@ -135,10 +173,6 @@ router.put('/:id', async (req, res) => {
 
     if (Array.isArray(accessPlants)) {
       user.accessPlants = accessPlants;
-    }
-
-    if (role && ['Admin', 'User'].includes(role)) {
-      user.role = role;
     }
 
     user.fullName = fullName.trim();

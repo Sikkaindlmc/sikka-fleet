@@ -107,6 +107,11 @@ const checkPageAccess = (pageName) => {
       return res.status(401).json({ error: 'Unauthorized.' });
     }
 
+    // Administrator always has unrestricted access to ALL current and future pages
+    if (req.user.role === 'Admin') {
+      return next();
+    }
+
     // Check if user has explicit access to this page
     if (!Array.isArray(req.user.accessPages) || !req.user.accessPages.includes(pageName)) {
       return res.status(403).json({
