@@ -809,7 +809,7 @@ export default function DashboardPage() {
                   <tr>
                     <th className="px-5 py-3">Vehicle Number</th>
                     <th className="px-5 py-3">Entry Date & Time</th>
-                    <th className="px-5 py-3">Last Update Date & Time</th>
+                    <th className="px-5 py-3">Sync GPS Date Time</th>
                     <th className="px-5 py-3">Stay Hours</th>
                     <th className="px-5 py-3">Location</th>
                     <th className="px-5 py-3 min-w-[260px]">Plan</th>

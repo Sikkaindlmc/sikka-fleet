@@ -693,7 +693,7 @@ router.get('/plants/:plantId/export', async (req, res) => {
     const headers = [
       'Vehicle Number',
       'Entry Date & Time',
-      'Last Update Date & Time',
+      'Sync GPS Date Time',
       'Stay Hours',
       'Location',
       'Latest Plan',
