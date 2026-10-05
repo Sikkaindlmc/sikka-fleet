@@ -13,6 +13,7 @@ const vehicleRoutes = require('./routes/vehicleRoutes');
 const gpsRoutes = require('./routes/gpsRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const userRoutes = require('./routes/userRoutes');
+const driverRoutes = require('./routes/driverRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -26,7 +27,8 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('dev'));
 
 // Health check
@@ -46,6 +48,7 @@ app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/gps', gpsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/drivers', driverRoutes);
 
 // Centralized Error Handling Middleware
 app.use((err, req, res, next) => {

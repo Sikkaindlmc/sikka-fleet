@@ -97,6 +97,14 @@ async function processVehicleLocation(vehicle, latitude, longitude, timestamp = 
       console.log(`[Plant Entry Event] ${vehicleNumber} entered ${matchedPlant.plantName} at ${timestamp.toISOString()}`);
     }
   } else {
+    // If vehicle was previously inside a plant, record the exit plant and timestamp
+    if (currentStatus && currentStatus.status === 'Inside' && currentStatus.currentPlantId) {
+      const prevPlant = await Plant.findById(currentStatus.currentPlantId);
+      if (prevPlant) {
+        currentStatus.lastExitPlantName = prevPlant.plantName;
+      }
+      currentStatus.lastExitDateTime = timestamp;
+    }
     entryDateTime = null;
   }
 

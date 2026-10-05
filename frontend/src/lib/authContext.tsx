@@ -18,7 +18,12 @@ interface AuthContextType {
   user: UserProfile | null;
   token: string | null;
   isLoading: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (
+    username: string,
+    password: string,
+    loginType?: 'User' | 'Driver',
+    location?: { latitude: number; longitude: number; accuracy?: number | null }
+  ) => Promise<void>;
   logout: () => void;
   hasPageAccess: (pageName: string) => boolean;
   hasPlantAccess: (plantId: string) => boolean;
@@ -34,6 +39,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   useEffect(() => {
+    // Listen for auth-expired events dispatched by apiRequest
+    const handleAuthExpired = () => {
+      setToken(null);
+      setUser(null);
+      localStorage.removeItem('sikka_fleet_token');
+      localStorage.removeItem('sikka_fleet_user');
+    };
+
+    window.addEventListener('sikka:auth-expired', handleAuthExpired);
+
     // Load persisted token and profile on initial client mount
     const storedToken = localStorage.getItem('sikka_fleet_token');
     const storedUser = localStorage.getItem('sikka_fleet_user');
@@ -42,21 +57,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         setToken(storedToken);
         setUser(JSON.parse(storedUser));
+
+        // Validate token with server in background
+        apiRequest<{ user: UserProfile }>('/auth/me')
+          .then((data) => {
+            setUser(data.user);
+            localStorage.setItem('sikka_fleet_user', JSON.stringify(data.user));
+          })
+          .catch((err) => {
+            if (err.status === 401) {
+              handleAuthExpired();
+              router.push('/login?expired=1');
+            }
+          });
       } catch {
-        localStorage.removeItem('sikka_fleet_token');
-        localStorage.removeItem('sikka_fleet_user');
+        handleAuthExpired();
       }
     }
     setIsLoading(false);
-  }, []);
 
-  const login = async (username: string, password: string) => {
+    return () => {
+      window.removeEventListener('sikka:auth-expired', handleAuthExpired);
+    };
+  }, [router]);
+
+  const login = async (
+    username: string,
+    password: string,
+    loginType: 'User' | 'Driver' = 'User',
+    location?: { latitude: number; longitude: number; accuracy?: number | null }
+  ) => {
     const data = await apiRequest<{
       token: string;
       user: UserProfile;
     }>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, loginType, location }),
     });
 
     setToken(data.token);
@@ -85,6 +121,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const hasPageAccess = (pageName: string): boolean => {
     if (!user) return false;
+    // Requirement 12: Driver has strictly Dashboard-only access
+    if (user.role === 'Driver') return pageName === 'Dashboard';
     if (user.role === 'Admin') return true;
     return Array.isArray(user.accessPages) && user.accessPages.includes(pageName);
   };

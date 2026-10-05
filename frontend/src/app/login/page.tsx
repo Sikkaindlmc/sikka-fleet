@@ -1,164 +1,69 @@
 'use client';
 
-import React, { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, Lock, User as UserIcon, AlertCircle, ArrowRight } from 'lucide-react';
-import { useAuth } from '../../lib/authContext';
+import React, { useState, useEffect } from 'react';
+import LoginAnimation from '../../components/LoginAnimation';
+import LoginForm from '../../components/LoginForm';
 
 export default function LoginPage() {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [animationComplete, setAnimationComplete] = useState(false);
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState(false);
+  const [redirectUrl, setRedirectUrl] = useState('/dashboard');
 
-  const { login } = useAuth();
-  const router = useRouter();
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage('');
-
-    if (!username.trim()) {
-      setErrorMessage('Please enter your username.');
-      return;
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('expired') === '1') {
+        setSessionExpiredNotice(true);
+      }
+      const redir = params.get('redirect');
+      if (redir && redir.startsWith('/') && !redir.startsWith('//')) {
+        setRedirectUrl(redir);
+      }
     }
-    if (!password) {
-      setErrorMessage('Please enter your password.');
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      await login(username.trim(), password);
-      router.push('/dashboard');
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Invalid username or password.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
+  }, []);
 
   return (
-    <div className="min-h-screen flex flex-col justify-center items-center p-4 sm:p-6 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-slate-100">
-      <div className="w-full max-w-md">
+    <div className="min-h-screen flex flex-col justify-center items-center bg-slate-950 px-4 py-12 relative overflow-hidden select-none">
+      {/* Requirement 20: Stylish 3-second entrance animation on login page */}
+      <LoginAnimation
+        isComplete={animationComplete}
+        onComplete={() => setAnimationComplete(true)}
+      />
+
+      {/* Decorative ambient background radial gradients */}
+      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-tr from-emerald-600/10 via-teal-500/10 to-transparent rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-10 right-10 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
+
+      {/* Main Content (fades in smoothly with 3s animation completion) */}
+      <div
+        className={`w-full max-w-md flex flex-col items-center relative z-10 transition-all duration-1000 transform ${
+          animationComplete
+            ? 'opacity-100 translate-y-0 scale-100'
+            : 'opacity-0 translate-y-6 scale-95'
+        }`}
+      >
         {/* Brand Header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-white p-2 shadow-xl shadow-emerald-500/20 mb-4">
+        <div className="text-center mb-8 flex flex-col items-center">
+          <div className="w-16 h-16 rounded-2xl bg-white p-2.5 shadow-xl shadow-emerald-500/15 mb-4 border border-emerald-400/40 flex items-center justify-center">
             <img src="/logo.png" alt="Sikka Logo" className="w-full h-full object-contain" />
           </div>
-          <h1 className="text-3xl font-extrabold tracking-tight text-white">
+          <h1 className="text-3xl font-black text-white tracking-tight leading-tight">
             Sikka Fleet
           </h1>
-          <p className="text-sm font-semibold text-emerald-400 tracking-wider uppercase mt-1">
+          <span className="text-[11px] font-extrabold text-emerald-400 uppercase tracking-widest mt-1 block">
             Sikka LMC • Fleet Management System
-          </p>
+          </span>
         </div>
 
-        {/* Login Card */}
-        <div className="bg-white rounded-3xl p-6 sm:p-8 shadow-2xl border border-slate-200 text-slate-800">
-          <div className="mb-6">
-            <h2 className="text-xl font-bold text-slate-900">Sign in to your account</h2>
-            <p className="text-xs text-slate-500 mt-1">
-              Enter your credentials to access the fleet management dashboard
-            </p>
-          </div>
+        {/* Separated Login Form Component (Requirement 22) */}
+        <LoginForm
+          redirectUrl={redirectUrl}
+          sessionExpiredNotice={sessionExpiredNotice}
+        />
 
-          {/* Validation Error Banner */}
-          {errorMessage && (
-            <div className="flex items-start gap-3 p-3.5 mb-5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium animate-in fade-in duration-150">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              <span>{errorMessage}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleLogin} className="space-y-4">
-            {/* Username Input Container */}
-            <div>
-              <label
-                htmlFor="username-input"
-                className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
-              >
-                Username
-              </label>
-              <div className="relative rounded-xl bg-slate-50 border border-slate-300 focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/20 transition-all">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <UserIcon className="w-4 h-4" />
-                </div>
-                <input
-                  id="username-input"
-                  type="text"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Enter username"
-                  className="w-full pl-10 pr-4 py-3 bg-transparent text-sm text-slate-900 placeholder:text-slate-400 font-medium focus:outline-hidden"
-                  autoComplete="username"
-                  disabled={isLoading}
-                />
-              </div>
-            </div>
-
-            {/* Password Input Container */}
-            <div>
-              <label
-                htmlFor="password-input"
-                className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
-              >
-                Password
-              </label>
-              <div className="relative rounded-xl bg-slate-50 border border-slate-300 focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/20 transition-all">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <Lock className="w-4 h-4" />
-                </div>
-                <input
-                  id="password-input"
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter password"
-                  className="w-full pl-10 pr-11 py-3 bg-transparent text-sm text-slate-900 placeholder:text-slate-400 font-medium focus:outline-hidden"
-                  autoComplete="current-password"
-                  disabled={isLoading}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 transition cursor-pointer"
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-
-            {/* Submit Button */}
-            <div className="pt-2">
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full flex items-center justify-center gap-2 py-3.5 px-4 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 font-bold rounded-xl shadow-lg shadow-emerald-500/25 transition duration-150 cursor-pointer disabled:opacity-60"
-              >
-                {isLoading ? (
-                  <span className="flex items-center gap-2 text-sm">
-                    <span className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                    Signing In...
-                  </span>
-                ) : (
-                  <>
-                    <span className="text-sm">Login</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
-            </div>
-          </form>
-
-        </div>
-
-        {/* Footer info */}
-        <p className="text-center text-xs text-slate-500 mt-6 font-medium">
-          © {new Date().getFullYear()} Sikka LMC. All rights reserved.
+        {/* Footer */}
+        <p className="mt-8 text-center text-xs text-slate-500 font-medium">
+          &copy; {new Date().getFullYear()} Sikka LMC. All rights reserved.
         </p>
       </div>
     </div>

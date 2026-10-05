@@ -43,6 +43,14 @@ const gpsSettingSchema = new mongoose.Schema(
       type: Number,
       default: 15,
     },
+    vehicleIcon: {
+      type: String,
+      default: '',
+    },
+    vehicleIconUpdatedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     collection: 'gpsSettings',

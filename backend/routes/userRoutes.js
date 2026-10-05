@@ -50,7 +50,7 @@ router.post('/', async (req, res) => {
     }
 
     // Validate access pages
-    const validPages = ['Dashboard', 'Plant', 'Vehicle Register', 'GPS', 'User Management'];
+    const validPages = ['Dashboard', 'Plant', 'Vehicle Register', 'Driver Registry', 'GPS', 'User Management'];
     const finalPages = Array.isArray(accessPages)
       ? accessPages.filter((p) => validPages.includes(p))
       : ['Dashboard'];
@@ -125,7 +125,7 @@ router.put('/:id', async (req, res) => {
     }
 
     // Validate access pages
-    const validPages = ['Dashboard', 'Plant', 'Vehicle Register', 'GPS', 'User Management'];
+    const validPages = ['Dashboard', 'Plant', 'Vehicle Register', 'Driver Registry', 'GPS', 'User Management'];
     if (Array.isArray(accessPages)) {
       const finalPages = accessPages.filter((p) => validPages.includes(p));
       if (finalPages.length > 0) {

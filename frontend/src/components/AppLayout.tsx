@@ -26,8 +26,11 @@ export default function AppLayout({
   useEffect(() => {
     if (!isLoading && !user) {
       router.push('/login');
+    } else if (user && user.role === 'Driver' && requiredPage && requiredPage !== 'Dashboard') {
+      // Requirement 12: Reject access and immediately redirect Driver back to Dashboard
+      router.replace('/dashboard');
     }
-  }, [user, isLoading, router]);
+  }, [user, isLoading, requiredPage, router]);
 
   if (isLoading) {
     return (

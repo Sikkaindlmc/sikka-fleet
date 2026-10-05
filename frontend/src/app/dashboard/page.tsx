@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Building2,
   Navigation,
@@ -16,13 +17,41 @@ import {
   FileSpreadsheet,
   Plus,
   Edit3,
+  Users,
+  ChevronRight,
+  CreditCard,
+  Calendar,
+  ExternalLink,
 } from 'lucide-react';
 import AppLayout from '../../components/AppLayout';
 import Modal from '../../components/Modal';
 import AlertBanner, { AlertState } from '../../components/AlertBanner';
+import VehicleIcon from '../../components/VehicleIcon';
 import { apiRequest, API_BASE_URL } from '../../lib/api';
 import { formatDateTime, formatDistance } from '../../lib/formatters';
 import { useAuth } from '../../lib/authContext';
+import DriverDashboardView from '../../components/DriverDashboardView';
+import NearestDriverCell from '../../components/NearestDriverCell';
+import NearestDriversModal, { NearestDriverItem } from '../../components/NearestDriversModal';
+
+export interface DashboardDriverItem {
+  id: string;
+  driverName: string;
+  mobileNumber: string;
+  dlNumber?: string;
+  photo?: string | null;
+  vehicleNumber?: string;
+  status: string;
+  plantName?: string;
+  plantInTime?: string | null;
+  location?: string;
+  distanceMeters?: number;
+  readableLocation?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  lastLocationAt?: string | null;
+  isStale?: boolean;
+}
 
 export interface VehiclePlanItem {
   planText: string;
@@ -39,20 +68,28 @@ interface PlantWidget {
   latitude: number;
   longitude: number;
   vehicleCount: number;
+  driverCount?: number;
   isOutside: boolean;
+  availableDrivers?: NearestDriverItem[];
 }
 
 interface PlantVehicle {
   id: string;
   vehicleNumber: string;
-  driverName: string;
-  mobile: string;
+  driverName?: string | null;
+  mobile?: string | null;
+  driverDistance?: number | null;
+  multipleDrivers?: boolean;
+  noDriver?: boolean;
+  nearestDrivers?: NearestDriverItem[];
   fleetType: string;
   ownerName?: string;
   entryDateTime: string;
   latitude: number;
   longitude: number;
   distanceMeter?: number;
+  location?: string;
+  readableLocation?: string;
   status: string;
   plans?: VehiclePlanItem[];
 }
@@ -60,22 +97,33 @@ interface PlantVehicle {
 interface OutsideVehicle {
   id: string;
   vehicleNumber: string;
-  driverName: string;
-  mobile: string;
-  fleetType: string;
+  lastOutPlantName?: string | null;
+  plantOutDateTime?: string | null;
+  lastLocationDateTime?: string | null;
+  lastLocationTime?: string;
+  status: string;
+  driverName?: string | null;
+  mobile?: string | null;
+  driverDistance?: number | null;
+  multipleDrivers?: boolean;
+  noDriver?: boolean;
+  nearestDrivers?: NearestDriverItem[];
+  locationStale?: boolean;
+  fleetType?: string;
   ownerName?: string;
-  lastLocationTime: string;
   latitude: number;
   longitude: number;
-  status: string;
+  readableLocation?: string;
 }
 
 export default function DashboardPage() {
+  const router = useRouter();
   const [plantWidgets, setPlantWidgets] = useState<PlantWidget[]>([]);
   const [outsideWidget, setOutsideWidget] = useState<{
     id: string;
     name: string;
     vehicleCount: number;
+    driverCount?: number;
     isOutside: boolean;
   } | null>(null);
   const [totalActiveVehicles, setTotalActiveVehicles] = useState(0);
@@ -84,12 +132,19 @@ export default function DashboardPage() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [alert, setAlert] = useState<AlertState | null>(null);
 
-  // Drilldown Modal State
-  const [activeModal, setActiveModal] = useState<'plant' | 'outside' | null>(null);
+  // Drilldown Modal State (Vehicles & Drivers)
+  const [activeModal, setActiveModal] = useState<'plant' | 'outside' | 'plantDrivers' | 'outsideDrivers' | null>(null);
   const [selectedPlant, setSelectedPlant] = useState<PlantWidget | null>(null);
   const [plantVehicles, setPlantVehicles] = useState<PlantVehicle[]>([]);
   const [outsideVehicles, setOutsideVehicles] = useState<OutsideVehicle[]>([]);
+  const [plantDriversList, setPlantDriversList] = useState<DashboardDriverItem[]>([]);
+  const [outsideDriversList, setOutsideDriversList] = useState<DashboardDriverItem[]>([]);
   const [isModalLoading, setIsModalLoading] = useState(false);
+
+  // Nearest Drivers Modal State (Requirement 23.3 & 23.4)
+  const [isDriversModalOpen, setIsDriversModalOpen] = useState(false);
+  const [selectedNearestDrivers, setSelectedNearestDrivers] = useState<NearestDriverItem[]>([]);
+  const [driversModalTitle, setDriversModalTitle] = useState('Available Drivers (Within 100m)');
 
   // Plan Management Modal State
   const { user } = useAuth();
@@ -183,7 +238,7 @@ export default function DashboardPage() {
     try {
       const data = await apiRequest<{
         plantWidgets: PlantWidget[];
-        outsideWidget: { id: string; name: string; vehicleCount: number; isOutside: boolean };
+        outsideWidget: { id: string; name: string; vehicleCount: number; driverCount?: number; isOutside: boolean };
         totalActiveVehicles: number;
         lastUpdated: string;
       }>('/dashboard/summary');
@@ -243,9 +298,13 @@ export default function DashboardPage() {
     setIsModalLoading(true);
     try {
       const data = await apiRequest<{
-        plant: { id: string; name: string; location: string; radiusMeter: number };
+        plant: { id: string; name: string; location: string; radiusMeter: number; availableDrivers?: NearestDriverItem[] };
         vehicles: PlantVehicle[];
       }>(`/dashboard/plants/${plant.id}/vehicles`);
+      setSelectedPlant({
+        ...plant,
+        availableDrivers: data.plant.availableDrivers || [],
+      });
       setPlantVehicles(data.vehicles || []);
     } catch (err: any) {
       setAlert({
@@ -258,7 +317,7 @@ export default function DashboardPage() {
     }
   };
 
-  // Click on the Outside Widget
+  // Click on the Outside Widget (Vehicles)
   const handleOutsideClick = async () => {
     setActiveModal('outside');
     setIsModalLoading(true);
@@ -278,6 +337,124 @@ export default function DashboardPage() {
       setIsModalLoading(false);
     }
   };
+
+  // Click on Drivers for a Plant
+  const handlePlantDriversClick = async (plant: PlantWidget) => {
+    setSelectedPlant(plant);
+    setActiveModal('plantDrivers');
+    setIsModalLoading(true);
+    try {
+      const data = await apiRequest<{
+        title: string;
+        plant: { id: string; name: string; location: string; radiusMeter: number };
+        drivers: DashboardDriverItem[];
+      }>(`/dashboard/plants/${plant.id}/drivers`);
+      setPlantDriversList(data.drivers || []);
+    } catch (err: any) {
+      setAlert({
+        type: 'error',
+        message: err.message || 'Failed to retrieve drivers for this plant.',
+      });
+      setActiveModal(null);
+    } finally {
+      setIsModalLoading(false);
+    }
+  };
+
+  // Click on Drivers for Outside
+  const handleOutsideDriversClick = async () => {
+    setActiveModal('outsideDrivers');
+    setIsModalLoading(true);
+    try {
+      const data = await apiRequest<{
+        title: string;
+        drivers: DashboardDriverItem[];
+      }>('/dashboard/outside/drivers');
+      setOutsideDriversList(data.drivers || []);
+    } catch (err: any) {
+      setAlert({
+        type: 'error',
+        message: err.message || 'Failed to retrieve outside drivers.',
+      });
+      setActiveModal(null);
+    } finally {
+      setIsModalLoading(false);
+    }
+  };
+
+  // Export Drivers list to .xls Excel file
+  const exportDriversToExcel = (drivers: DashboardDriverItem[], filename: string) => {
+    if (drivers.length === 0) return;
+    const headers = [
+      'Driver Name',
+      'Mobile Number',
+      'Assigned Vehicle',
+      'Status',
+      'Plant In Date Time',
+      'Readable Location',
+      'Last GPS Update',
+    ];
+    const headerHtml = `<tr>${headers
+      .map(
+        (h) =>
+          `<th style="background-color:#10b981;color:#ffffff;font-weight:bold;padding:10px 14px;border:1px solid #d1d5db;font-family:Arial,sans-serif;font-size:12px;text-align:left;">${escapeXml(
+            h
+          )}</th>`
+      )
+      .join('')}</tr>`;
+
+    const rowsHtml = drivers
+      .map((d) => {
+        const cells = [
+          d.driverName,
+          `+91 ${d.mobileNumber}`,
+          d.vehicleNumber || 'Unassigned',
+          d.status,
+          d.plantInTime ? formatDateTime(d.plantInTime) : '—',
+          d.readableLocation || d.location || '—',
+          d.lastLocationAt ? formatDateTime(d.lastLocationAt) : 'Recently',
+        ];
+
+        return `<tr>${cells
+          .map(
+            (c, i) =>
+              `<td style="padding:8px 12px;border:1px solid #e5e7eb;font-family:Arial,sans-serif;font-size:11px;vertical-align:top;${
+                i === 0 ? 'font-weight:bold;color:#0f172a;' : 'color:#334155;'
+              }">${escapeXml(c)}</td>`
+          )
+          .join('')}</tr>`;
+      })
+      .join('');
+
+    const excelHtml = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+  <meta http-equiv="content-type" content="application/vnd.ms-excel; charset=UTF-8"/>
+</head>
+<body>
+  <table border="1" style="border-collapse:collapse;">
+    <thead>${headerHtml}</thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>
+</body>
+</html>`;
+
+    const blob = new Blob([excelHtml], { type: 'application/vnd.ms-excel' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // Requirement 12, 13, 19: Driver sees strictly their own location and status
+  if (user?.role === 'Driver') {
+    return (
+      <AppLayout pageTitle="Driver Telematics Dashboard" requiredPage="Dashboard">
+        <DriverDashboardView />
+      </AppLayout>
+    );
+  }
 
   return (
     <AppLayout pageTitle="Fleet Monitoring Dashboard" requiredPage="Dashboard">
@@ -339,14 +516,13 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {/* Dynamic Active Plants */}
             {plantWidgets.map((plant) => (
-              <button
+              <div
                 key={plant.id}
-                type="button"
-                onClick={() => handlePlantClick(plant)}
-                className="group flex flex-col justify-between text-left p-6 rounded-2xl bg-white hover:bg-slate-50/70 border border-slate-200/90 hover:border-emerald-500 shadow-xs hover:shadow-lg transition-all duration-200 cursor-pointer relative overflow-hidden"
+                className="group flex flex-col justify-between text-left p-6 rounded-2xl bg-white border border-slate-200/90 hover:border-emerald-500/80 shadow-xs hover:shadow-lg transition-all duration-200 relative overflow-hidden"
               >
                 <div className="absolute top-0 right-0 w-2 h-full bg-emerald-500 opacity-80 group-hover:w-3 transition-all" />
 
+                {/* Top Plant Info */}
                 <div>
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div className="flex items-center gap-2">
@@ -368,35 +544,77 @@ export default function DashboardPage() {
                   </p>
 
                   <p className="text-[11px] text-slate-400 mt-1">
-                    Radius: <strong className="text-slate-700">{plant.radiusMeter} meters</strong>
+                    Radius: <strong className="text-slate-700">{plant.radiusMeter || 500} meters</strong>
                   </p>
                 </div>
 
-                <div className="mt-6 pt-4 border-t border-slate-100 flex items-baseline justify-between">
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="text-3xl font-black text-slate-900 group-hover:text-emerald-600 transition">
-                      {plant.vehicleCount}
+                {/* Interactive Split Controls: Click Vehicle -> Vehicle Details ONLY | Click Driver -> Driver Details ONLY */}
+                <div className="mt-5 pt-4 border-t border-slate-100 grid grid-cols-2 gap-3">
+                  {/* Click Vehicle -> Shows Vehicle Records ONLY */}
+                  <button
+                    type="button"
+                    onClick={() => handlePlantClick(plant)}
+                    className="flex flex-col justify-between p-3.5 rounded-xl bg-slate-50 hover:bg-emerald-50/90 active:bg-emerald-100/80 border border-slate-200/80 hover:border-emerald-400 text-left transition group/btn cursor-pointer shadow-2xs hover:shadow-xs"
+                    title={`Click to view vehicle records only for ${plant.name}`}
+                  >
+                    <div className="flex items-center justify-between w-full mb-1">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600 group-hover/btn:text-emerald-800 flex items-center gap-1">
+                        <Truck className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Vehicles</span>
+                      </span>
+                      <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover/btn:text-emerald-700 group-hover/btn:translate-x-0.5 transition-transform" />
+                    </div>
+                    <div className="flex items-baseline gap-1 mt-1">
+                      <span className="text-2xl font-black text-slate-900 group-hover/btn:text-emerald-700 transition">
+                        {plant.vehicleCount}
+                      </span>
+                      <span className="text-[10px] font-bold text-emerald-700">
+                        Inside
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-extrabold text-emerald-600 group-hover/btn:text-emerald-800 mt-2 block">
+                      View Vehicles &rarr;
                     </span>
-                    <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                      {plant.vehicleCount === 1 ? 'Vehicle' : 'Vehicles'}
+                  </button>
+
+                  {/* Click Available Driver -> Shows Driver Records ONLY */}
+                  <button
+                    type="button"
+                    onClick={() => handlePlantDriversClick(plant)}
+                    className="flex flex-col justify-between p-3.5 rounded-xl bg-slate-50 hover:bg-indigo-50/90 active:bg-indigo-100/80 border border-slate-200/80 hover:border-indigo-400 text-left transition group/btn cursor-pointer shadow-2xs hover:shadow-xs"
+                    title={`Click to view driver records only for ${plant.name}`}
+                  >
+                    <div className="flex items-center justify-between w-full mb-1">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600 group-hover/btn:text-indigo-800 flex items-center gap-1">
+                        <Users className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Available Drivers</span>
+                      </span>
+                      <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover/btn:text-indigo-700 group-hover/btn:translate-x-0.5 transition-transform" />
+                    </div>
+                    <div className="flex items-baseline gap-1 mt-1">
+                      <span className="text-2xl font-black text-slate-900 group-hover/btn:text-indigo-700 transition">
+                        {plant.driverCount ?? 0}
+                      </span>
+                      <span className="text-[10px] font-bold text-indigo-700">
+                        Available
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-extrabold text-indigo-600 group-hover/btn:text-indigo-800 mt-2 block">
+                      View Drivers &rarr;
                     </span>
-                  </div>
-                  <span className="text-xs font-bold text-emerald-600 group-hover:translate-x-1 transition-transform">
-                    View Fleet &rarr;
-                  </span>
+                  </button>
                 </div>
-              </button>
+              </div>
             ))}
 
             {/* Outside Widget */}
             {outsideWidget && (
-              <button
-                type="button"
-                onClick={handleOutsideClick}
-                className="group flex flex-col justify-between text-left p-6 rounded-2xl bg-white hover:bg-slate-50/70 border border-slate-200/90 hover:border-amber-500 shadow-xs hover:shadow-lg transition-all duration-200 cursor-pointer relative overflow-hidden"
+              <div
+                className="group flex flex-col justify-between text-left p-6 rounded-2xl bg-white border border-slate-200/90 hover:border-amber-500/80 shadow-xs hover:shadow-lg transition-all duration-200 relative overflow-hidden"
               >
                 <div className="absolute top-0 right-0 w-2 h-full bg-amber-500 opacity-80 group-hover:w-3 transition-all" />
 
+                {/* Top Outside Info */}
                 <div>
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div className="flex items-center gap-2">
@@ -408,7 +626,7 @@ export default function DashboardPage() {
                       </h3>
                     </div>
                     <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
-                      Transit
+                      Outside Radius
                     </span>
                   </div>
 
@@ -422,20 +640,63 @@ export default function DashboardPage() {
                   </p>
                 </div>
 
-                <div className="mt-6 pt-4 border-t border-slate-100 flex items-baseline justify-between">
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="text-3xl font-black text-slate-900 group-hover:text-amber-600 transition">
-                      {outsideWidget.vehicleCount}
+                {/* Interactive Split Controls: Click Vehicle -> Vehicle Details ONLY | Click Driver -> Driver Details ONLY */}
+                <div className="mt-5 pt-4 border-t border-slate-100 grid grid-cols-2 gap-3">
+                  {/* Click Vehicle -> Shows Outside Vehicle Records ONLY */}
+                  <button
+                    type="button"
+                    onClick={handleOutsideClick}
+                    className="flex flex-col justify-between p-3.5 rounded-xl bg-slate-50 hover:bg-amber-50/90 active:bg-amber-100/80 border border-slate-200/80 hover:border-amber-400 text-left transition group/btn cursor-pointer shadow-2xs hover:shadow-xs"
+                    title="Click to view vehicle records currently Outside only"
+                  >
+                    <div className="flex items-center justify-between w-full mb-1">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600 group-hover/btn:text-amber-800 flex items-center gap-1">
+                        <Truck className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Vehicles</span>
+                      </span>
+                      <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover/btn:text-amber-700 group-hover/btn:translate-x-0.5 transition-transform" />
+                    </div>
+                    <div className="flex items-baseline gap-1 mt-1">
+                      <span className="text-2xl font-black text-slate-900 group-hover/btn:text-amber-700 transition">
+                        {outsideWidget.vehicleCount}
+                      </span>
+                      <span className="text-[10px] font-bold text-amber-700">
+                        Outside
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-extrabold text-amber-600 group-hover/btn:text-amber-800 mt-2 block">
+                      View Vehicles &rarr;
                     </span>
-                    <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                      {outsideWidget.vehicleCount === 1 ? 'Vehicle' : 'Vehicles'}
+                  </button>
+
+                  {/* Click Available Driver -> Shows Outside Driver Records ONLY */}
+                  <button
+                    type="button"
+                    onClick={handleOutsideDriversClick}
+                    className="flex flex-col justify-between p-3.5 rounded-xl bg-slate-50 hover:bg-indigo-50/90 active:bg-indigo-100/80 border border-slate-200/80 hover:border-indigo-400 text-left transition group/btn cursor-pointer shadow-2xs hover:shadow-xs"
+                    title="Click to view driver records currently Outside only"
+                  >
+                    <div className="flex items-center justify-between w-full mb-1">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600 group-hover/btn:text-indigo-800 flex items-center gap-1">
+                        <Users className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Available Drivers</span>
+                      </span>
+                      <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover/btn:text-indigo-700 group-hover/btn:translate-x-0.5 transition-transform" />
+                    </div>
+                    <div className="flex items-baseline gap-1 mt-1">
+                      <span className="text-2xl font-black text-slate-900 group-hover/btn:text-indigo-700 transition">
+                        {outsideWidget.driverCount ?? 0}
+                      </span>
+                      <span className="text-[10px] font-bold text-indigo-700">
+                        En Route
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-extrabold text-indigo-600 group-hover/btn:text-indigo-800 mt-2 block">
+                      View Drivers &rarr;
                     </span>
-                  </div>
-                  <span className="text-xs font-bold text-amber-600 group-hover:translate-x-1 transition-transform">
-                    View Fleet &rarr;
-                  </span>
+                  </button>
                 </div>
-              </button>
+              </div>
             )}
           </div>
         )}
@@ -488,8 +749,7 @@ export default function DashboardPage() {
                     <th className="px-5 py-3">Vehicle Number</th>
                     <th className="px-5 py-3">Entry Date & Time</th>
                     <th className="px-5 py-3">Driver Name</th>
-                    <th className="px-5 py-3">Fleet Type</th>
-                    <th className="px-5 py-3">Distance From Center</th>
+                    <th className="px-5 py-3">Location</th>
                     <th className="px-5 py-3 min-w-[260px]">Plan</th>
                     <th className="px-5 py-3 text-right">Action</th>
                   </tr>
@@ -506,30 +766,61 @@ export default function DashboardPage() {
                     return (
                       <tr key={v.id} className="hover:bg-slate-50/70 transition">
                         <td className="px-5 py-3.5">
-                          <span className="font-extrabold text-slate-900 text-sm tracking-wide">
-                            {v.vehicleNumber}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <VehicleIcon className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span className="font-extrabold text-slate-900 text-sm tracking-wide">
+                              {v.vehicleNumber}
+                            </span>
+                          </div>
                         </td>
                         <td className="px-5 py-3.5 text-slate-700 font-semibold whitespace-nowrap">
                           {formatDateTime(v.entryDateTime)}
                         </td>
                         <td className="px-5 py-3.5">
-                          <div className="flex items-center gap-1.5 text-slate-800 font-medium">
-                            <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                            <span>{v.driverName}</span>
-                          </div>
-                          <div className="flex items-center gap-1 text-[11px] text-slate-400 mt-0.5">
-                            <Phone className="w-3 h-3" />
-                            <span>{v.mobile}</span>
-                          </div>
+                          <NearestDriverCell
+                            driverName={v.driverName}
+                            mobile={v.mobile}
+                            driverDistance={v.driverDistance}
+                            multipleDrivers={v.multipleDrivers}
+                            nearestDrivers={v.nearestDrivers}
+                            onViewMultiple={(drivers) => {
+                              setSelectedNearestDrivers(drivers);
+                              setDriversModalTitle(`Available Drivers – Vehicle ${v.vehicleNumber} (Within 100m)`);
+                              setIsDriversModalOpen(true);
+                            }}
+                          />
                         </td>
+                        {/* Location Column & Underneath Track Now Button (Redirect to GPS page on click) */}
                         <td className="px-5 py-3.5">
-                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-slate-100 text-slate-800 whitespace-nowrap">
-                            {v.fleetType}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3.5 text-emerald-700 font-bold whitespace-nowrap">
-                          {formatDistance(v.distanceMeter)}
+                          <div className="flex flex-col gap-2 min-w-[200px] max-w-[300px]">
+                            <div className="flex items-start gap-1.5 text-xs text-slate-800 font-medium leading-snug">
+                              <MapPin className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                              <span
+                                className="line-clamp-2"
+                                title={
+                                  v.readableLocation ||
+                                  v.location ||
+                                  (selectedPlant ? `${selectedPlant.name} Premises, ${selectedPlant.location || 'Uttar Pradesh'}` : 'Inside Plant')
+                                }
+                              >
+                                {v.readableLocation ||
+                                  v.location ||
+                                  (selectedPlant ? `${selectedPlant.name} Premises, ${selectedPlant.location || 'Uttar Pradesh'}` : 'Inside Plant')}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveModal(null);
+                                router.push(`/gps?vehicle=${encodeURIComponent(v.vehicleNumber)}`);
+                              }}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition cursor-pointer w-fit"
+                              title={`Track ${v.vehicleNumber} on GPS live map`}
+                            >
+                              <Navigation className="w-3.5 h-3.5" />
+                              <span>Track Now</span>
+                            </button>
+                          </div>
                         </td>
 
                         {/* Plan Column */}
@@ -681,19 +972,19 @@ export default function DashboardPage() {
           </form>
         </Modal>
 
-        {/* Modal: Outside Vehicles Drilldown */}
+        {/* Modal: Outside Vehicles Drilldown (Requirement 24) */}
         <Modal
           isOpen={activeModal === 'outside'}
           onClose={() => setActiveModal(null)}
           title="Outside – Vehicles"
-          subtitle="Registered vehicles whose latest GPS location is outside all active plant geofences"
-          maxWidth="2xl"
+          subtitle="All vehicles that are currently classified as Outside all configured Plant radii"
+          maxWidth="5xl"
         >
           {/* Outside Modal Header Actions: Export */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 mb-4 border-b border-slate-100">
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-slate-600">
-                Outside Geofences: <strong className="text-slate-900">{outsideVehicles.length} vehicles</strong>
+                Outside Vehicles: <strong className="text-slate-900">{outsideVehicles.length} vehicles</strong>
               </span>
             </div>
             <button
@@ -726,43 +1017,325 @@ export default function DashboardPage() {
               <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase tracking-wider">
                   <tr>
-                    <th className="px-6 py-3">Vehicle Number</th>
-                    <th className="px-6 py-3">Last Location Time</th>
-                    <th className="px-6 py-3">Status</th>
-                    <th className="px-6 py-3">Coordinates (Lat, Lon)</th>
-                    <th className="px-6 py-3">Driver Name</th>
+                    <th className="px-5 py-3">Vehicle Number</th>
+                    <th className="px-5 py-3">Last Out Plant Name</th>
+                    <th className="px-5 py-3">Plant Out Date Time</th>
+                    <th className="px-5 py-3">Last Location Date Time</th>
+                    <th className="px-5 py-3">Status</th>
+                    <th className="px-5 py-3">Driver Name-Mobile</th>
+                    <th className="px-5 py-3 text-center">GPS</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white font-medium">
-                  {outsideVehicles.map((v) => (
-                    <tr key={v.id} className="hover:bg-slate-50/70 transition">
-                      <td className="px-6 py-3.5">
-                        <span className="font-extrabold text-slate-900 text-sm tracking-wide">
-                          {v.vehicleNumber}
-                        </span>
-                      </td>
-                      <td className="px-6 py-3.5 text-slate-700 font-semibold">
-                        {formatDateTime(v.lastLocationTime)}
-                      </td>
-                      <td className="px-6 py-3.5">
-                        <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
-                          Outside
-                        </span>
-                      </td>
-                      <td className="px-6 py-3.5 text-slate-600 font-mono text-[11px]">
-                        {v.latitude.toFixed(4)}, {v.longitude.toFixed(4)}
-                      </td>
-                      <td className="px-6 py-3.5">
-                        <span className="font-semibold text-slate-800">{v.driverName}</span>
-                        <span className="block text-[11px] text-slate-400">{v.fleetType}</span>
-                      </td>
-                    </tr>
-                  ))}
+                  {outsideVehicles.map((v) => {
+                    const plantOutTime = v.plantOutDateTime || v.lastLocationDateTime || v.lastLocationTime;
+                    const lastGpsTime = v.lastLocationDateTime || v.lastLocationTime;
+                    const outPlantName = v.lastOutPlantName || 'Tea Plant';
+
+                    return (
+                      <tr key={v.id} className="hover:bg-slate-50/70 transition">
+                        {/* 1. Vehicle Number */}
+                        <td className="px-5 py-3.5 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <VehicleIcon className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span className="font-extrabold text-slate-900 text-sm tracking-wide">
+                              {v.vehicleNumber}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* 2. Last Out Plant Name */}
+                        <td className="px-5 py-3.5 whitespace-nowrap">
+                          <span className="font-bold text-slate-800">
+                            {outPlantName}
+                          </span>
+                        </td>
+
+                        {/* 3. Plant Out Date Time */}
+                        <td className="px-5 py-3.5 text-slate-700 whitespace-nowrap font-medium">
+                          {formatDateTime(plantOutTime)}
+                        </td>
+
+                        {/* 4. Last Location Date Time */}
+                        <td className="px-5 py-3.5 text-slate-700 whitespace-nowrap font-medium">
+                          {formatDateTime(lastGpsTime)}
+                        </td>
+
+                        {/* 5. Status */}
+                        <td className="px-5 py-3.5 whitespace-nowrap">
+                          <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                            Outside
+                          </span>
+                        </td>
+
+                        {/* 6. Driver Name-Mobile (Requirement 24.2 - 24.6) */}
+                        <td className="px-5 py-3.5">
+                          <NearestDriverCell
+                            driverName={v.driverName}
+                            mobile={v.mobile}
+                            driverDistance={v.driverDistance}
+                            multipleDrivers={v.multipleDrivers}
+                            nearestDrivers={v.nearestDrivers}
+                            locationStale={v.locationStale}
+                            onViewMultiple={(drivers) => {
+                              setSelectedNearestDrivers(drivers);
+                              setDriversModalTitle(`Available Drivers Near ${v.vehicleNumber} (Within 100m)`);
+                              setIsDriversModalOpen(true);
+                            }}
+                          />
+                        </td>
+
+                        {/* 7. GPS: [ Track Now ] (Requirement 24.7) */}
+                        <td className="px-5 py-3.5 text-center whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveModal(null);
+                              router.push(`/gps?vehicle=${encodeURIComponent(v.vehicleNumber)}`);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+                            title={`Track live location for ${v.vehicleNumber}`}
+                          >
+                            <Navigation className="w-3.5 h-3.5" />
+                            <span>Track Now</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
         </Modal>
+
+        {/* Modal: Plant & Outside Drivers Drilldown (Driver Records ONLY) */}
+        <Modal
+          isOpen={activeModal === 'plantDrivers' || activeModal === 'outsideDrivers'}
+          onClose={() => setActiveModal(null)}
+          title={activeModal === 'plantDrivers' ? `${selectedPlant?.name || 'Plant'} – Available Drivers` : 'Outside – Available Drivers'}
+          subtitle={
+            activeModal === 'plantDrivers'
+              ? `Registered drivers currently operating or detected inside ${selectedPlant?.name || 'this plant'} perimeter (driver records only)`
+              : 'Registered drivers currently operating or detected outside all plant geofences (driver records only)'
+          }
+          maxWidth="5xl"
+        >
+          {/* Header Action: Export Drivers to Excel */}
+          {(() => {
+            const currentList = activeModal === 'plantDrivers' ? plantDriversList : outsideDriversList;
+            const exportFileName =
+              activeModal === 'plantDrivers'
+                ? `${(selectedPlant?.name || 'Plant').replace(/[^a-zA-Z0-9_-]/g, '_')}_Drivers_${new Date().toISOString().slice(0, 10)}.xls`
+                : `Outside_Drivers_${new Date().toISOString().slice(0, 10)}.xls`;
+
+            return (
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 mb-4 border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-600">
+                    Active Drivers: <strong className="text-slate-900">{currentList.length} drivers</strong>
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                    {activeModal === 'plantDrivers' ? 'Inside Plant' : 'En Route / Outside'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => exportDriversToExcel(currentList, exportFileName)}
+                  disabled={currentList.length === 0}
+                  className="inline-flex items-center justify-center gap-2 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+                  title="Download drivers list as Excel (.xls)"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>Export</span>
+                </button>
+              </div>
+            );
+          })()}
+
+          {isModalLoading ? (
+            <div className="py-12 flex flex-col items-center justify-center">
+              <RefreshCw className="w-7 h-7 text-emerald-600 animate-spin mb-2" />
+              <p className="text-xs font-semibold text-slate-500">Loading drivers list...</p>
+            </div>
+          ) : (() => {
+            const currentList = activeModal === 'plantDrivers' ? plantDriversList : outsideDriversList;
+            if (currentList.length === 0) {
+              return (
+                <div className="py-12 text-center">
+                  <Users className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                  <p className="text-sm font-semibold text-slate-700">No Available Drivers</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {activeModal === 'plantDrivers'
+                      ? `No registered drivers are currently located inside ${selectedPlant?.name || 'this plant'}.`
+                      : 'No registered drivers are currently operating outside plant perimeters.'}
+                  </p>
+                </div>
+              );
+            }
+
+            return (
+              <div className="overflow-x-auto -mx-6 -my-2">
+                <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-600 font-bold uppercase tracking-wider">
+                    <tr>
+                      <th className="px-5 py-3">Driver Name</th>
+                      <th className="px-5 py-3">Mobile Number</th>
+                      <th className="px-5 py-3">Assigned Vehicle</th>
+                      <th className="px-5 py-3">Status</th>
+                      <th className="px-5 py-3">Plant In Date &amp; Time</th>
+                      <th className="px-5 py-3">Last GPS Update</th>
+                      <th className="px-5 py-3 text-center">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white font-medium">
+                    {currentList.map((d) => (
+                      <tr key={d.id} className="hover:bg-slate-50/70 transition">
+                        {/* Driver Name */}
+                        <td className="px-5 py-3.5 whitespace-nowrap">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-700 font-bold flex items-center justify-center text-xs border border-slate-200 shrink-0 overflow-hidden shadow-2xs">
+                              {d.photo ? (
+                                <img
+                                  src={d.photo}
+                                  alt={d.driverName}
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <span>{d.driverName ? d.driverName.charAt(0).toUpperCase() : 'D'}</span>
+                              )}
+                            </div>
+                            <span className="font-extrabold text-slate-900 text-sm">
+                              {d.driverName || 'Fleet Driver'}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* Mobile Number */}
+                        <td className="px-5 py-3.5 whitespace-nowrap">
+                          {d.mobileNumber ? (
+                            <a
+                              href={`tel:${d.mobileNumber}`}
+                              className="inline-flex items-center gap-1.5 text-slate-700 hover:text-emerald-700 font-mono font-bold transition"
+                            >
+                              <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span>+91 {d.mobileNumber}</span>
+                            </a>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+
+                        {/* Assigned Vehicle */}
+                        <td className="px-5 py-3.5 whitespace-nowrap">
+                          {d.vehicleNumber && d.vehicleNumber !== 'Unassigned' ? (
+                            <div className="flex items-center gap-1.5 font-bold text-slate-900">
+                              <VehicleIcon className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>{d.vehicleNumber}</span>
+                            </div>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-500">
+                              Unassigned
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Status */}
+                        <td className="px-5 py-3.5 whitespace-nowrap">
+                          <span
+                            className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                              d.status === 'Inside'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {d.status}
+                          </span>
+                        </td>
+
+                        {/* Plant In Date & Time */}
+                        <td className="px-5 py-3.5 whitespace-nowrap">
+                          {d.plantInTime ? (
+                            <div className="flex items-center gap-1.5 text-slate-800 font-mono text-xs font-semibold">
+                              <Calendar className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>{formatDateTime(d.plantInTime)}</span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 font-mono text-xs">—</span>
+                          )}
+                        </td>
+
+                        {/* Last GPS Update & Readable Location with Track Button */}
+                        <td className="px-5 py-3.5 text-xs">
+                          <div className="space-y-1 max-w-sm">
+                            {/* Readable Location */}
+                            <div className="flex items-start gap-1.5 font-semibold text-slate-900 leading-snug">
+                              <MapPin className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                              <span>
+                                {d.readableLocation || d.location || (d.distanceMeters !== undefined ? `${d.distanceMeters}m from plant center` : 'Inside Plant')}
+                              </span>
+                            </div>
+
+                            {/* Timestamp */}
+                            <div className="flex items-center gap-1.5 text-[11px] text-slate-500 font-mono">
+                              <Clock className="w-3 h-3 text-slate-400 shrink-0" />
+                              <span>{d.lastLocationAt ? formatDateTime(d.lastLocationAt) : 'Recently updated'}</span>
+                            </div>
+
+                            {/* Track Button: Directly opens Google Maps */}
+                            {(() => {
+                              const mapsUrl = (typeof d.latitude === 'number' && typeof d.longitude === 'number')
+                                ? `https://maps.google.com/?q=${d.latitude},${d.longitude}`
+                                : `https://maps.google.com/?q=${encodeURIComponent(d.readableLocation || d.location || d.plantName || 'Plant Location')}`;
+
+                              return (
+                                <a
+                                  href={mapsUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer w-fit mt-1"
+                                  title="Track driver location on Google Maps"
+                                >
+                                  <Navigation className="w-3.5 h-3.5 shrink-0" />
+                                  <span>Track</span>
+                                  <ExternalLink className="w-3 h-3 opacity-90 shrink-0" />
+                                </a>
+                              );
+                            })()}
+                          </div>
+                        </td>
+
+                        {/* Action */}
+                        <td className="px-5 py-3.5 text-center whitespace-nowrap">
+                          {d.mobileNumber ? (
+                            <a
+                              href={`tel:${d.mobileNumber}`}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+                              title={`Call ${d.driverName}`}
+                            >
+                              <Phone className="w-3 h-3 text-slate-500" />
+                              <span>Call</span>
+                            </a>
+                          ) : (
+                            <span className="text-slate-300 text-xs">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
+        </Modal>
+
+        {/* Modal: Nearest Drivers Popup (Requirement 23.3 & 23.10) */}
+        <NearestDriversModal
+          isOpen={isDriversModalOpen}
+          onClose={() => setIsDriversModalOpen(false)}
+          title={driversModalTitle}
+          drivers={selectedNearestDrivers}
+        />
       </div>
     </AppLayout>
   );

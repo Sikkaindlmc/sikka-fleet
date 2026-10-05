@@ -11,13 +11,11 @@ const { processVehicleLocation } = require('../services/geofenceService');
 const API_URL = 'https://api.wheelseye.com/currentLoc?accessToken=53afc208-0981-48c7-b134-d85d2f33dc0c';
 const ACCESS_TOKEN = '53afc208-0981-48c7-b134-d85d2f33dc0c';
 
+const connectDB = require('../config/db');
+
 async function syncAndCleanVehicles() {
-  const mongoURI = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/sikka_fleet';
-  
   try {
-    await mongoose.connect(mongoURI, {
-      dbName: process.env.MONGODB_DB_NAME || 'sikka_fleet',
-    });
+    await connectDB();
     console.log('[Sync] Connected to MongoDB Atlas.');
 
     // 1. Update GpsSetting

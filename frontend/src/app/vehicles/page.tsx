@@ -5,6 +5,7 @@ import { Plus, Edit2, Truck, Phone, User, Building, AlertCircle, RefreshCw } fro
 import AppLayout from '../../components/AppLayout';
 import Modal from '../../components/Modal';
 import AlertBanner, { AlertState } from '../../components/AlertBanner';
+import VehicleIcon from '../../components/VehicleIcon';
 import { apiRequest } from '../../lib/api';
 import { formatDateTime, clean10DigitPhone, normalizeVehicleNumber } from '../../lib/formatters';
 
@@ -286,7 +287,7 @@ export default function VehicleRegisterPage() {
                     <tr key={v._id} className="hover:bg-slate-50/70 transition">
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
-                          <Truck className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <VehicleIcon className="w-4 h-4 text-emerald-600 shrink-0" />
                           <span className="font-extrabold text-slate-900 text-sm tracking-wide">
                             {v.vehicleNumber}
                           </span>

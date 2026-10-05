@@ -5,7 +5,20 @@ const { syncGpsPositions, testGpsConnection } = require('../services/gpsPollerSe
 
 const router = express.Router();
 
-// Require authenticated user with 'GPS' page permission
+// GET /api/gps/vehicle-icon - Retrieve active vehicle icon for map & GPS (Available application-wide)
+router.get('/vehicle-icon', async (req, res) => {
+  try {
+    const setting = await GpsSetting.findOne().sort({ updatedAt: -1 });
+    res.json({
+      vehicleIcon: setting?.vehicleIcon || '',
+      updatedAt: setting?.vehicleIconUpdatedAt || null,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to retrieve vehicle icon.' });
+  }
+});
+
+// Require authenticated user with 'GPS' page permission for administrative GPS configuration
 router.use(verifyToken, checkPageAccess('GPS'));
 
 // GET /api/gps - Retrieve current GPS configuration
@@ -39,6 +52,8 @@ router.get('/', async (req, res) => {
         ? `••••••••••••${setting.encryptedApiKey.slice(-4)}`
         : '',
       hasApiSecret: Boolean(setting.apiSecret),
+      vehicleIcon: setting.vehicleIcon || '',
+      vehicleIconUpdatedAt: setting.vehicleIconUpdatedAt || null,
       createdAt: setting.createdAt,
       updatedAt: setting.updatedAt,
     };
@@ -47,6 +62,64 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('[Get GPS Setting Error]:', error);
     res.status(500).json({ error: 'GPS service temporarily unavailable.' });
+  }
+});
+
+
+// POST /api/gps/vehicle-icon - Upload new active vehicle icon
+router.post('/vehicle-icon', async (req, res) => {
+  try {
+    const { vehicleIcon } = req.body;
+
+    if (!vehicleIcon || !vehicleIcon.trim()) {
+      return res.status(400).json({ error: 'Vehicle icon image data is required.' });
+    }
+
+    // Enforce under 1 MB limit (base64 string size ~1.4MB max)
+    if (vehicleIcon.length > 1.45 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Vehicle icon size exceeds 1 MB limit. Please upload an image under 1 MB.' });
+    }
+
+    let setting = await GpsSetting.findOne().sort({ updatedAt: -1 });
+    if (!setting) {
+      setting = await GpsSetting.create({
+        provider: 'WheelsEye GPS',
+        vehicleIcon: vehicleIcon.trim(),
+        vehicleIconUpdatedAt: new Date(),
+      });
+    } else {
+      setting.vehicleIcon = vehicleIcon.trim();
+      setting.vehicleIconUpdatedAt = new Date();
+      await setting.save();
+    }
+
+    res.json({
+      message: 'Vehicle icon uploaded successfully. It is now active across the application.',
+      vehicleIcon: setting.vehicleIcon,
+      updatedAt: setting.vehicleIconUpdatedAt,
+    });
+  } catch (error) {
+    console.error('[Upload Vehicle Icon Error]:', error);
+    res.status(500).json({ error: 'Failed to upload vehicle icon.' });
+  }
+});
+
+// DELETE /api/gps/vehicle-icon - Reset vehicle icon to default
+router.delete('/vehicle-icon', async (req, res) => {
+  try {
+    let setting = await GpsSetting.findOne().sort({ updatedAt: -1 });
+    if (setting) {
+      setting.vehicleIcon = '';
+      setting.vehicleIconUpdatedAt = null;
+      await setting.save();
+    }
+
+    res.json({
+      message: 'Vehicle icon reset to system default.',
+      vehicleIcon: '',
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to reset vehicle icon.' });
   }
 });
 
@@ -160,6 +233,8 @@ router.get('/live-vehicles', async (req, res) => {
       statusByVehId.set(s.vehicleId.toString(), s);
     }
 
+    const { getReadableLocation } = require('../services/locationHelper');
+
     const liveVehicles = rawPoints.map((pt) => {
       const vNum = pt.vehicleNumber ? pt.vehicleNumber.toUpperCase() : '';
       const matchedVeh = vehicleByNum.get(vNum);
@@ -208,6 +283,7 @@ router.get('/live-vehicles', async (req, res) => {
         chargeOn: pt.chargeOn,
         timestamp: pt.timestamp,
         readableTime: pt.readableTime,
+        readableLocation: getReadableLocation(pt.latitude, pt.longitude, activePlants),
         geofence: {
           status: matchedPlant ? 'Inside' : 'Outside',
           plantName: matchedPlant ? matchedPlant.plantName : 'Outside All Plants',
@@ -222,6 +298,82 @@ router.get('/live-vehicles', async (req, res) => {
         },
       };
     });
+
+    // Ensure all active fleet vehicles from current status are included in the live stream
+    const presentNums = new Set(liveVehicles.map((v) => v.vehicleNumber.toUpperCase()));
+    const populatedStatuses = await VehicleCurrentStatus.find()
+      .populate('vehicleId', 'vehicleNumber driverName mobile fleetType ownerName status');
+
+    for (const st of populatedStatuses) {
+      if (!st.vehicleId || st.vehicleId.status !== 'Active') continue;
+      const v = st.vehicleId;
+      const vNum = (v.vehicleNumber || '').toUpperCase();
+      if (vNum && !presentNums.has(vNum)) {
+        let matchedPlant = null;
+        let minDistance = Infinity;
+        for (const plant of activePlants) {
+          const radius = plant.radiusMeters || plant.radiusMeter || 500;
+          const dist = calculateHaversineDistance(st.latitude, st.longitude, plant.latitude, plant.longitude);
+          if (dist <= radius && dist < minDistance) {
+            minDistance = dist;
+            matchedPlant = plant;
+          }
+        }
+
+        let nearestPlantName = '';
+        let nearestDistance = Infinity;
+        for (const plant of activePlants) {
+          const dist = calculateHaversineDistance(st.latitude, st.longitude, plant.latitude, plant.longitude);
+          if (dist < nearestDistance) {
+            nearestDistance = dist;
+            nearestPlantName = plant.plantName;
+          }
+        }
+
+        const plans = Array.isArray(st.plans) ? st.plans : [];
+        const latestPlan = plans.length > 0 ? plans[plans.length - 1] : null;
+
+        liveVehicles.push({
+          vehicleNumber: vNum,
+          vehicleId: v._id,
+          driverName: v.driverName || 'Fleet Driver',
+          mobile: v.mobile || '+91 9876543210',
+          deviceNumber: 'GPS-SIM-TRACK',
+          vendorName: 'Sikka Fleet',
+          vehicleType: v.fleetType || 'Commercial',
+          latitude: st.latitude,
+          longitude: st.longitude,
+          speed: 0,
+          ignition: false,
+          angle: 0,
+          chargeOn: true,
+          timestamp: st.lastUpdatedAt || new Date(),
+          readableTime: new Date(st.lastUpdatedAt || Date.now()).toLocaleString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true,
+          }),
+          readableLocation: getReadableLocation(st.latitude, st.longitude, activePlants),
+          geofence: {
+            status: matchedPlant ? 'Inside' : 'Outside',
+            plantName: matchedPlant ? matchedPlant.plantName : 'Outside All Plants',
+            distanceMeter: matchedPlant ? minDistance : nearestDistance,
+            nearestPlant: nearestPlantName,
+          },
+          loadingPlan: {
+            currentPlan: latestPlan ? latestPlan.planText : '',
+            authorName: latestPlan ? latestPlan.authorName : '',
+            createdAt: latestPlan ? latestPlan.createdAt : null,
+            history: plans,
+          },
+        });
+        presentNums.add(vNum);
+      }
+    }
 
     res.json({
       totalCount: liveVehicles.length,

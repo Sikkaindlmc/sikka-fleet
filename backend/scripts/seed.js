@@ -12,14 +12,12 @@ const PlantEntry = require('../models/PlantEntry');
 const VehicleLocation = require('../models/VehicleLocation');
 const { processVehicleLocation } = require('../services/geofenceService');
 
-const MONGO_URI = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/sikka_fleet';
+const connectDB = require('../config/db');
 
 async function seedDatabase() {
   try {
-    await mongoose.connect(MONGO_URI, {
-      dbName: process.env.MONGODB_DB_NAME || 'sikka_fleet',
-    });
-    console.log('[Seed] Connected to MongoDB Atlas:', MONGO_URI.split('@')[1] || MONGO_URI);
+    await connectDB();
+    console.log('[Seed] Connected to MongoDB Atlas successfully.');
 
     // Clear existing collections
     await User.deleteMany({});

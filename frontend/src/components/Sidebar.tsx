@@ -12,6 +12,7 @@ import {
   LogOut,
   ShieldCheck,
   User,
+  UserCheck,
 } from 'lucide-react';
 import { useAuth } from '../lib/authContext';
 
@@ -19,6 +20,7 @@ export const NAV_ITEMS = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Plant', href: '/plants', icon: Building2 },
   { name: 'Vehicle Register', href: '/vehicles', icon: Truck },
+  { name: 'Driver Registry', href: '/drivers', icon: UserCheck },
   { name: 'GPS', href: '/gps', icon: Radio },
   { name: 'User Management', href: '/users', icon: Users },
 ];

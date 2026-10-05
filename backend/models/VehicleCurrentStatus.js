@@ -37,6 +37,14 @@ const vehicleCurrentStatusSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    lastExitPlantName: {
+      type: String,
+      default: null,
+    },
+    lastExitDateTime: {
+      type: Date,
+      default: null,
+    },
     lastUpdatedAt: {
       type: Date,
       default: Date.now,

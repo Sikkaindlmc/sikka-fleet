@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { AuthProvider } from '../lib/authContext';
+import { VehicleIconProvider } from '../lib/vehicleIconContext';
 
 export const metadata: Metadata = {
   title: 'Sikka Fleet – Fleet Management Application',
@@ -23,7 +24,9 @@ export default function RootLayout({
   return (
     <html lang="en" className="h-full bg-slate-50 antialiased">
       <body className="h-full text-slate-900 selection:bg-emerald-500 selection:text-white">
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <VehicleIconProvider>{children}</VehicleIconProvider>
+        </AuthProvider>
       </body>
     </html>
   );

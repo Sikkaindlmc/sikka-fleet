@@ -45,6 +45,20 @@ export async function apiRequest<T = any>(
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
+      if (response.status === 401 && typeof window !== 'undefined') {
+        const isLoginRequest = endpoint.includes('/auth/login');
+        if (!isLoginRequest) {
+          localStorage.removeItem('sikka_fleet_token');
+          localStorage.removeItem('sikka_fleet_user');
+          window.dispatchEvent(new CustomEvent('sikka:auth-expired', { detail: data }));
+
+          if (!window.location.pathname.startsWith('/login')) {
+            const redirectPath = encodeURIComponent(window.location.pathname + window.location.search);
+            window.location.href = `/login?expired=1&redirect=${redirectPath}`;
+          }
+        }
+      }
+
       const errorMessage =
         data.error ||
         data.message ||
