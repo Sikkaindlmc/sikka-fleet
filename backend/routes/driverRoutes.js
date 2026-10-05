@@ -210,9 +210,9 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Mobile Number is required.' });
     }
 
-    // Validate photo size under 300 KB (Base64 string max ~430KB)
-    if (photo && photo.length > 430 * 1024) {
-      return res.status(400).json({ error: 'Passport photo size exceeds 300 KB limit. Please upload an image under 300 KB.' });
+    // Validate photo size under 500 KB (Base64 string max ~700KB)
+    if (photo && photo.length > 700 * 1024) {
+      return res.status(400).json({ error: 'Driver photo size exceeds 500 KB limit. Please upload an image under 500 KB.' });
     }
 
     const cleanedMobile = mobileNumber.toString().replace(/\D/g, '');
@@ -293,9 +293,9 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ error: 'Mobile Number is required.' });
     }
 
-    // Validate photo size under 300 KB
-    if (photo && photo.length > 430 * 1024) {
-      return res.status(400).json({ error: 'Passport photo size exceeds 300 KB limit. Please upload an image under 300 KB.' });
+    // Validate photo size under 500 KB
+    if (photo && photo.length > 700 * 1024) {
+      return res.status(400).json({ error: 'Driver photo size exceeds 500 KB limit. Please upload an image under 500 KB.' });
     }
 
     const cleanedMobile = mobileNumber.toString().replace(/\D/g, '');

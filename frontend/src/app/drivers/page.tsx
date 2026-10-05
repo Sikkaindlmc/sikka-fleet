@@ -21,6 +21,8 @@ import {
   Clock,
   Radio,
   XCircle,
+  Camera,
+  Upload,
 } from 'lucide-react';
 import AppLayout from '../../components/AppLayout';
 import Modal from '../../components/Modal';
@@ -35,6 +37,7 @@ export interface DriverItem {
   dob: string;
   mobileNumber: string;
   countryCode: string;
+  photo?: string | null;
   status: 'Active' | 'Inactive';
   lastLoginAt?: string | null;
   currentStatus?: 'Inside' | 'Outside';
@@ -76,6 +79,8 @@ export default function DriverRegistryPage() {
   const [dlNumber, setDlNumber] = useState('');
   const [dob, setDob] = useState('');
   const [mobileNumber, setMobileNumber] = useState('');
+  const [photo, setPhoto] = useState<string | null>(null);
+  const [photoError, setPhotoError] = useState('');
   const [status, setStatus] = useState<'Active' | 'Inactive'>('Active');
 
   // Fetch Drivers with 20-minute silent background refresh support
@@ -118,6 +123,8 @@ export default function DriverRegistryPage() {
     setDlNumber('');
     setDob('');
     setMobileNumber('');
+    setPhoto(null);
+    setPhotoError('');
     setStatus('Active');
     setFormError('');
     setIsModalOpen(true);
@@ -133,9 +140,48 @@ export default function DriverRegistryPage() {
     const formattedDob = driver.dob ? new Date(driver.dob).toISOString().split('T')[0] : '';
     setDob(formattedDob);
     setMobileNumber(driver.mobileNumber);
+    setPhoto(driver.photo || null);
+    setPhotoError('');
     setStatus(driver.status);
     setFormError('');
     setIsModalOpen(true);
+  };
+
+  // Handle Driver Photo upload under 500 KB
+  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setPhotoError('');
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setPhotoError('Please select a valid image file (JPG, PNG, or WEBP).');
+      return;
+    }
+
+    const MAX_SIZE_BYTES = 500 * 1024; // 500 KB limit
+    if (file.size > MAX_SIZE_BYTES) {
+      const fileSizeKb = Math.round(file.size / 1024);
+      setPhotoError(`Selected image size (${fileSizeKb} KB) exceeds the 500 KB limit. Please choose an image under 500 KB.`);
+      e.target.value = '';
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setPhoto(reader.result);
+      }
+    };
+    reader.onerror = () => {
+      setPhotoError('Failed to read image file. Please try again.');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Remove Driver Photo
+  const removePhoto = () => {
+    setPhoto(null);
+    setPhotoError('');
   };
 
   // Validate Indian 10-digit mobile number
@@ -211,6 +257,7 @@ export default function DriverRegistryPage() {
         dlNumber: cleanedDl,
         dob,
         mobileNumber: cleanedMobile,
+        photo: photo || null,
         status,
       };
 
@@ -484,12 +531,20 @@ export default function DriverRegistryPage() {
                         key={driver._id}
                         className="hover:bg-slate-50/80 transition-colors"
                       >
-                        {/* Driver Name */}
+                        {/* Driver Name & Photo */}
                         <td className="px-5 py-4">
                           <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-700 font-bold flex items-center justify-center text-xs border border-slate-200 shrink-0">
-                              {driver.driverName.charAt(0).toUpperCase()}
-                            </div>
+                            {driver.photo ? (
+                              <img
+                                src={driver.photo}
+                                alt={driver.driverName}
+                                className="w-8 h-8 rounded-full object-cover border-2 border-emerald-500/40 shadow-xs shrink-0 bg-slate-100"
+                              />
+                            ) : (
+                              <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-700 font-bold flex items-center justify-center text-xs border border-slate-200 shrink-0">
+                                {driver.driverName.charAt(0).toUpperCase()}
+                              </div>
+                            )}
                             <div>
                               <span className="font-bold text-slate-900 block">
                                 {driver.driverName}
@@ -744,6 +799,88 @@ export default function DriverRegistryPage() {
               <span className="text-[10px] text-slate-400 mt-1 block">
                 Must be an active 10-digit Indian mobile number. Used as Driver login password.
               </span>
+            </div>
+
+            {/* 5. Driver Photo (Max 500 KB) */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Driver Photo <span className="text-slate-400 font-normal lowercase">(Optional, Max 500 KB)</span>
+                </label>
+                {photo && (
+                  <button
+                    type="button"
+                    onClick={removePhoto}
+                    className="text-[11px] font-bold text-rose-600 hover:text-rose-700 hover:underline cursor-pointer flex items-center gap-1"
+                  >
+                    <X className="w-3 h-3" />
+                    <span>Remove Photo</span>
+                  </button>
+                )}
+              </div>
+
+              {photo ? (
+                <div className="flex items-center gap-3.5 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                  <div className="relative w-14 h-14 rounded-xl overflow-hidden border-2 border-emerald-500 shadow-xs shrink-0 bg-slate-200">
+                    <img
+                      src={photo}
+                      alt="Driver Photo Preview"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-bold text-slate-800 truncate">Photo uploaded</p>
+                    <p className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1 mt-0.5">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Valid photo under 500 KB</span>
+                    </p>
+                    <label className="inline-block mt-1 text-[11px] font-bold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer">
+                      Change Photo
+                      <input
+                        type="file"
+                        accept="image/png, image/jpeg, image/jpg, image/webp"
+                        onChange={handlePhotoChange}
+                        className="hidden"
+                        disabled={isSubmitting}
+                      />
+                    </label>
+                  </div>
+                </div>
+              ) : (
+                <label
+                  className={`flex flex-col items-center justify-center p-4 border-2 border-dashed rounded-xl cursor-pointer transition ${
+                    photoError
+                      ? 'border-rose-300 bg-rose-50/50'
+                      : 'border-slate-300 bg-slate-50/60 hover:bg-slate-100 hover:border-blue-400'
+                  }`}
+                >
+                  <div className="flex flex-col items-center text-center">
+                    <div className="w-9 h-9 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mb-1.5 shadow-xs">
+                      <Camera className="w-4 h-4" />
+                    </div>
+                    <p className="text-xs font-bold text-slate-700">
+                      Upload Driver Photo
+                    </p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      JPG, PNG, or WEBP • Maximum 500 KB
+                    </p>
+                  </div>
+                  <input
+                    type="file"
+                    accept="image/png, image/jpeg, image/jpg, image/webp"
+                    onChange={handlePhotoChange}
+                    className="hidden"
+                    disabled={isSubmitting}
+                  />
+                </label>
+              )}
+
+              {photoError && (
+                <p className="text-[11px] font-semibold text-rose-600 flex items-center gap-1 mt-1.5 animate-in fade-in">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{photoError}</span>
+                </p>
+              )}
             </div>
 
             {/* 5. Status */}
