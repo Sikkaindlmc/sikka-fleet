@@ -222,7 +222,7 @@ export default function LoginForm({
               autoFocus
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder={loginType === 'Driver' ? 'e.g. UP1420230001234' : 'e.g. ajaysomra'}
+              placeholder=""
               className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition"
             />
           </div>
