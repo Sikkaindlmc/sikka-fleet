@@ -3,9 +3,7 @@
   "services": {
     "sikka-fleet-backend": {
       "root": "backend",
-      "framework": "express",
-      "entrypoint": "server.js",
-      "buildCommand": "npm install"
+      "framework": "express"
     },
     "frontend": {
       "root": "frontend",
