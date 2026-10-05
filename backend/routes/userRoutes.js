@@ -14,6 +14,7 @@ const SYSTEM_PAGES = [
   'Vehicle Register',
   'Driver Registry',
   'GPS',
+  'Report',
   'User Management',
 ];
 

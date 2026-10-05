@@ -14,6 +14,7 @@ const gpsRoutes = require('./routes/gpsRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const userRoutes = require('./routes/userRoutes');
 const driverRoutes = require('./routes/driverRoutes');
+const reportRoutes = require('./routes/reportRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -49,6 +50,7 @@ app.use('/api/gps', gpsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/drivers', driverRoutes);
+app.use('/api/reports', reportRoutes);
 
 // Centralized Error Handling Middleware
 app.use((err, req, res, next) => {

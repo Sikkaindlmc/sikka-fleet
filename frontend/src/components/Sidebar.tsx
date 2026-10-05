@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   User,
   UserCheck,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { useAuth } from '../lib/authContext';
 
@@ -22,6 +23,7 @@ export const NAV_ITEMS = [
   { name: 'Vehicle Register', href: '/vehicles', icon: Truck },
   { name: 'Driver Registry', href: '/drivers', icon: UserCheck },
   { name: 'GPS', href: '/gps', icon: Radio },
+  { name: 'Report', href: '/reports', icon: FileSpreadsheet },
   { name: 'User Management', href: '/users', icon: Users },
 ];
 
