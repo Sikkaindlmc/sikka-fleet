@@ -85,6 +85,7 @@ interface PlantVehicle {
   fleetType: string;
   ownerName?: string;
   entryDateTime: string;
+  lastUpdateDateTime?: string | null;
   latitude: number;
   longitude: number;
   distanceMeter?: number;
@@ -93,6 +94,47 @@ interface PlantVehicle {
   status: string;
   plans?: VehiclePlanItem[];
 }
+
+// Entry Time से Current Time के बीच Stay Hours (HH:MM) कैलकुलेट करने का फ़ंक्शन
+const calculateStayHours = (entryDateTimeStr?: string | null): string => {
+  if (!entryDateTimeStr) return '00:00';
+
+  try {
+    let entryDate: Date;
+
+    // Handle "DD-MM-YYYY, HH:mm:ss" or ISO string
+    if (typeof entryDateTimeStr === 'string' && entryDateTimeStr.includes(', ')) {
+      const [datePart, timePart] = entryDateTimeStr.split(', ');
+      const sep = datePart.includes('-') ? '-' : '/';
+      const parts = datePart.split(sep);
+      if (parts.length === 3) {
+        const [day, month, year] = parts;
+        entryDate = new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${timePart}`);
+      } else {
+        entryDate = new Date(entryDateTimeStr);
+      }
+    } else {
+      entryDate = new Date(entryDateTimeStr);
+    }
+
+    if (isNaN(entryDate.getTime())) return '00:00';
+
+    const now = new Date(); // Current system time
+    const diffInMs = now.getTime() - entryDate.getTime();
+    if (diffInMs < 0) return '00:00';
+
+    const totalMinutes = Math.floor(diffInMs / (1000 * 60));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    const formattedHours = String(hours).padStart(2, '0');
+    const formattedMinutes = String(minutes).padStart(2, '0');
+
+    return `${formattedHours}:${formattedMinutes}`;
+  } catch {
+    return '00:00';
+  }
+};
 
 interface OutsideVehicle {
   id: string;
@@ -748,7 +790,8 @@ export default function DashboardPage() {
                   <tr>
                     <th className="px-5 py-3">Vehicle Number</th>
                     <th className="px-5 py-3">Entry Date & Time</th>
-                    <th className="px-5 py-3">Driver Name</th>
+                    <th className="px-5 py-3">Last Update Date & Time</th>
+                    <th className="px-5 py-3">Stay Hours</th>
                     <th className="px-5 py-3">Location</th>
                     <th className="px-5 py-3 min-w-[260px]">Plan</th>
                     <th className="px-5 py-3 text-right">Action</th>
@@ -776,19 +819,14 @@ export default function DashboardPage() {
                         <td className="px-5 py-3.5 text-slate-700 font-semibold whitespace-nowrap">
                           {formatDateTime(v.entryDateTime)}
                         </td>
-                        <td className="px-5 py-3.5">
-                          <NearestDriverCell
-                            driverName={v.driverName}
-                            mobile={v.mobile}
-                            driverDistance={v.driverDistance}
-                            multipleDrivers={v.multipleDrivers}
-                            nearestDrivers={v.nearestDrivers}
-                            onViewMultiple={(drivers) => {
-                              setSelectedNearestDrivers(drivers);
-                              setDriversModalTitle(`Available Drivers – Vehicle ${v.vehicleNumber} (Within 100m)`);
-                              setIsDriversModalOpen(true);
-                            }}
-                          />
+                        <td className="px-5 py-3.5 text-slate-600 font-medium whitespace-nowrap">
+                          {formatDateTime(v.lastUpdateDateTime || v.entryDateTime)}
+                        </td>
+                        <td className="px-5 py-3.5 whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200">
+                            <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            <span>{calculateStayHours(v.entryDateTime)} Hrs</span>
+                          </span>
                         </td>
                         {/* Location Column & Underneath Track Now Button (Redirect to GPS page on click) */}
                         <td className="px-5 py-3.5">

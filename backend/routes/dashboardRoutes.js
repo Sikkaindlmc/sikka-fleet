@@ -224,6 +224,7 @@ router.get('/plants/:plantId/vehicles', async (req, res) => {
           fleetType: item.vehicleId.fleetType,
           ownerName: item.vehicleId.ownerName,
           entryDateTime: item.lastEntryDateTime || item.lastUpdatedAt,
+          lastUpdateDateTime: item.lastUpdatedAt || item.lastEntryDateTime,
           latitude: item.latitude,
           longitude: item.longitude,
           distanceMeter: item.distanceMeter,
@@ -687,8 +688,8 @@ router.get('/plants/:plantId/export', async (req, res) => {
     const headers = [
       'Vehicle Number',
       'Entry Date & Time',
-      'Driver Name',
-      'Mobile',
+      'Last Update Date & Time',
+      'Stay Hours',
       'Location',
       'Latest Plan',
       'Plan History (Audit Trail)',
@@ -728,11 +729,16 @@ router.get('/plants/:plantId/export', async (req, res) => {
           getReadableLocation(st.latitude, st.longitude, activePlants) ||
           `At ${plant.plantName}, ${plant.location || 'Uttar Pradesh'}`;
 
+        const entryDate = st.lastEntryDateTime || st.lastUpdatedAt;
+        const diffMs = entryDate ? Math.max(0, Date.now() - new Date(entryDate).getTime()) : 0;
+        const totalMins = Math.floor(diffMs / 60000);
+        const stayHoursStr = `${String(Math.floor(totalMins / 60)).padStart(2, '0')}:${String(totalMins % 60).padStart(2, '0')} Hrs`;
+
         const cells = [
           v.vehicleNumber,
-          formatIST(st.lastEntryDateTime || st.lastUpdatedAt),
-          v.driverName || '—',
-          v.mobile || '—',
+          formatIST(entryDate),
+          formatIST(st.lastUpdatedAt || entryDate),
+          stayHoursStr,
           readableLoc,
           latestPlanStr,
           historyStr,
