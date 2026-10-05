@@ -138,7 +138,7 @@ router.post('/', async (req, res) => {
       provider: provider.trim(),
       apiUrl: apiUrl ? apiUrl.trim() : '',
       status: status === 'Inactive' ? 'Inactive' : 'Active',
-      pollIntervalSeconds: Number(pollIntervalSeconds) || 15,
+      pollIntervalSeconds: Number(pollIntervalSeconds) || 1800, // 30 Min mandatory
     };
 
     if (apiKey && !apiKey.includes('••••')) {
@@ -196,7 +196,7 @@ router.post('/test-connection', async (req, res) => {
 // POST /api/gps/trigger-sync - Manual GPS sync trigger
 router.post('/trigger-sync', async (req, res) => {
   try {
-    const result = await syncGpsPositions();
+    const result = await syncGpsPositions('Manual Sync');
     res.json({
       message: 'GPS synchronization completed successfully.',
       ...result,

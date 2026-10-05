@@ -200,6 +200,7 @@ router.get('/plants/:plantId/vehicles', async (req, res) => {
     }
 
     const activePlants = await Plant.find({ status: 'Active' });
+    const gpsSetting = await GpsSetting.findOne().sort({ updatedAt: -1 });
 
     // Find current statuses for this plant
     const currentStatuses = await VehicleCurrentStatus.find({
@@ -216,6 +217,9 @@ router.get('/plants/:plantId/vehicles', async (req, res) => {
           getReadableLocation(item.latitude, item.longitude, activePlants) ||
           `At ${plant.plantName}, ${plant.location || 'Uttar Pradesh'}`;
 
+        const entryDateTime = item.lastEntryDateTime || item.createdAt || new Date();
+        const lastUpdateDateTime = item.lastUpdatedAt || gpsSetting?.lastSync || item.lastEntryDateTime;
+
         return {
           id: item.vehicleId._id,
           vehicleNumber: item.vehicleId.vehicleNumber,
@@ -223,8 +227,8 @@ router.get('/plants/:plantId/vehicles', async (req, res) => {
           mobile: item.vehicleId.mobile,
           fleetType: item.vehicleId.fleetType,
           ownerName: item.vehicleId.ownerName,
-          entryDateTime: item.lastEntryDateTime || item.lastUpdatedAt,
-          lastUpdateDateTime: item.lastUpdatedAt || item.lastEntryDateTime,
+          entryDateTime,
+          lastUpdateDateTime,
           latitude: item.latitude,
           longitude: item.longitude,
           distanceMeter: item.distanceMeter,
@@ -684,6 +688,7 @@ router.get('/plants/:plantId/export', async (req, res) => {
       .sort({ lastEntryDateTime: -1 });
 
     const activePlants = await Plant.find({ status: 'Active' });
+    const gpsSetting = await GpsSetting.findOne().sort({ updatedAt: -1 });
 
     const headers = [
       'Vehicle Number',
@@ -729,7 +734,8 @@ router.get('/plants/:plantId/export', async (req, res) => {
           getReadableLocation(st.latitude, st.longitude, activePlants) ||
           `At ${plant.plantName}, ${plant.location || 'Uttar Pradesh'}`;
 
-        const entryDate = st.lastEntryDateTime || st.lastUpdatedAt;
+        const entryDate = st.lastEntryDateTime || st.createdAt || new Date();
+        const lastUpdateDate = st.lastUpdatedAt || gpsSetting?.lastSync || entryDate;
         const diffMs = entryDate ? Math.max(0, Date.now() - new Date(entryDate).getTime()) : 0;
         const totalMins = Math.floor(diffMs / 60000);
         const stayHoursStr = `${String(Math.floor(totalMins / 60)).padStart(2, '0')}:${String(totalMins % 60).padStart(2, '0')} Hrs`;
@@ -737,7 +743,7 @@ router.get('/plants/:plantId/export', async (req, res) => {
         const cells = [
           v.vehicleNumber,
           formatIST(entryDate),
-          formatIST(st.lastUpdatedAt || entryDate),
+          formatIST(lastUpdateDate),
           stayHoursStr,
           readableLoc,
           latestPlanStr,

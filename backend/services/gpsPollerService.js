@@ -6,7 +6,7 @@ const { processVehicleLocation } = require('./geofenceService');
 let pollerIntervalId = null;
 let isPolling = false;
 
-async function syncGpsPositions() {
+async function syncGpsPositions(syncType = 'Auto Sync') {
   if (isPolling) return { success: true, message: 'Sync in progress' };
   isPolling = true;
 
@@ -16,6 +16,7 @@ async function syncGpsPositions() {
       return { success: true, message: 'GPS Service is inactive' };
     }
 
+    const syncTime = new Date();
     const gpsPoints = await fetchGpsLocations(config);
     const activeVehicles = await Vehicle.find({ status: 'Active' });
 
@@ -55,26 +56,29 @@ async function syncGpsPositions() {
       }
 
       if (vehicle && typeof point.latitude === 'number' && typeof point.longitude === 'number') {
+        const deviceTime = point.timestamp ? new Date(point.timestamp) : syncTime;
         await processVehicleLocation(
           vehicle,
           point.latitude,
           point.longitude,
-          point.timestamp ? new Date(point.timestamp) : new Date(),
-          config ? config.provider : 'GPS Service'
+          deviceTime,
+          config ? config.provider : 'GPS Service',
+          syncTime
         );
         processedCount++;
       }
     }
 
-    // Update GPS settings sync status
+    // Update GPS settings sync status and enforce 30-min auto sync
     if (config) {
-      config.lastSync = new Date();
+      config.lastSync = syncTime;
       config.connectionStatus = 'Connected';
       config.lastError = '';
+      config.pollIntervalSeconds = 1800; // Mandatory: 30 minutes
       await config.save();
     }
 
-    return { success: true, processedCount, lastSync: new Date() };
+    return { success: true, processedCount, lastSync: syncTime, syncType };
   } catch (error) {
     console.error('[GPS Poller Error]:', error.message);
     const config = await GpsSetting.findOne().sort({ updatedAt: -1 });
@@ -127,16 +131,16 @@ async function testGpsConnection() {
   }
 }
 
-function startGpsPoller(intervalSeconds = 1200) {
+function startGpsPoller(intervalSeconds = 1800) {
   if (pollerIntervalId) {
     clearInterval(pollerIntervalId);
   }
 
-  console.log(`[GPS Poller] Polling worker running (every ${intervalSeconds}s)`);
-  syncGpsPositions().catch((err) => console.error('[Initial GPS Sync Error]:', err.message));
+  console.log(`[GPS Poller] Auto sync GPS active every 30 Min mandatory (${intervalSeconds}s / ${Math.round(intervalSeconds / 60)} minutes)`);
+  syncGpsPositions('Auto Sync (Startup)').catch((err) => console.error('[Initial GPS Sync Error]:', err.message));
 
   pollerIntervalId = setInterval(() => {
-    syncGpsPositions().catch((err) => console.error('[GPS Sync Error]:', err.message));
+    syncGpsPositions('Auto Sync (30 Min Poller)').catch((err) => console.error('[GPS Sync Error]:', err.message));
   }, intervalSeconds * 1000);
 }
 

@@ -323,6 +323,13 @@ export default function DashboardPage() {
         message: `${result.message || 'GPS synchronization completed.'} Evaluated positions for active vehicles.`,
       });
       await fetchSummary(false);
+      if (selectedPlant) {
+        const data = await apiRequest<{
+          plant: { id: string; name: string; location: string; radiusMeter: number; availableDrivers?: NearestDriverItem[] };
+          vehicles: PlantVehicle[];
+        }>(`/dashboard/plants/${selectedPlant.id}/vehicles`);
+        setPlantVehicles(data.vehicles || []);
+      }
     } catch (err: any) {
       setAlert({
         type: 'error',
@@ -758,16 +765,28 @@ export default function DashboardPage() {
                 Inside Plant: <strong className="text-slate-900">{plantVehicles.length} vehicles</strong>
               </span>
             </div>
-            <button
-              type="button"
-              onClick={exportPlantVehiclesToExcel}
-              disabled={plantVehicles.length === 0}
-              className="inline-flex items-center justify-center gap-2 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
-              title="Download vehicles and plan history as Excel (.xls)"
-            >
-              <FileSpreadsheet className="w-4 h-4" />
-              <span>Export</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleTriggerSync}
+                disabled={isSyncing}
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+                title="Trigger manual GPS sync to fetch latest telemetry for all vehicles"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>{isSyncing ? 'Syncing...' : 'Sync GPS'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={exportPlantVehiclesToExcel}
+                disabled={plantVehicles.length === 0}
+                className="inline-flex items-center justify-center gap-2 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+                title="Download vehicles and plan history as Excel (.xls)"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>Export</span>
+              </button>
+            </div>
           </div>
 
           {isModalLoading ? (

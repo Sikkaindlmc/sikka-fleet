@@ -25,8 +25,20 @@ function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
 /**
  * Evaluates a vehicle's GPS position against all active plant geofences
  * and updates vehicleCurrentStatus and plantEntries accordingly.
+ * 
+ * Rules & Logic:
+ * - Entry Date & Time: The timestamp when the vehicle first entered the plant.
+ *   Preserved without change while the vehicle remains continuously inside the plant.
+ * - Last Update Date & Time: The timestamp of the last system auto-sync or user manual GPS sync.
  */
-async function processVehicleLocation(vehicle, latitude, longitude, timestamp = new Date(), source = 'GPS Provider') {
+async function processVehicleLocation(
+  vehicle,
+  latitude,
+  longitude,
+  deviceTimestamp = new Date(),
+  source = 'GPS Provider',
+  syncTime = new Date()
+) {
   const vehicleId = vehicle._id;
   const vehicleNumber = vehicle.vehicleNumber;
 
@@ -36,8 +48,8 @@ async function processVehicleLocation(vehicle, latitude, longitude, timestamp = 
     vehicleNumber,
     latitude,
     longitude,
-    gpsDateTime: timestamp,
-    receivedAt: new Date(),
+    gpsDateTime: deviceTimestamp,
+    receivedAt: syncTime,
     source,
   });
 
@@ -81,20 +93,27 @@ async function processVehicleLocation(vehicle, latitude, longitude, timestamp = 
 
     // Transition Rule: Only create a Plant Entry event when transitioning from Outside or another plant
     if (wasOutside || changedPlant) {
-      entryDateTime = timestamp;
+      // Vehicle first time IN this plant session
+      entryDateTime = deviceTimestamp || syncTime;
 
       entryEventRecorded = await PlantEntry.create({
         vehicleId,
         vehicleNumber,
         plantId: newPlantId,
         plantName: matchedPlant.plantName,
-        entryDateTime: timestamp,
+        entryDateTime,
         latitude,
         longitude,
         distanceMeter: newDistance,
       });
 
-      console.log(`[Plant Entry Event] ${vehicleNumber} entered ${matchedPlant.plantName} at ${timestamp.toISOString()}`);
+      console.log(`[Plant Entry Event] ${vehicleNumber} entered ${matchedPlant.plantName} at ${new Date(entryDateTime).toISOString()}`);
+    } else {
+      // Vehicle was already inside this plant: Preserve initial entry time!
+      if (!entryDateTime) {
+        const lastEntry = await PlantEntry.findOne({ vehicleId, plantId: newPlantId }).sort({ entryDateTime: -1 });
+        entryDateTime = lastEntry ? lastEntry.entryDateTime : (deviceTimestamp || syncTime);
+      }
     }
   } else {
     // If vehicle was previously inside a plant, record the exit plant and timestamp
@@ -103,12 +122,14 @@ async function processVehicleLocation(vehicle, latitude, longitude, timestamp = 
       if (prevPlant) {
         currentStatus.lastExitPlantName = prevPlant.plantName;
       }
-      currentStatus.lastExitDateTime = timestamp;
+      currentStatus.lastExitDateTime = syncTime;
     }
     entryDateTime = null;
   }
 
   // 5. Update or create current status
+  // lastEntryDateTime: when vehicle first entered this plant
+  // lastUpdatedAt: when system auto-sync or manual sync GPS ran
   if (currentStatus) {
     currentStatus.currentPlantId = newPlantId;
     currentStatus.status = newStatus;
@@ -116,7 +137,7 @@ async function processVehicleLocation(vehicle, latitude, longitude, timestamp = 
     currentStatus.longitude = longitude;
     currentStatus.distanceMeter = newDistance;
     currentStatus.lastEntryDateTime = entryDateTime;
-    currentStatus.lastUpdatedAt = timestamp;
+    currentStatus.lastUpdatedAt = syncTime;
     await currentStatus.save();
   } else {
     currentStatus = await VehicleCurrentStatus.create({
@@ -127,7 +148,7 @@ async function processVehicleLocation(vehicle, latitude, longitude, timestamp = 
       longitude,
       distanceMeter: newDistance,
       lastEntryDateTime: entryDateTime,
-      lastUpdatedAt: timestamp,
+      lastUpdatedAt: syncTime,
     });
   }
 

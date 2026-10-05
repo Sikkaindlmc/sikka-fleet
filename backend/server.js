@@ -68,8 +68,8 @@ if (require.main === module) {
     console.log(`📡 URL: http://localhost:${PORT}`);
     console.log(`=========================================`);
 
-    // Start background GPS polling worker (every 20 minutes)
-    startGpsPoller(20 * 60);
+    // Start background GPS polling worker (auto sync GPS every 30 Min mandatory)
+    startGpsPoller(30 * 60);
   });
 }
 
