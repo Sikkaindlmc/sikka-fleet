@@ -33,14 +33,17 @@ export interface DriverLocationSummary {
     capturedAt: string | null;
   } | null;
   lastLocationUpdateAt: string | null;
+  locationDeductionStatus: 'Location Deducted' | 'Location Not Deducted';
+  isLocationDeducted: boolean;
+  lastLocationAttemptAt: string | null;
+  lastLocationError: string | null;
   isStale: boolean;
-  staleThresholdMinutes: number;
   refreshIntervalMinutes: number;
   serverTime: string;
 }
 
-const REFRESH_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes (Requirement 16)
-const STALE_THRESHOLD_MS = 25 * 60 * 1000; // 25 minutes threshold
+const REFRESH_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes (Requirement 1)
+const STALE_THRESHOLD_MS = 21 * 60 * 1000; // 21 minutes threshold
 
 export function useDriverLocation(enabled = true) {
   const [summary, setSummary] = useState<DriverLocationSummary | null>(null);
@@ -69,7 +72,8 @@ export function useDriverLocation(enabled = true) {
     }
   }, []);
 
-  // Send coordinates to backend for geofencing and automatic Plant IN/OUT detection
+  // Send genuine coordinates to backend for geofencing and automatic location deduction
+  // Requirement 5: Stores Driver Name, ID, Lat, Lon, Date/Time, Accuracy, Status: Location Deducted
   const reportLocation = useCallback(async (latitude: number, longitude: number, accuracy?: number) => {
     setIsRefreshing(true);
     try {
@@ -89,16 +93,51 @@ export function useDriverLocation(enabled = true) {
       return data;
     } catch (err: any) {
       setLocationError(err.message || 'Failed to update driver location with server.');
+      setSummary((prev) =>
+        prev
+          ? {
+              ...prev,
+              locationDeductionStatus: 'Location Not Deducted',
+              isLocationDeducted: false,
+            }
+          : null
+      );
       throw err;
     } finally {
       setIsRefreshing(false);
     }
   }, []);
 
+  // Handle location fetch failure
+  // Requirements 2, 3, 4: Never save location record, never use previous location, display "Location Not Deducted"
+  const reportLocationFailure = useCallback(async (reason: string) => {
+    setIsRefreshing(false);
+    setLocationError(reason);
+    try {
+      const data = await apiRequest<DriverLocationSummary & { message: string }>('/drivers/location-failed', {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      });
+      setSummary(data);
+    } catch {
+      // Local optimistic fallback if offline
+      setSummary((prev) =>
+        prev
+          ? {
+              ...prev,
+              locationDeductionStatus: 'Location Not Deducted',
+              isLocationDeducted: false,
+            }
+          : null
+      );
+    }
+  }, []);
+
   // Request high-accuracy GPS coordinates from device
   const refreshLocationNow = useCallback((): Promise<void> => {
     if (!('geolocation' in navigator)) {
-      setLocationError('Geolocation is not supported by this device/browser.');
+      const msg = 'Geolocation is not supported by this device or browser.';
+      reportLocationFailure(msg);
       return Promise.resolve();
     }
 
@@ -113,15 +152,16 @@ export function useDriverLocation(enabled = true) {
               position.coords.accuracy
             );
           } catch {
-            // Handled in reportLocation
+            // Handled inside reportLocation
           } finally {
             resolve();
           }
         },
-        (error) => {
-          setIsRefreshing(false);
-          // Requirement 17: If GPS fails/denied, do not report fake location or fake IN/OUT
-          setLocationError(`GPS Location Error: ${error.message} (${error.code})`);
+        async (error) => {
+          // Requirements 2, 3, 4: Location fetch failure must display "Location Not Deducted"
+          // and NEVER create a location record or use previous location
+          const errorMsg = `GPS Unavailable (${error.code}): ${error.message}`;
+          await reportLocationFailure(errorMsg);
           resolve();
         },
         {
@@ -131,9 +171,10 @@ export function useDriverLocation(enabled = true) {
         }
       );
     });
-  }, [reportLocation]);
+  }, [reportLocation, reportLocationFailure]);
 
   // Periodic 20-minute cycle & background resumption
+  // Requirement 1: Deduct current location every 20 minutes automatically
   useEffect(() => {
     if (!enabled) return;
 
@@ -143,20 +184,20 @@ export function useDriverLocation(enabled = true) {
     // Trigger initial device location sync
     refreshLocationNow();
 
-    // 20-Minute Periodic Timer (Requirement 16)
+    // 20-Minute Periodic Timer (Every 20 minutes)
     const intervalId = setInterval(() => {
       refreshLocationNow();
     }, REFRESH_INTERVAL_MS);
 
-    // Requirement 17: Background / Minimized Resumption Check
-    // When driver returns to the tab/app, check if 20 minutes have passed and refresh immediately
+    // Background / Minimized Resumption Check
+    // When driver returns to tab/app, check if 20 minutes have passed and refresh immediately
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         const elapsed = Date.now() - lastSuccessfulSendRef.current;
         if (elapsed >= REFRESH_INTERVAL_MS) {
           refreshLocationNow();
         } else {
-          // Re-fetch server status silently
+          // Re-fetch server status to get latest evaluated status
           fetchSummary();
         }
       }
@@ -170,16 +211,22 @@ export function useDriverLocation(enabled = true) {
     };
   }, [enabled, fetchSummary, refreshLocationNow]);
 
-  // Dynamic Stale Status evaluation
+  // Dynamic status evaluation
   const isStale = summary?.lastLocationUpdateAt
     ? (Date.now() - new Date(summary.lastLocationUpdateAt).getTime()) > STALE_THRESHOLD_MS
     : true;
 
+  const currentDeductionStatus: 'Location Deducted' | 'Location Not Deducted' =
+    !isStale && summary?.locationDeductionStatus === 'Location Deducted'
+      ? 'Location Deducted'
+      : 'Location Not Deducted';
+
   return {
-    summary,
+    summary: summary ? { ...summary, locationDeductionStatus: currentDeductionStatus } : null,
     isLoading,
     isRefreshing,
     isStale,
+    locationDeductionStatus: currentDeductionStatus,
     locationError,
     lastCheckTime,
     refreshLocationNow,

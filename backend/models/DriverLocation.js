@@ -33,6 +33,10 @@ const driverLocationSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+    status: {
+      type: String,
+      default: 'Location Deducted',
+    },
     currentStatus: {
       type: String,
       enum: ['Inside', 'Outside'],

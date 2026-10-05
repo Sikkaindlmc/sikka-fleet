@@ -4,8 +4,10 @@ const DriverPlantRecord = require('../models/DriverPlantRecord');
 const DriverLocation = require('../models/DriverLocation');
 const { calculateHaversineDistance } = require('./geofenceService');
 
-// Define stale freshness threshold in milliseconds (25 minutes)
-const STALE_THRESHOLD_MS = 25 * 60 * 1000;
+// 20-minute interval definitions
+const REFRESH_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes
+const GRACE_PERIOD_MS = 60 * 1000; // 1-minute buffer for network latency
+const STALE_THRESHOLD_MS = REFRESH_INTERVAL_MS + GRACE_PERIOD_MS; // 21 minutes
 
 /**
  * Calculates geodesic distance between two points in meters if not imported
@@ -29,6 +31,8 @@ function getDistance(lat1, lon1, lat2, lon2) {
  * Evaluates driver device GPS coordinates against configured Plant geofences
  * and handles automatic Plant IN & Plant OUT records.
  *
+ * CRITICAL RULE: Only actual, successfully received GPS coordinates are saved.
+ *
  * @param {string|ObjectId} driverId - Verified Driver ID from JWT session (never trusted from body)
  * @param {number} latitude - Device GPS latitude
  * @param {number} longitude - Device GPS longitude
@@ -38,6 +42,17 @@ function getDistance(lat1, lon1, lat2, lon2) {
 async function processDriverLocation({ driverId, latitude, longitude, accuracy = null, timestamp = new Date() }) {
   if (!driverId) {
     throw new Error('Driver ID is required for location processing.');
+  }
+
+  // Reject invalid, NaN, or 0,0 mock coordinates
+  if (
+    typeof latitude !== 'number' ||
+    typeof longitude !== 'number' ||
+    isNaN(latitude) ||
+    isNaN(longitude) ||
+    (latitude === 0 && longitude === 0)
+  ) {
+    throw new Error('Valid, non-zero numeric GPS latitude and longitude coordinates are required.');
   }
 
   const driver = await Driver.findById(driverId);
@@ -89,7 +104,7 @@ async function processDriverLocation({ driverId, latitude, longitude, accuracy =
         );
       }
 
-      // Automatically create new Plant IN record (Requirement 14)
+      // Automatically create new Plant IN record
       await DriverPlantRecord.create({
         driverId: driver._id,
         driverName: driver.driverName,
@@ -116,7 +131,7 @@ async function processDriverLocation({ driverId, latitude, longitude, accuracy =
       );
     }
   }
-  // 4. CASE B: Driver is OUTSIDE all configured plant radii (Requirement 15)
+  // 4. CASE B: Driver is OUTSIDE all configured plant radii
   else {
     // If driver was previously inside a plant, automatically mark Plant OUT
     if (wasInside) {
@@ -141,7 +156,7 @@ async function processDriverLocation({ driverId, latitude, longitude, accuracy =
     }
   }
 
-  // 5. Update latest driver location and freshness timestamp
+  // 5. Update latest driver location and successful deduction status
   driver.lastLocation = {
     latitude,
     longitude,
@@ -149,10 +164,14 @@ async function processDriverLocation({ driverId, latitude, longitude, accuracy =
     capturedAt: now,
   };
   driver.lastLocationUpdateAt = now;
+  driver.locationDeductionStatus = 'Location Deducted';
+  driver.lastLocationAttemptAt = now;
+  driver.lastLocationError = null;
 
   await driver.save();
 
-  // 6. Automatically log immutable 20-minute location record
+  // 6. Save valid immutable location record (Requirement 5)
+  // Stores: Driver Name, Driver/User ID, Latitude, Longitude, Location Date & Time, Accuracy, Status: Location Deducted
   try {
     await DriverLocation.create({
       driverId: driver._id,
@@ -162,6 +181,7 @@ async function processDriverLocation({ driverId, latitude, longitude, accuracy =
       latitude,
       longitude,
       accuracy,
+      status: 'Location Deducted',
       currentStatus: driver.currentStatus,
       plantId: driver.currentPlantId,
       plantName: driver.currentPlantName,
@@ -176,6 +196,37 @@ async function processDriverLocation({ driverId, latitude, longitude, accuracy =
 }
 
 /**
+ * Handles a failed 20-minute location fetch attempt.
+ *
+ * CRITICAL RULES (Requirements 2, 3, 4):
+ * - If location fetch fails, DO NOT create or save any location record.
+ * - Do NOT use previous location as the current location.
+ * - Do NOT estimate or generate a false location.
+ * - Mark status as "Location Not Deducted".
+ */
+async function recordDriverLocationFailure({ driverId, reason = 'GPS unavailable' }) {
+  if (!driverId) {
+    throw new Error('Driver ID is required.');
+  }
+
+  const driver = await Driver.findById(driverId);
+  if (!driver) {
+    throw new Error('Driver not found.');
+  }
+
+  const now = new Date();
+  driver.locationDeductionStatus = 'Location Not Deducted';
+  driver.lastLocationAttemptAt = now;
+  driver.lastLocationError = reason;
+  // STRICT: Do NOT touch driver.lastLocation, do NOT touch driver.lastLocationUpdateAt,
+  // and do NOT call DriverLocation.create()!
+
+  await driver.save();
+
+  return getDriverLocationSummary(driver);
+}
+
+/**
  * Compiles a sanitized, driver-specific status summary.
  * Strictly guarantees ZERO data leakage of other drivers or vehicles.
  */
@@ -184,7 +235,14 @@ async function getDriverLocationSummary(driverDoc) {
 
   const now = Date.now();
   const lastUpdate = driver.lastLocationUpdateAt ? new Date(driver.lastLocationUpdateAt).getTime() : null;
-  const isStale = !lastUpdate || (now - lastUpdate) > STALE_THRESHOLD_MS;
+  
+  // A location deduction is valid ONLY if it occurred within the active 20-minute window (+ grace period)
+  // and the last attempt succeeded.
+  const isCurrent = lastUpdate && (now - lastUpdate) <= STALE_THRESHOLD_MS;
+  const isLocationDeducted = driver.locationDeductionStatus === 'Location Deducted' && isCurrent;
+  const locationDeductionStatus = isLocationDeducted ? 'Location Deducted' : 'Location Not Deducted';
+
+  const isStale = !isCurrent;
 
   // Retrieve current active plant entry or latest completed entry
   let activeRecord = null;
@@ -235,10 +293,15 @@ async function getDriverLocationSummary(driverDoc) {
     currentPlant: plantDetails || (driver.currentPlantName ? { name: driver.currentPlantName } : null),
     inTime: activeRecord ? activeRecord.inTime : driver.currentPlantInTime,
     outTime: lastCompletedRecord ? lastCompletedRecord.outTime : driver.lastPlantOutTime,
+    // Requirement 3: Only actual GPS coordinates ever returned, with their true capture timestamp
     lastLocation: driver.lastLocation || null,
     lastLocationUpdateAt: driver.lastLocationUpdateAt || null,
+    // Requirements 4 & 5: Exact status strings
+    locationDeductionStatus,
+    isLocationDeducted,
+    lastLocationAttemptAt: driver.lastLocationAttemptAt || null,
+    lastLocationError: driver.lastLocationError || null,
     isStale,
-    staleThresholdMinutes: 25,
     refreshIntervalMinutes: 20,
     serverTime: new Date(),
   };
@@ -246,6 +309,8 @@ async function getDriverLocationSummary(driverDoc) {
 
 module.exports = {
   processDriverLocation,
+  recordDriverLocationFailure,
   getDriverLocationSummary,
+  REFRESH_INTERVAL_MS,
   STALE_THRESHOLD_MS,
 };

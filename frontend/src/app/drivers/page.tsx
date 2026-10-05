@@ -20,6 +20,7 @@ import {
   ExternalLink,
   Clock,
   Radio,
+  XCircle,
 } from 'lucide-react';
 import AppLayout from '../../components/AppLayout';
 import Modal from '../../components/Modal';
@@ -47,6 +48,7 @@ export interface DriverItem {
     capturedAt?: string | null;
   } | null;
   lastLocationUpdateAt?: string | null;
+  locationDeductionStatus?: 'Location Deducted' | 'Location Not Deducted';
   createdAt?: string;
   updatedAt?: string;
 }
@@ -541,8 +543,14 @@ export default function DriverRegistryPage() {
 
                         {/* Last GPS Location (20-Min Periodic Cycle) */}
                         <td className="px-5 py-4">
-                          {hasLocation ? (
+                          {driver.locationDeductionStatus === 'Location Deducted' && hasLocation ? (
                             <div className="space-y-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <span>Location Deducted</span>
+                                </span>
+                              </div>
                               <div className="flex items-center gap-2">
                                 <span className="text-xs font-mono font-bold text-slate-800">
                                   {driver.lastLocation!.latitude.toFixed(4)}, {driver.lastLocation!.longitude.toFixed(4)}
@@ -561,13 +569,24 @@ export default function DriverRegistryPage() {
                               </div>
                               <div className="flex items-center gap-1 text-[10px] text-slate-400">
                                 <Clock className="w-3 h-3 text-slate-400" />
-                                <span>Updated: {updateTimeStr || 'Recent'}</span>
+                                <span>Deducted: {updateTimeStr || 'Recent'}</span>
                               </div>
                             </div>
                           ) : (
-                            <div className="flex items-center gap-1.5 text-slate-400 text-xs">
-                              <Radio className="w-3.5 h-3.5 text-slate-300" />
-                              <span className="text-[11px] italic">Awaiting 20m ping</span>
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-100 text-rose-800 border border-rose-300">
+                                <XCircle className="w-3 h-3 text-rose-600" />
+                                <span>Location Not Deducted</span>
+                              </span>
+                              {hasLocation ? (
+                                <p className="text-[10px] text-slate-400">
+                                  Past fix at {updateTimeStr || 'Earlier'} (not current)
+                                </p>
+                              ) : (
+                                <p className="text-[10px] text-slate-400 italic">
+                                  No GPS received yet
+                                </p>
+                              )}
                             </div>
                           )}
                         </td>

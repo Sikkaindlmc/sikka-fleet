@@ -4,8 +4,8 @@ const { calculateHaversineDistance } = require('./geofenceService');
 // Maximum Driver Matching Radius = 100 Meters (Requirement 23.1)
 const MAX_DRIVER_MATCH_RADIUS_METERS = 100;
 
-// Maximum acceptable freshness window for GPS matching (45 minutes)
-const DRIVER_GPS_FRESHNESS_MS = 45 * 60 * 1000;
+// Maximum acceptable freshness window for GPS matching (21 minutes for 20-minute cycle)
+const DRIVER_GPS_FRESHNESS_MS = 21 * 60 * 1000;
 
 /**
  * Calculates distance between two GPS coordinates in meters.
@@ -27,6 +27,7 @@ function getDistance(lat1, lon1, lat2, lon2) {
 
 /**
  * Fetches all Active drivers who have valid, recent GPS coordinates.
+ * Only drivers with status 'Location Deducted' within the 20-minute window are matched.
  */
 async function getAvailableActiveDrivers() {
   const drivers = await Driver.find({ status: 'Active' });
@@ -39,8 +40,9 @@ async function getAvailableActiveDrivers() {
     const capturedAt = d.lastLocationUpdateAt ?? d.lastLocation?.capturedAt ?? d.lastLoginLocation?.capturedAt;
 
     if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
-      // Verify GPS freshness (Requirement 23.7)
-      const isFresh = capturedAt ? (now - new Date(capturedAt).getTime()) <= DRIVER_GPS_FRESHNESS_MS : false;
+      // Must have been successfully deducted in the last 20-minute interval
+      const isWithinWindow = capturedAt ? (now - new Date(capturedAt).getTime()) <= DRIVER_GPS_FRESHNESS_MS : false;
+      const isDeducted = d.locationDeductionStatus === 'Location Deducted' && isWithinWindow;
 
       available.push({
         id: d._id.toString(),
@@ -50,7 +52,8 @@ async function getAvailableActiveDrivers() {
         latitude: lat,
         longitude: lng,
         capturedAt: capturedAt || null,
-        isFresh,
+        isFresh: isDeducted,
+        locationDeductionStatus: isDeducted ? 'Location Deducted' : 'Location Not Deducted',
       });
     }
   }

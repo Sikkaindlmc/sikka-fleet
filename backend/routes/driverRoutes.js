@@ -2,7 +2,12 @@ const express = require('express');
 const Driver = require('../models/Driver');
 const DriverLocation = require('../models/DriverLocation');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
-const { processDriverLocation, getDriverLocationSummary } = require('../services/driverLocationService');
+const {
+  processDriverLocation,
+  recordDriverLocationFailure,
+  getDriverLocationSummary,
+  STALE_THRESHOLD_MS,
+} = require('../services/driverLocationService');
 
 const router = express.Router();
 
@@ -79,6 +84,29 @@ router.post('/location', async (req, res) => {
   }
 });
 
+// POST /api/drivers/location-failed - Record 20-minute GPS fetch failure without creating any location record
+// Requirements 2, 3, 4: Never create location record, never use previous location, set status "Location Not Deducted"
+router.post('/location-failed', async (req, res) => {
+  try {
+    const authenticatedDriverId = (req.user.id || req.user._id).toString();
+    const { reason = 'GPS/location unavailable' } = req.body;
+
+    const summary = await recordDriverLocationFailure({
+      driverId: authenticatedDriverId,
+      reason,
+    });
+
+    res.json({
+      message: 'Location fetch failure recorded. No location record created.',
+      status: 'Location Not Deducted',
+      ...summary,
+    });
+  } catch (error) {
+    console.error('[Driver Location Failed Error]:', error);
+    res.status(500).json({ error: 'Failed to record location failure.' });
+  }
+});
+
 // =============================================================================
 // ADMINISTRATIVE DRIVER REGISTRY MANAGEMENT (Admin / Fleet Operators Only)
 // Enforce 'Driver Registry' page access so Drivers CANNOT access other drivers
@@ -106,9 +134,24 @@ router.get('/', async (req, res) => {
 
     const drivers = await Driver.find(query).sort({ createdAt: -1 });
 
+    const now = Date.now();
+    const enrichedDrivers = drivers.map((driverDoc) => {
+      const driver = driverDoc.toObject();
+      const lastUpdate = driver.lastLocationUpdateAt ? new Date(driver.lastLocationUpdateAt).getTime() : null;
+      // Valid deduction requires being within active 20-min cycle + grace threshold
+      const isCurrent = lastUpdate && (now - lastUpdate) <= STALE_THRESHOLD_MS;
+      const isDeducted = driver.locationDeductionStatus === 'Location Deducted' && isCurrent;
+
+      return {
+        ...driver,
+        locationDeductionStatus: isDeducted ? 'Location Deducted' : 'Location Not Deducted',
+        isLocationDeducted: isDeducted,
+      };
+    });
+
     res.json({
-      totalCount: drivers.length,
-      drivers,
+      totalCount: enrichedDrivers.length,
+      drivers: enrichedDrivers,
     });
   } catch (error) {
     console.error('[Get Drivers Error]:', error);

@@ -80,6 +80,19 @@ const driverSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    locationDeductionStatus: {
+      type: String,
+      enum: ['Location Deducted', 'Location Not Deducted'],
+      default: 'Location Not Deducted',
+    },
+    lastLocationAttemptAt: {
+      type: Date,
+      default: null,
+    },
+    lastLocationError: {
+      type: String,
+      default: null,
+    },
   },
   {
     collection: 'drivers',

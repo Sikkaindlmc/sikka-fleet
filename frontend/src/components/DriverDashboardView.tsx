@@ -13,6 +13,7 @@ export default function DriverDashboardView() {
     isLoading,
     isRefreshing,
     isStale,
+    locationDeductionStatus,
     locationError,
     refreshLocationNow,
   } = useDriverLocation(true);
@@ -65,8 +66,11 @@ export default function DriverDashboardView() {
           outTime: null,
           lastLocation: null,
           lastLocationUpdateAt: null,
+          locationDeductionStatus: 'Location Not Deducted',
+          isLocationDeducted: false,
+          lastLocationAttemptAt: null,
+          lastLocationError: null,
           isStale: false,
-          staleThresholdMinutes: 25,
           refreshIntervalMinutes: 20,
           serverTime: new Date().toISOString(),
         }} />
@@ -77,6 +81,7 @@ export default function DriverDashboardView() {
         summary={summary}
         isRefreshing={isRefreshing}
         isStale={isStale}
+        locationDeductionStatus={locationDeductionStatus}
         locationError={locationError}
         onRefreshNow={refreshLocationNow}
       />

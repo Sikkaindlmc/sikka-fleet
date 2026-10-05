@@ -25,14 +25,14 @@ export default function NearestDriverCell({
   locationStale,
   onViewMultiple,
 }: NearestDriverCellProps) {
-  // Case 0: Stale / Unavailable Driver GPS (Requirement 24.6)
+  // Case 0: Stale / Unavailable Driver GPS (Requirement 4)
   if (isStale || locationStale) {
     return (
       <span
-        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-semibold"
-        title="Driver's latest GPS information is stale or unavailable"
+        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-bold"
+        title="Driver's GPS was not deducted at the scheduled 20-minute interval"
       >
-        <span>Driver Location Unavailable / Stale</span>
+        <span>Location Not Deducted</span>
       </span>
     );
   }
