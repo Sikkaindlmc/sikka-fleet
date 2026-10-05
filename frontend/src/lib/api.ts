@@ -1,9 +1,13 @@
 const isClient = typeof window !== 'undefined';
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ||
-  (isClient && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
-    ? '/api'
-    : 'http://localhost:5000/api');
+  (isClient
+    ? (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+        ? '/api'
+        : 'http://localhost:5000/api')
+    : (process.env.BACKEND_URL
+        ? `${process.env.BACKEND_URL}/api`
+        : 'http://localhost:5000/api'));
 
 export class ApiError extends Error {
   status: number;

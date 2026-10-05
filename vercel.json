@@ -1,22 +1,36 @@
 {
-  "builds": [
-    {
-      "src": "frontend/package.json",
-      "use": "@vercel/next"
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "sikka-fleet-backend": {
+      "root": "backend",
+      "framework": "express",
+      "buildCommand": "npm install"
     },
-    {
-      "src": "backend/index.js",
-      "use": "@vercel/node"
+    "frontend": {
+      "root": "frontend",
+      "framework": "nextjs",
+      "bindings": [
+        {
+          "type": "service",
+          "service": "sikka-fleet-backend",
+          "format": "url",
+          "env": "BACKEND_URL"
+        }
+      ]
     }
-  ],
-  "routes": [
+  },
+  "rewrites": [
     {
-      "src": "/api/(.*)",
-      "dest": "backend/index.js"
+      "source": "/api/(.*)",
+      "destination": {
+        "service": "sikka-fleet-backend"
+      }
     },
     {
-      "src": "/(.*)",
-      "dest": "frontend/$1"
+      "source": "/(.*)",
+      "destination": {
+        "service": "frontend"
+      }
     }
   ]
 }
