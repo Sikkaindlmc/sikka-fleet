@@ -14,6 +14,7 @@ import {
   User,
   UserCheck,
   FileSpreadsheet,
+  Sparkles,
 } from 'lucide-react';
 import { useAuth } from '../lib/authContext';
 
@@ -25,6 +26,7 @@ export const NAV_ITEMS = [
   { name: 'GPS', href: '/gps', icon: Radio },
   { name: 'Report', href: '/reports', icon: FileSpreadsheet },
   { name: 'User Management', href: '/users', icon: Users },
+  { name: 'Sikka AI', href: '/sikka-ai', icon: Sparkles, isAi: true },
 ];
 
 export default function Sidebar() {
@@ -77,7 +79,18 @@ export default function Sidebar() {
                   isActive ? 'text-slate-950' : 'text-slate-400 group-hover:text-white'
                 }`}
               />
-              <span>{item.name}</span>
+              <span className="flex-1">{item.name}</span>
+              {(item as { isAi?: boolean }).isAi && (
+                <span
+                  className={`text-[10px] font-black px-1.5 py-0.5 rounded-md uppercase tracking-wider ${
+                    isActive
+                      ? 'bg-slate-950 text-emerald-400'
+                      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                  }`}
+                >
+                  AI
+                </span>
+              )}
             </Link>
           );
         })}

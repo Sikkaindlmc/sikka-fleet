@@ -6,6 +6,7 @@ const cors = require('cors');
 const morgan = require('morgan');
 const connectDB = require('./config/db');
 const { startGpsPoller } = require('./services/gpsPollerService');
+const { startSikkaAiScheduler } = require('./services/sikkaAiService');
 
 const authRoutes = require('./routes/authRoutes');
 const plantRoutes = require('./routes/plantRoutes');
@@ -15,6 +16,7 @@ const dashboardRoutes = require('./routes/dashboardRoutes');
 const userRoutes = require('./routes/userRoutes');
 const driverRoutes = require('./routes/driverRoutes');
 const reportRoutes = require('./routes/reportRoutes');
+const sikkaAiRoutes = require('./routes/sikkaAiRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -51,6 +53,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/sikka-ai', sikkaAiRoutes);
 
 // Centralized Error Handling Middleware
 app.use((err, req, res, next) => {
@@ -68,8 +71,8 @@ if (require.main === module) {
     console.log(`📡 URL: http://localhost:${PORT}`);
     console.log(`=========================================`);
 
-    // Start background GPS polling worker (auto sync GPS every 30 Min mandatory)
-    startGpsPoller(30 * 60);
+    // Start Sikka AI 30-minute automated vehicle GPS & driver location scheduler
+    startSikkaAiScheduler();
   });
 }
 

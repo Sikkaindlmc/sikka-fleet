@@ -88,7 +88,18 @@ export default function MobileNav({ isOpen, onClose }: MobileNavProps) {
                 }`}
               >
                 <Icon className={`w-5 h-5 ${isActive ? 'text-slate-950' : 'text-slate-400'}`} />
-                <span>{item.name}</span>
+                <span className="flex-1">{item.name}</span>
+                {(item as { isAi?: boolean }).isAi && (
+                  <span
+                    className={`text-[10px] font-black px-1.5 py-0.5 rounded-md uppercase tracking-wider ${
+                      isActive
+                        ? 'bg-slate-950 text-emerald-400'
+                        : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    }`}
+                  >
+                    AI
+                  </span>
+                )}
               </Link>
             );
           })}

@@ -46,6 +46,7 @@ const DEFAULT_PAGES = [
   { pageName: 'GPS', pagePath: '/gps', iconName: 'Navigation', order: 5, description: 'Real-time GPS telematics and live tracking' },
   { pageName: 'Report', pagePath: '/reports', iconName: 'FileSpreadsheet', order: 6, description: 'Stay hours and movement reports for fleet and drivers' },
   { pageName: 'User Management', pagePath: '/users', iconName: 'Users', order: 7, description: 'User roles, credentials and page access authorization' },
+  { pageName: 'Sikka AI', pagePath: '/sikka-ai', iconName: 'Sparkles', order: 8, description: 'Sikka AI intelligence module, 30-min auto sync, stay analytics and diagnostics' },
 ];
 
 /**

@@ -74,6 +74,13 @@ export default function DriverRegistryPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
 
+  // Delete Driver Confirmation Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [driverToDelete, setDriverToDelete] = useState<DriverItem | null>(null);
+  const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
   // Form Fields
   const [driverName, setDriverName] = useState('');
   const [dlNumber, setDlNumber] = useState('');
@@ -145,6 +152,55 @@ export default function DriverRegistryPage() {
     setStatus(driver.status);
     setFormError('');
     setIsModalOpen(true);
+  };
+
+  // Open Delete Driver Modal
+  const openDeleteModal = (driver: DriverItem) => {
+    setDriverToDelete(driver);
+    setDeleteConfirmationText('');
+    setDeleteError('');
+    setIsDeleteModalOpen(true);
+  };
+
+  // Close Delete Driver Modal
+  const closeDeleteModal = () => {
+    if (isDeleting) return;
+    setIsDeleteModalOpen(false);
+    setDriverToDelete(null);
+    setDeleteConfirmationText('');
+    setDeleteError('');
+  };
+
+  // Execute Permanent Delete of Driver
+  const handleDeleteDriver = async () => {
+    if (!driverToDelete) return;
+
+    if (deleteConfirmationText !== 'DELETE') {
+      setDeleteError('Please type exact word DELETE to confirm.');
+      return;
+    }
+
+    setIsDeleting(true);
+    setDeleteError('');
+    try {
+      await apiRequest(`/drivers/${driverToDelete._id}`, {
+        method: 'DELETE',
+      });
+
+      // Remove the driver from active driver list in project immediately
+      setDrivers((prev) => prev.filter((d) => d._id !== driverToDelete._id));
+
+      setAlert({
+        type: 'success',
+        message: `Driver '${driverToDelete.driverName}' has been permanently deleted from the project and database.`,
+      });
+
+      closeDeleteModal();
+    } catch (err: any) {
+      setDeleteError(err.message || 'Failed to delete driver record.');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   // Handle Driver Photo upload under 500 KB
@@ -488,7 +544,7 @@ export default function DriverRegistryPage() {
                     Live Geofence
                   </th>
                   <th scope="col" className="px-5 py-3.5">
-                    Last GPS Location (20m)
+                    Last GPS Location (30m)
                   </th>
                   <th scope="col" className="px-5 py-3.5">
                     Status
@@ -596,14 +652,14 @@ export default function DriverRegistryPage() {
                           )}
                         </td>
 
-                        {/* Last GPS Location (20-Min Periodic Cycle) */}
+                        {/* Last GPS Location (30-Min Periodic Cycle - Actual GPS Record) */}
                         <td className="px-5 py-4">
                           {driver.locationDeductionStatus === 'Location Deducted' && hasLocation ? (
                             <div className="space-y-1">
                               <div className="flex items-center gap-1.5">
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-300">
                                   <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                  <span>Location Deducted</span>
+                                  <span>Actual GPS Fix</span>
                                 </span>
                               </div>
                               <div className="flex items-center gap-2">
@@ -622,9 +678,9 @@ export default function DriverRegistryPage() {
                                   <ExternalLink className="w-2.5 h-2.5" />
                                 </a>
                               </div>
-                              <div className="flex items-center gap-1 text-[10px] text-slate-400">
+                              <div className="flex items-center gap-1 text-[10px] text-slate-500 font-medium">
                                 <Clock className="w-3 h-3 text-slate-400" />
-                                <span>Deducted: {updateTimeStr || 'Recent'}</span>
+                                <span>GPS Record: {updateTimeStr || 'Recorded'}</span>
                               </div>
                             </div>
                           ) : (
@@ -664,17 +720,39 @@ export default function DriverRegistryPage() {
                           </span>
                         </td>
 
-                        {/* Action - Edit Option */}
+                        {/* Action - Add, Edit, Delete Buttons */}
                         <td className="px-5 py-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => openEditModal(driver)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold rounded-xl transition cursor-pointer"
-                            title="Edit Driver Details"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                            <span>Edit</span>
-                          </button>
+                          <div className="inline-flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={openAddModal}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-xs font-bold rounded-xl transition cursor-pointer shadow-2xs"
+                              title="Add New Driver"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>Add</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => openEditModal(driver)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold rounded-xl transition cursor-pointer shadow-2xs"
+                              title="Edit Driver Details"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                              <span>Edit</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => openDeleteModal(driver)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold rounded-xl transition cursor-pointer shadow-2xs"
+                              title="Permanently Delete Driver"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Delete</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -932,6 +1010,114 @@ export default function DriverRegistryPage() {
               </button>
             </div>
           </form>
+        </Modal>
+
+        {/* WARNING CONFIRMATION MODAL: Delete Driver Record */}
+        <Modal
+          isOpen={isDeleteModalOpen}
+          onClose={closeDeleteModal}
+          title="Delete Driver Record"
+          subtitle="Permanent database deletion confirmation"
+          maxWidth="md"
+        >
+          <div className="space-y-4">
+            {/* Warning Box */}
+            <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 space-y-2">
+              <div className="flex items-center gap-2 text-rose-700 font-black text-sm">
+                <AlertCircle className="w-5 h-5 shrink-0 text-rose-600" />
+                <span>Permanent Removal Warning</span>
+              </div>
+              <p className="text-xs font-semibold leading-relaxed text-rose-800">
+                Warning: Deleting this driver will permanently remove the driver record from the project and database. This action cannot be undone.
+              </p>
+            </div>
+
+            {/* Target Driver Summary */}
+            {driverToDelete && (
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-semibold">Driver Name:</span>
+                  <span className="font-black text-slate-900 text-sm">{driverToDelete.driverName}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-semibold">DL Number:</span>
+                  <span className="font-mono font-bold text-slate-800">{driverToDelete.dlNumber}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-semibold">Mobile Number:</span>
+                  <span className="font-mono font-bold text-slate-800">{driverToDelete.mobileNumber}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-semibold">Status:</span>
+                  <span className="font-bold text-emerald-700">{driverToDelete.status}</span>
+                </div>
+              </div>
+            )}
+
+            {deleteError && (
+              <div className="p-3 rounded-xl bg-rose-100 border border-rose-300 text-rose-800 text-xs font-semibold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{deleteError}</span>
+              </div>
+            )}
+
+            {/* Manual Confirmation Input */}
+            <div className="space-y-1.5">
+              <label htmlFor="delete-driver-input" className="block text-xs font-bold text-slate-700">
+                To confirm permanent deletion, please type{' '}
+                <span className="font-mono font-black text-rose-600 underline">DELETE</span> below:
+              </label>
+              <input
+                id="delete-driver-input"
+                type="text"
+                value={deleteConfirmationText}
+                onChange={(e) => {
+                  setDeleteConfirmationText(e.target.value);
+                  setDeleteError('');
+                }}
+                placeholder="Type DELETE to confirm"
+                disabled={isDeleting}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 font-mono text-sm tracking-wider uppercase focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500 disabled:opacity-50"
+                autoFocus
+              />
+              <p className="text-[11px] text-slate-500">
+                The Confirm Delete button remains disabled until the exact word{' '}
+                <span className="font-mono font-bold text-slate-700">DELETE</span> is entered.
+              </p>
+            </div>
+
+            {/* Footer Action Buttons */}
+            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={closeDeleteModal}
+                disabled={isDeleting}
+                className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 text-xs font-bold hover:bg-slate-50 transition cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDeleteDriver}
+                disabled={deleteConfirmationText !== 'DELETE' || isDeleting}
+                className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-black transition cursor-pointer shadow-sm ${
+                  deleteConfirmationText === 'DELETE'
+                    ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-rose-200'
+                    : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed opacity-60'
+                }`}
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>
+                  {isDeleting
+                    ? 'Deleting...'
+                    : deleteConfirmationText === 'DELETE'
+                    ? 'Confirm Delete'
+                    : 'Type DELETE to enable'}
+                </span>
+              </button>
+            </div>
+          </div>
         </Modal>
       </div>
     </AppLayout>

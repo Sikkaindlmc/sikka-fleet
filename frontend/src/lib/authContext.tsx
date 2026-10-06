@@ -121,9 +121,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const hasPageAccess = (pageName: string): boolean => {
     if (!user) return false;
-    // Requirement 12: Driver has strictly Dashboard-only access
+    // Section 9 & 24: Driver has strictly Dashboard-only access - Sikka AI completely forbidden
     if (user.role === 'Driver') return pageName === 'Dashboard';
     if (user.role === 'Admin') return true;
+    // Section 8 & 24: User Login has Sikka AI available by default
+    if (pageName === 'Sikka AI') return true;
     return Array.isArray(user.accessPages) && user.accessPages.includes(pageName);
   };
 

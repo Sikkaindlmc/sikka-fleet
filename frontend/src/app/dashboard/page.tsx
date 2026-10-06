@@ -22,7 +22,9 @@ import {
   CreditCard,
   Calendar,
   ExternalLink,
+  Sparkles,
 } from 'lucide-react';
+import Link from 'next/link';
 import AppLayout from '../../components/AppLayout';
 import Modal from '../../components/Modal';
 import AlertBanner, { AlertState } from '../../components/AlertBanner';
@@ -522,6 +524,14 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-2.5">
+            <Link
+              href="/sikka-ai"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer border border-emerald-500/30 group"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-emerald-400 group-hover:rotate-12 transition-transform" />
+              <span>Sikka AI Assistant</span>
+            </Link>
+
             <button
               type="button"
               onClick={handleTriggerSync}

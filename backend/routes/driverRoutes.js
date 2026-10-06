@@ -1,6 +1,8 @@
 const express = require('express');
 const Driver = require('../models/Driver');
 const DriverLocation = require('../models/DriverLocation');
+const DriverPlantRecord = require('../models/DriverPlantRecord');
+const Vehicle = require('../models/Vehicle');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
 const {
   processDriverLocation,
@@ -354,18 +356,60 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/drivers/:id - Delete a driver
+// DELETE /api/drivers/:id - Permanently delete a driver from project and database
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const deleted = await Driver.findByIdAndDelete(id);
-    if (!deleted) {
+    const driver = await Driver.findById(id);
+    if (!driver) {
       return res.status(404).json({ error: 'Driver record not found.' });
     }
-    res.json({ message: 'Driver deleted successfully.' });
+
+    const driverName = driver.driverName;
+    const mobileNumber = driver.mobileNumber;
+
+    // 1. Clear vehicle assignments where this driver was assigned
+    await Vehicle.updateMany(
+      {
+        $or: [
+          { driverName: new RegExp(`^${driverName}$`, 'i') },
+          { mobile: mobileNumber },
+        ],
+      },
+      {
+        $set: { driverName: '', mobile: '' },
+      }
+    );
+
+    // 2. Remove associated location and plant records for clean database
+    await Promise.all([
+      DriverLocation.deleteMany({
+        $or: [
+          { driverId: id },
+          { mobileNumber: mobileNumber },
+          { driverName: new RegExp(`^${driverName}$`, 'i') },
+        ],
+      }),
+      DriverPlantRecord.deleteMany({
+        $or: [
+          { driverId: id },
+          { driverMobile: mobileNumber },
+          { driverName: new RegExp(`^${driverName}$`, 'i') },
+        ],
+      }),
+    ]);
+
+    // 3. Permanently delete the driver from Driver Registry
+    await Driver.findByIdAndDelete(id);
+
+    res.json({
+      success: true,
+      message: `Driver '${driverName}' permanently deleted from project and database.`,
+      driverName,
+    });
   } catch (error) {
     console.error('[Delete Driver Error]:', error);
-    res.status(500).json({ error: 'Failed to delete driver.' });
+    res.status(500).json({ error: 'Failed to permanently delete driver.' });
   }
 });
 
