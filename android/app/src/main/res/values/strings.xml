@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Sikka Fleet</string>
+    <string name="title_activity_main">Sikka Fleet</string>
+    <string name="package_name">com.sikkaind.sikkafleet</string>
+    <string name="custom_url_scheme">com.sikkaind.sikkafleet</string>
+</resources>

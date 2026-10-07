@@ -20,8 +20,8 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['Admin', 'User'],
-      default: 'User',
+      enum: ['Admin', 'User', 'Plant Operator', 'Fleet Operator', 'Fleet Manager'],
+      default: 'Plant Operator',
     },
     accessPages: {
       type: [String],

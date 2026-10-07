@@ -81,6 +81,10 @@ router.post('/', async (req, res) => {
     const activePages = await Page.find({ status: 'Active' }).sort({ order: 1 });
     const allPageNames = activePages.map((p) => p.pageName);
 
+    // Resolve user role and default to Plant Operator if empty
+    const validRoles = ['Admin', 'User', 'Plant Operator', 'Fleet Operator', 'Fleet Manager'];
+    const userRole = (role && validRoles.includes(role.trim())) ? role.trim() : (role && role.trim()) || 'Plant Operator';
+
     // If Admin, grant all system pages automatically from MongoDB
     let finalPages = allPageNames;
     if (userRole !== 'Admin') {
@@ -161,8 +165,9 @@ router.put('/:id', async (req, res) => {
       user.passwordHash = await bcrypt.hash(password, salt);
     }
 
-    if (role && ['Admin', 'User'].includes(role)) {
-      user.role = role;
+    const validRoles = ['Admin', 'User', 'Plant Operator', 'Fleet Operator', 'Fleet Manager'];
+    if (role && validRoles.includes(role.trim())) {
+      user.role = role.trim();
     }
 
     // If user is Admin, they get all system pages from MongoDB

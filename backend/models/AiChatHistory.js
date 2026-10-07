@@ -21,7 +21,7 @@ const AiChatHistorySchema = new mongoose.Schema(
     },
     userRole: {
       type: String,
-      enum: ['Admin', 'User'],
+      enum: ['Admin', 'User', 'Plant Operator', 'Fleet Operator', 'Fleet Manager', 'Driver', 'System'],
       default: 'User',
     },
     question: {

@@ -29,11 +29,19 @@ interface PlantOption {
   status: string;
 }
 
+export type UserRoleType =
+  | 'Plant Operator'
+  | 'Fleet Operator'
+  | 'Fleet Manager'
+  | 'Admin'
+  | 'User'
+  | string;
+
 interface UserRecord {
   _id: string;
   fullName: string;
   username: string;
-  role: 'Admin' | 'User';
+  role: UserRoleType;
   accessPages: string[];
   accessPlants: Array<{ _id: string; plantName: string } | string>;
   status: 'Active' | 'Inactive';
@@ -68,7 +76,7 @@ export default function UserManagementPage() {
   const [formData, setFormData] = useState({
     fullName: '',
     username: '',
-    role: 'User' as 'Admin' | 'User',
+    role: 'Plant Operator' as UserRoleType,
     password: '',
     confirmPassword: '',
     accessPlants: [] as string[],
@@ -111,7 +119,7 @@ export default function UserManagementPage() {
     setFormData({
       fullName: '',
       username: '',
-      role: 'User',
+      role: 'Plant Operator',
       password: '',
       confirmPassword: '',
       accessPlants: activePlants.map((p) => p._id),
@@ -155,7 +163,7 @@ export default function UserManagementPage() {
   };
 
   // Handle Role Change
-  const handleRoleChange = (newRole: 'Admin' | 'User') => {
+  const handleRoleChange = (newRole: UserRoleType) => {
     setFormData((prev) => ({
       ...prev,
       role: newRole,
@@ -433,11 +441,17 @@ export default function UserManagementPage() {
                           className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
                             u.role === 'Admin'
                               ? 'bg-purple-100 text-purple-800'
+                              : u.role === 'Fleet Manager'
+                              ? 'bg-indigo-100 text-indigo-800'
+                              : u.role === 'Fleet Operator'
+                              ? 'bg-blue-100 text-blue-800'
+                              : u.role === 'Plant Operator'
+                              ? 'bg-amber-100 text-amber-800'
                               : 'bg-slate-100 text-slate-700'
                           }`}
                         >
                           <Shield className="w-3 h-3" />
-                          <span>{u.role || 'User'}</span>
+                          <span>{u.role || 'Plant Operator'}</span>
                         </span>
                       </td>
                       <td className="px-6 py-4">
@@ -585,12 +599,15 @@ export default function UserManagementPage() {
                 </label>
                 <select
                   value={formData.role}
-                  onChange={(e) => handleRoleChange(e.target.value as any)}
+                  onChange={(e) => handleRoleChange(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden bg-white"
                   disabled={isSubmitting}
                 >
-                  <option value="User">User / Plant Operator</option>
+                  <option value="Plant Operator">Plant Operator</option>
+                  <option value="Fleet Operator">Fleet Operator</option>
+                  <option value="Fleet Manager">Fleet Manager</option>
                   <option value="Admin">Administrator (Full System Access)</option>
+                  <option value="User">User / Standard Operator</option>
                 </select>
                 {formData.role === 'Admin' && (
                   <p className="mt-1.5 text-[11px] font-semibold text-emerald-700 flex items-center gap-1">
@@ -830,12 +847,15 @@ export default function UserManagementPage() {
                 </label>
                 <select
                   value={formData.role}
-                  onChange={(e) => handleRoleChange(e.target.value as any)}
+                  onChange={(e) => handleRoleChange(e.target.value)}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden bg-white"
                   disabled={isSubmitting}
                 >
-                  <option value="User">User / Plant Operator</option>
+                  <option value="Plant Operator">Plant Operator</option>
+                  <option value="Fleet Operator">Fleet Operator</option>
+                  <option value="Fleet Manager">Fleet Manager</option>
                   <option value="Admin">Administrator (Full System Access)</option>
+                  <option value="User">User / Standard Operator</option>
                 </select>
                 {formData.role === 'Admin' && (
                   <p className="mt-1.5 text-[11px] font-semibold text-emerald-700 flex items-center gap-1">
