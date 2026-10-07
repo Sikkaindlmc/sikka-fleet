@@ -235,7 +235,17 @@ router.get('/live-vehicles', async (req, res) => {
 
     const { getReadableLocation } = require('../services/locationHelper');
 
-    const liveVehicles = rawPoints.map((pt) => {
+    // Filter raw GPS points:
+    // Only display GPS location for vehicles that:
+    // 1. Exist in the Fleet Vehicle Registry (not deleted)
+    // 2. Have status === 'Active' (if Inactive, stop that vehicle's GPS location)
+    const activePoints = rawPoints.filter((pt) => {
+      const vNum = pt.vehicleNumber ? pt.vehicleNumber.toUpperCase() : '';
+      const matchedVeh = vehicleByNum.get(vNum);
+      return matchedVeh && matchedVeh.status === 'Active';
+    });
+
+    const liveVehicles = activePoints.map((pt) => {
       const vNum = pt.vehicleNumber ? pt.vehicleNumber.toUpperCase() : '';
       const matchedVeh = vehicleByNum.get(vNum);
       const matchedStatus = matchedVeh ? statusByVehId.get(matchedVeh._id.toString()) : null;

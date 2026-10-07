@@ -37,25 +37,8 @@ async function syncGpsPositions(syncType = 'Auto Sync') {
         vehicle = vehicleByNumber.get(point.vehicleNumber.toUpperCase());
       }
 
-      if (!vehicle && point.vehicleNumber) {
-        try {
-          vehicle = await Vehicle.create({
-            vehicleNumber: point.vehicleNumber.toUpperCase(),
-            driverName: '',
-            mobile: '',
-            fleetType: 'Own Fleet',
-            gpsDeviceId: point.deviceNumber || point.vehicleNumber,
-            status: 'Active',
-          });
-          vehicleById.set(vehicle._id.toString(), vehicle);
-          vehicleByNumber.set(vehicle.vehicleNumber.toUpperCase(), vehicle);
-          console.log(`[Auto-Enroll] Enrolled vehicle ${vehicle.vehicleNumber} from WheelsEye GPS.`);
-        } catch (e) {
-          vehicle = await Vehicle.findOne({ vehicleNumber: point.vehicleNumber.toUpperCase() });
-        }
-      }
-
-      if (vehicle && typeof point.latitude === 'number' && typeof point.longitude === 'number') {
+      // Only track active vehicles registered in the fleet. Deleted or Inactive vehicles are stopped.
+      if (vehicle && vehicle.status === 'Active' && typeof point.latitude === 'number' && typeof point.longitude === 'number') {
         const deviceTime = point.timestamp ? new Date(point.timestamp) : syncTime;
         await processVehicleLocation(
           vehicle,

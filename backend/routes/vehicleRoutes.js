@@ -1,6 +1,8 @@
 const express = require('express');
 const Vehicle = require('../models/Vehicle');
 const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
+const VehicleLocation = require('../models/VehicleLocation');
+const PlantEntry = require('../models/PlantEntry');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
 
 const router = express.Router();
@@ -174,6 +176,47 @@ router.put('/:id', async (req, res) => {
   } catch (error) {
     console.error('[Update Vehicle Error]:', error);
     res.status(500).json({ error: 'Failed to update vehicle.' });
+  }
+});
+
+// DELETE /api/vehicles/:id - Delete Vehicle permanently & stop GPS tracking
+router.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const vehicle = await Vehicle.findById(id);
+    if (!vehicle) {
+      return res.status(404).json({ error: 'Vehicle not found.' });
+    }
+
+    const vehicleNumber = vehicle.vehicleNumber;
+
+    // 1. Delete vehicle document from registry
+    await Vehicle.findByIdAndDelete(id);
+
+    // 2. Remove associated current status, historical locations & geofence plant entries
+    await VehicleCurrentStatus.deleteMany({ vehicleId: id });
+    await VehicleLocation.deleteMany({ vehicleId: id });
+    await PlantEntry.deleteMany({ vehicleId: id });
+
+    // 3. Clear simulated states if present
+    try {
+      const { vehicleSimStates } = require('../services/gpsSimulatorService');
+      if (vehicleSimStates && vehicleSimStates.has(id.toString())) {
+        vehicleSimStates.delete(id.toString());
+      }
+    } catch (_) {}
+
+    console.log(`[Vehicle Deleted]: ${vehicleNumber} (ID: ${id}) removed from registry. GPS tracking stopped.`);
+
+    res.json({
+      message: `Vehicle ${vehicleNumber} deleted successfully. GPS tracking has been stopped.`,
+      deletedId: id,
+      vehicleNumber,
+    });
+  } catch (error) {
+    console.error('[Delete Vehicle Error]:', error);
+    res.status(500).json({ error: 'Failed to delete vehicle.' });
   }
 });
 
