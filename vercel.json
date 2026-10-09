@@ -31,11 +31,5 @@
         "service": "frontend"
       }
     }
-  ],
-  "crons": [
-    {
-      "path": "/api/cron/sync-gps",
-      "schedule": "0,30 * * * *"
-    }
   ]
 }
