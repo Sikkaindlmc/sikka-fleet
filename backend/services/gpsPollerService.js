@@ -1,79 +1,13 @@
 const GpsSetting = require('../models/GpsSetting');
 const Vehicle = require('../models/Vehicle');
+const { executeWheelseyeAutoSync } = require('./wheelseyeAutoSyncService');
 const { fetchGpsLocations } = require('./gpsSimulatorService');
 const { processVehicleLocation } = require('./geofenceService');
 
 let pollerIntervalId = null;
-let isPolling = false;
 
 async function syncGpsPositions(syncType = 'Auto Sync') {
-  if (isPolling) return { success: true, message: 'Sync in progress' };
-  isPolling = true;
-
-  try {
-    const config = await GpsSetting.findOne().sort({ updatedAt: -1 });
-    if (config && config.status === 'Inactive') {
-      return { success: true, message: 'GPS Service is inactive' };
-    }
-
-    const syncTime = new Date();
-    const gpsPoints = await fetchGpsLocations(config);
-    const activeVehicles = await Vehicle.find({ status: 'Active' });
-
-    const vehicleById = new Map();
-    const vehicleByNumber = new Map();
-    for (const v of activeVehicles) {
-      vehicleById.set(v._id.toString(), v);
-      vehicleByNumber.set(v.vehicleNumber.toUpperCase(), v);
-    }
-
-    let processedCount = 0;
-
-    for (const point of gpsPoints) {
-      let vehicle = null;
-      if (point.vehicleId && vehicleById.has(point.vehicleId.toString())) {
-        vehicle = vehicleById.get(point.vehicleId.toString());
-      } else if (point.vehicleNumber && vehicleByNumber.has(point.vehicleNumber.toUpperCase())) {
-        vehicle = vehicleByNumber.get(point.vehicleNumber.toUpperCase());
-      }
-
-      // Only track active vehicles registered in the fleet. Deleted or Inactive vehicles are stopped.
-      if (vehicle && vehicle.status === 'Active' && typeof point.latitude === 'number' && typeof point.longitude === 'number') {
-        const deviceTime = point.timestamp ? new Date(point.timestamp) : syncTime;
-        await processVehicleLocation(
-          vehicle,
-          point.latitude,
-          point.longitude,
-          deviceTime,
-          config ? config.provider : 'GPS Service',
-          syncTime
-        );
-        processedCount++;
-      }
-    }
-
-    // Update GPS settings sync status and enforce 30-min auto sync
-    if (config) {
-      config.lastSync = syncTime;
-      config.connectionStatus = 'Connected';
-      config.lastError = '';
-      config.pollIntervalSeconds = 1800; // Mandatory: 30 minutes
-      await config.save();
-    }
-
-    return { success: true, processedCount, lastSync: syncTime, syncType };
-  } catch (error) {
-    console.error('[GPS Poller Error]:', error.message);
-    const config = await GpsSetting.findOne().sort({ updatedAt: -1 });
-    if (config) {
-      config.connectionStatus = 'Connection Failed';
-      config.lastError = error.message;
-      await config.save();
-    }
-    throw error;
-  } finally {
-    isPolling = false;
-  }
+  return await executeWheelseyeAutoSync(syncType);
 }
 
 async function testGpsConnection() {

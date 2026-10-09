@@ -26,6 +26,78 @@ export function formatDateTime(dateInput?: string | Date | null): string {
 }
 
 /**
+ * Calculates and formats outside duration between plantOutDate and currentDate in HH:MM
+ * E.g., difference between Plant Out Date Time and current date time.
+ */
+export function calculateOutsideHours(
+  plantOutDate?: string | Date | null,
+  currentDate: Date = new Date()
+): string {
+  if (!plantOutDate) return '—';
+
+  try {
+    const outTime = typeof plantOutDate === 'string' ? new Date(plantOutDate) : plantOutDate;
+    if (isNaN(outTime.getTime())) return '—';
+
+    const diffMs = currentDate.getTime() - outTime.getTime();
+    if (diffMs < 0) return '00:00';
+
+    const totalMinutes = Math.floor(diffMs / (60 * 1000));
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  } catch {
+    return '—';
+  }
+}
+
+/**
+ * Returns color highlight classes for Outside Hour & Stay Hours badges:
+ * - Upto 12:00 Hour -> Yellow background highlight
+ * - Upto 24:00 Hour -> Orange background highlight
+ * - Upto 36:00 Hour (and beyond) -> Red background highlight
+ */
+export function getDurationColorClasses(durationStr?: string | null): {
+  badge: string;
+  icon: string;
+} {
+  if (!durationStr || durationStr === '—') {
+    return {
+      badge: 'bg-slate-100 text-slate-700 border-slate-200/90',
+      icon: 'text-slate-500',
+    };
+  }
+
+  // Parse total minutes from "HH:MM" or "HH:MM Hrs"
+  const clean = durationStr.replace(/[^\d:]/g, '');
+  const [hStr, mStr] = clean.split(':');
+  const hours = parseInt(hStr || '0', 10);
+  const minutes = parseInt(mStr || '0', 10);
+  const totalMinutes = (isNaN(hours) ? 0 : hours * 60) + (isNaN(minutes) ? 0 : minutes);
+
+  if (totalMinutes <= 12 * 60) {
+    // Upto 12:00 Hour -> Yellow color highlight
+    return {
+      badge: 'bg-yellow-100 text-yellow-950 border-yellow-300 font-bold',
+      icon: 'text-yellow-700',
+    };
+  } else if (totalMinutes <= 24 * 60) {
+    // Upto 24:00 Hour -> Orange color highlight
+    return {
+      badge: 'bg-orange-100 text-orange-950 border-orange-300 font-bold',
+      icon: 'text-orange-700',
+    };
+  } else {
+    // Upto 36:00 Hour and above -> Red color highlight
+    return {
+      badge: 'bg-red-100 text-red-950 border-red-300 font-bold',
+      icon: 'text-red-700',
+    };
+  }
+}
+
+/**
  * Formats distance in meters or kilometers
  */
 export function formatDistance(meters?: number | null): string {

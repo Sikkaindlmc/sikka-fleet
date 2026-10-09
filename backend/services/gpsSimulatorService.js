@@ -104,6 +104,31 @@ async function fetchGpsLocations(gpsConfig) {
         timeout: 10000,
       });
 
+      // Parse WheelsEye telemetry timestamp with millisecond/second support
+      const parseTelematicsTimestamp = (item) => {
+        if (item.createdDate !== undefined && item.createdDate !== null) {
+          const num = Number(item.createdDate);
+          if (!isNaN(num) && num > 0) {
+            const ms = num > 1e11 ? num : num * 1000;
+            const d = new Date(ms);
+            if (!isNaN(d.getTime())) return d;
+          }
+        }
+        if (item.timestamp) {
+          const d = new Date(item.timestamp);
+          if (!isNaN(d.getTime())) return d;
+        }
+        if (item.dttime) {
+          const d = new Date(item.dttime);
+          if (!isNaN(d.getTime())) return d;
+        }
+        if (item.createdDateReadable) {
+          const d = new Date(item.createdDateReadable);
+          if (!isNaN(d.getTime())) return d;
+        }
+        return new Date();
+      };
+
       // 1. WheelsEye format: { success: true, data: { totalCount: 21, list: [ ... ] } }
       if (response.data && response.data.data && Array.isArray(response.data.data.list)) {
         return response.data.data.list.map((item) => ({
@@ -117,7 +142,7 @@ async function fetchGpsLocations(gpsConfig) {
           vehicleType: item.vehicleType || 'Commercial',
           angle: item.angle || 0,
           chargeOn: Boolean(item.chargeOn),
-          timestamp: item.createdDate ? new Date(item.createdDate * 1000) : new Date(),
+          timestamp: parseTelematicsTimestamp(item),
           readableTime: item.createdDateReadable || item.dttime,
         }));
       }
@@ -132,16 +157,22 @@ async function fetchGpsLocations(gpsConfig) {
           ignition: Boolean(item.ignition),
           deviceNumber: item.deviceNumber,
           vendorName: item.venndorName || item.vendorName,
-          timestamp: item.createdDate ? new Date(item.createdDate * 1000) : new Date(),
+          timestamp: parseTelematicsTimestamp(item),
         }));
       }
 
       // 3. Direct array of vehicles
       if (Array.isArray(response.data)) {
-        return response.data;
+        return response.data.map((item) => ({
+          ...item,
+          timestamp: parseTelematicsTimestamp(item),
+        }));
       }
       if (response.data && Array.isArray(response.data.vehicles)) {
-        return response.data.vehicles;
+        return response.data.vehicles.map((item) => ({
+          ...item,
+          timestamp: parseTelematicsTimestamp(item),
+        }));
       }
     } catch (error) {
       console.warn(`[GPS External API Warning] External GPS request failed (${error.message}). Falling back to simulation.`);

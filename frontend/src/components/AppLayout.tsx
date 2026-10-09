@@ -6,6 +6,7 @@ import { ShieldAlert, ArrowLeft } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import MobileNav from './MobileNav';
+import PlantPlanNotificationIcon from './PlantPlanNotificationIcon';
 import { useAuth } from '../lib/authContext';
 
 interface AppLayoutProps {
@@ -96,6 +97,9 @@ export default function AppLayout({
           <div className="max-w-7xl mx-auto">{children}</div>
         </main>
       </div>
+
+      {/* Global Plant Plan Notification Icon & Panel (Visible Across All Pages) */}
+      <PlantPlanNotificationIcon />
     </div>
   );
 }

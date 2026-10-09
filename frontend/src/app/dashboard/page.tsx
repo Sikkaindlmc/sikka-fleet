@@ -30,7 +30,7 @@ import Modal from '../../components/Modal';
 import AlertBanner, { AlertState } from '../../components/AlertBanner';
 import VehicleIcon from '../../components/VehicleIcon';
 import { apiRequest, API_BASE_URL } from '../../lib/api';
-import { formatDateTime, formatDistance } from '../../lib/formatters';
+import { formatDateTime, formatDistance, calculateOutsideHours, getDurationColorClasses } from '../../lib/formatters';
 import { useAuth } from '../../lib/authContext';
 import DriverDashboardView from '../../components/DriverDashboardView';
 import NearestDriverCell from '../../components/NearestDriverCell';
@@ -145,6 +145,7 @@ interface OutsideVehicle {
   plantOutDateTime?: string | null;
   lastLocationDateTime?: string | null;
   lastLocationTime?: string;
+  outsideHours?: string | null;
   status: string;
   driverName?: string | null;
   mobile?: string | null;
@@ -172,6 +173,7 @@ export default function DashboardPage() {
   } | null>(null);
   const [totalActiveVehicles, setTotalActiveVehicles] = useState(0);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [nextSyncCountdown, setNextSyncCountdown] = useState<string>('30:00');
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [alert, setAlert] = useState<AlertState | null>(null);
@@ -253,7 +255,11 @@ export default function DashboardPage() {
         plans: VehiclePlanItem[];
       }>(`/dashboard/vehicles/${selectedVehicleForPlan.id}/plan`, {
         method: 'POST',
-        body: JSON.stringify({ planText: planInput.trim() }),
+        body: JSON.stringify({
+          planText: planInput.trim(),
+          plantId: selectedPlant?.id || undefined,
+          plantName: selectedPlant?.name || undefined,
+        }),
       });
 
       // Update in local plantVehicles state immediately
@@ -262,6 +268,11 @@ export default function DashboardPage() {
           v.id === selectedVehicleForPlan.id ? { ...v, plans: res.plans } : v
         )
       );
+
+      // Dispatch event to trigger immediate notification panel refresh
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('plant-plan-updated'));
+      }
 
       setIsPlanModalOpen(false);
       setSelectedVehicleForPlan(null);
@@ -285,12 +296,17 @@ export default function DashboardPage() {
         outsideWidget: { id: string; name: string; vehicleCount: number; driverCount?: number; isOutside: boolean };
         totalActiveVehicles: number;
         lastUpdated: string;
+        last_evaluated_timestamp?: string;
+        next_sync_timestamp?: string;
       }>('/dashboard/summary');
 
       setPlantWidgets(data.plantWidgets || []);
       setOutsideWidget(data.outsideWidget);
       setTotalActiveVehicles(data.totalActiveVehicles || 0);
-      setLastUpdated(data.lastUpdated);
+      const evalTimestamp = data.last_evaluated_timestamp || data.lastUpdated;
+      if (evalTimestamp) {
+        setLastUpdated(evalTimestamp);
+      }
     } catch (err: any) {
       setAlert({
         type: 'error',
@@ -301,13 +317,61 @@ export default function DashboardPage() {
     }
   }, []);
 
+  // 1-second live countdown timer relative to current time and next fixed 30-minute block boundary (HH:00 or HH:30 IST)
+  useEffect(() => {
+    let lastTriggeredBoundary = '';
+
+    const calculateCountdown = () => {
+      const now = new Date();
+      const minutes = now.getMinutes();
+      const target = new Date(now);
+
+      if (minutes < 30) {
+        target.setMinutes(30, 0, 0);
+      } else {
+        target.setHours(target.getHours() + 1, 0, 0, 0);
+      }
+
+      if (target.getTime() <= now.getTime()) {
+        target.setMinutes(target.getMinutes() + 30, 0, 0);
+      }
+
+      const diffMs = target.getTime() - now.getTime();
+
+      if (diffMs <= 1000) {
+        const boundaryId = target.toISOString();
+        if (lastTriggeredBoundary !== boundaryId) {
+          lastTriggeredBoundary = boundaryId;
+          // Trigger immediate silent GET request to fetch updated DB state
+          fetchSummary(false);
+          // Also fetch after 3.5s to ensure backend cron cycle completion is captured
+          setTimeout(() => fetchSummary(false), 3500);
+        }
+        return '00:00';
+      }
+
+      const totalSeconds = Math.max(0, Math.floor(diffMs / 1000));
+      const m = Math.floor(totalSeconds / 60);
+      const s = totalSeconds % 60;
+      return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    };
+
+    setNextSyncCountdown(calculateCountdown());
+
+    const timer = setInterval(() => {
+      setNextSyncCountdown(calculateCountdown());
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [fetchSummary]);
+
+  // Reactive polling interval (every 60 seconds) to ensure synchronization with server-side cron
   useEffect(() => {
     fetchSummary(true);
 
-    // Auto-refresh summary every 20 minutes (1,200,000 ms)
     const interval = setInterval(() => {
       fetchSummary(false);
-    }, 20 * 60 * 1000);
+    }, 60 * 1000);
 
     return () => clearInterval(interval);
   }, [fetchSummary]);
@@ -317,13 +381,43 @@ export default function DashboardPage() {
     setIsSyncing(true);
     setAlert(null);
     try {
-      const result = await apiRequest<{ message: string; processedCount?: number }>('/gps/trigger-sync', {
-        method: 'POST',
-      });
+      // Trigger unified /api/fleet/sync-gps endpoint
+      let result: {
+        message?: string;
+        last_evaluated_timestamp?: string;
+        lastSync?: string;
+        processedCount?: number;
+      };
+
+      try {
+        result = await apiRequest<{
+          message: string;
+          last_evaluated_timestamp?: string;
+          lastSync?: string;
+          processedCount?: number;
+        }>('/fleet/sync-gps', {
+          method: 'POST',
+        });
+      } catch {
+        // Fallback to /gps/trigger-sync for backward compatibility
+        result = await apiRequest<{
+          message: string;
+          last_evaluated_timestamp?: string;
+          lastSync?: string;
+          processedCount?: number;
+        }>('/gps/trigger-sync', {
+          method: 'POST',
+        });
+      }
+
+      const updatedTime = result.last_evaluated_timestamp || result.lastSync || new Date().toISOString();
+      setLastUpdated(updatedTime);
+
       setAlert({
         type: 'success',
         message: `${result.message || 'GPS synchronization completed.'} Evaluated positions for active vehicles.`,
       });
+
       await fetchSummary(false);
       if (selectedPlant) {
         const data = await apiRequest<{
@@ -511,19 +605,43 @@ export default function DashboardPage() {
     <AppLayout pageTitle="Fleet Monitoring Dashboard" requiredPage="Dashboard">
       <div className="space-y-6">
         {/* Top Control Bar */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-1 border-b border-slate-200">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-2 border-b border-slate-200">
           <div>
             <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">
               Fleet Overview
             </h1>
-            <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5 font-medium">
-              <Clock className="w-3.5 h-3.5 text-slate-400" />
-              <span>Last evaluated:</span>
-              <strong className="text-slate-700">{formatDateTime(lastUpdated)}</strong>
-            </p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mt-1">
+              <p className="text-xs text-slate-500 flex items-center gap-1.5 font-medium">
+                <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <span>Last evaluated:</span>
+                <strong className="text-slate-800 font-semibold">{formatDateTime(lastUpdated)}</strong>
+              </p>
+              <span className="text-slate-300 hidden sm:inline">•</span>
+              {/* Global 30-Min Fixed Boundary Countdown Badge */}
+              <div
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200/90 text-emerald-800 text-xs font-semibold shadow-2xs select-none"
+                title="Synchronized to server-side 30-minute IST schedule slots (HH:00 and HH:30 IST)"
+              >
+                <span>(Next sync in:</span>
+                <span className="font-mono font-bold text-emerald-700 tracking-tight">{nextSyncCountdown}</span>
+                <span>)</span>
+              </div>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center flex-wrap gap-2.5">
+            {/* Visual Badge: Auto-Sync Active 🟢 */}
+            <div
+              className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-800 shadow-2xs select-none"
+              title="Automated 24/7 background GPS sync worker runs strictly every 30 minutes"
+            >
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span>Auto-Sync Active 🟢</span>
+            </div>
+
             <Link
               href="/sikka-ai"
               className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer border border-emerald-500/30 group"
@@ -852,10 +970,19 @@ export default function DashboardPage() {
                           {formatDateTime(v.lastUpdateDateTime || v.entryDateTime)}
                         </td>
                         <td className="px-5 py-3.5 whitespace-nowrap">
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200">
-                            <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                            <span>{calculateStayHours(v.entryDateTime)} Hrs</span>
-                          </span>
+                          {(() => {
+                            const stayHours = calculateStayHours(v.entryDateTime);
+                            const colors = getDurationColorClasses(stayHours);
+                            return (
+                              <span
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border shadow-2xs transition-colors ${colors.badge}`}
+                                title={`Stay duration inside plant: ${stayHours} Hrs`}
+                              >
+                                <Clock className={`w-3.5 h-3.5 shrink-0 ${colors.icon}`} />
+                                <span>{stayHours} Hrs</span>
+                              </span>
+                            );
+                          })()}
                         </td>
                         {/* Location Column & Underneath Track Now Button (Redirect to GPS page on click) */}
                         <td className="px-5 py-3.5">
@@ -1088,6 +1215,7 @@ export default function DashboardPage() {
                     <th className="px-5 py-3">Last Out Plant Name</th>
                     <th className="px-5 py-3">Plant Out Date Time</th>
                     <th className="px-5 py-3">Last Location Date Time</th>
+                    <th className="px-5 py-3">Outside Hour</th>
                     <th className="px-5 py-3">Status</th>
                     <th className="px-5 py-3">Driver Name-Mobile</th>
                     <th className="px-5 py-3 text-center">GPS</th>
@@ -1126,6 +1254,22 @@ export default function DashboardPage() {
                         {/* 4. Last Location Date Time */}
                         <td className="px-5 py-3.5 text-slate-700 whitespace-nowrap font-medium">
                           {formatDateTime(lastGpsTime)}
+                        </td>
+
+                        {/* Outside Hour (left side of Status) */}
+                        <td className="px-5 py-3.5 whitespace-nowrap">
+                          {(() => {
+                            const outsideHour = calculateOutsideHours(plantOutTime);
+                            const colors = getDurationColorClasses(outsideHour);
+                            return (
+                              <span
+                                className={`inline-flex items-center px-2.5 py-0.5 rounded-md font-mono text-xs border shadow-2xs tracking-tight transition-colors ${colors.badge}`}
+                                title={`Duration outside all plants: ${outsideHour}`}
+                              >
+                                <span>{outsideHour}</span>
+                              </span>
+                            );
+                          })()}
                         </td>
 
                         {/* 5. Status */}

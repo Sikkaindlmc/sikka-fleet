@@ -4,6 +4,7 @@ const Vehicle = require('../models/Vehicle');
 const Driver = require('../models/Driver');
 const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
 const PlantEntryEvent = require('../models/PlantEntryEvent');
+const PlanNotification = require('../models/PlanNotification');
 const GpsSetting = require('../models/GpsSetting');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
 const {
@@ -12,6 +13,7 @@ const {
 } = require('../services/driverMatchingService');
 const { calculateHaversineDistance } = require('../services/geofenceService');
 const { getReadableLocation } = require('../services/locationHelper');
+const { getNextFixed30MinSlot } = require('../services/gpsCronWorker');
 
 const router = express.Router();
 
@@ -160,6 +162,10 @@ router.get('/summary', async (req, res) => {
       };
     });
 
+    const setting = await GpsSetting.findOne().sort({ updatedAt: -1 });
+    const lastEvaluated = setting?.last_evaluated_timestamp || setting?.lastSync || new Date();
+    const nextSync = getNextFixed30MinSlot(new Date());
+
     res.json({
       plantWidgets,
       outsideWidget: {
@@ -170,7 +176,15 @@ router.get('/summary', async (req, res) => {
         isOutside: true,
       },
       totalActiveVehicles: activeVehicles.length,
-      lastUpdated: new Date(),
+      lastUpdated: lastEvaluated,
+      last_evaluated_timestamp: lastEvaluated,
+      next_sync_timestamp: nextSync,
+      autoSync: {
+        status: 'Active',
+        intervalMinutes: 30,
+        lastEvaluated,
+        nextSync,
+      },
     });
   } catch (error) {
     console.error('[Dashboard Summary Error]:', error);
@@ -450,15 +464,71 @@ router.post('/vehicles/:vehicleId/plan', async (req, res) => {
       statusDoc.plans = [];
     }
 
+    const authorName = req.user.fullName || req.user.name || req.user.username || 'Sikka Team';
     const newPlanEntry = {
       planText: trimmedPlan,
-      authorName: req.user.fullName || req.user.username || 'User',
+      authorName,
       authorUsername: req.user.username,
       createdAt: new Date(),
     };
 
     statusDoc.plans.push(newPlanEntry);
     await statusDoc.save();
+
+    // Automatically create Plant Plan Notification for real-time alerts across all logged in users
+    try {
+      const vehicle = await Vehicle.findById(vehicleId);
+      const vehicleNumber = vehicle?.vehicleNumber ? vehicle.vehicleNumber.toUpperCase() : 'UNKNOWN';
+
+      let plantId = req.body.plantId || statusDoc.currentPlantId || null;
+      let plantName = req.body.plantName;
+      if (!plantName) {
+        if (plantId) {
+          const plantDoc = await Plant.findById(plantId);
+          plantName = plantDoc ? plantDoc.plantName : (statusDoc.lastExitPlantName || 'Plant');
+        } else if (statusDoc.lastExitPlantName) {
+          plantName = statusDoc.lastExitPlantName;
+        } else {
+          plantName = statusDoc.status === 'Outside' ? 'Outside' : 'Plant';
+        }
+      }
+
+      let location = statusDoc.readableLocation || statusDoc.location;
+      if (!location && typeof statusDoc.latitude === 'number' && typeof statusDoc.longitude === 'number') {
+        location = await getReadableLocation(statusDoc.latitude, statusDoc.longitude);
+      }
+      if (!location) {
+        location = plantName || 'Plant Location';
+      }
+
+      // Prevent duplicate notification for identical note within last 30 seconds
+      const duplicate = await PlanNotification.findOne({
+        vehicleId: statusDoc.vehicleId,
+        planNote: trimmedPlan,
+        createdAt: { $gte: new Date(Date.now() - 30 * 1000) },
+      });
+
+      if (!duplicate) {
+        const userId = req.user._id || req.user.id;
+        await PlanNotification.create({
+          plantId,
+          plantName,
+          vehicleId: statusDoc.vehicleId,
+          vehicleNumber,
+          planBy: authorName,
+          planByUserId: userId,
+          location,
+          latitude: statusDoc.latitude,
+          longitude: statusDoc.longitude,
+          planNote: trimmedPlan,
+          createdAt: newPlanEntry.createdAt,
+          // Creator automatically marked as read so they don't see unread badge for their own note
+          readBy: [{ userId, readAt: new Date() }],
+        });
+      }
+    } catch (notifErr) {
+      console.error('[Plan Notification Generation Error]:', notifErr.message);
+    }
 
     res.json({
       message: 'Plan saved successfully.',
@@ -501,12 +571,26 @@ router.get('/outside/vehicles', async (req, res) => {
       }
     }
 
+    function calculateOutsideHours(plantOutDate, currentDate = new Date()) {
+      if (!plantOutDate) return '—';
+      const outTime = new Date(plantOutDate);
+      if (isNaN(outTime.getTime())) return '—';
+      const diffMs = currentDate.getTime() - outTime.getTime();
+      if (diffMs < 0) return '00:00';
+      const totalMinutes = Math.floor(diffMs / (60 * 1000));
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = totalMinutes % 60;
+      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    }
+
+    const now = new Date();
     const vehicles = currentStatuses
       .filter((item) => item.vehicleId && item.vehicleId.status === 'Active')
       .map((item) => {
         const lastEntry = lastEntryMap.get(item.vehicleId._id.toString());
         const lastOutPlant = item.lastExitPlantName || (lastEntry ? lastEntry.plantName : (activePlants[0]?.plantName || 'Tea Plant'));
         const plantOutTime = item.lastExitDateTime || (lastEntry ? lastEntry.entryDateTime : item.lastUpdatedAt);
+        const outsideHour = calculateOutsideHours(plantOutTime, now);
 
         return {
           id: item.vehicleId._id,
@@ -514,6 +598,7 @@ router.get('/outside/vehicles', async (req, res) => {
           lastOutPlantName: lastOutPlant,
           plantOutDateTime: plantOutTime,
           lastLocationDateTime: item.lastUpdatedAt,
+          outsideHours: outsideHour,
           status: 'Outside',
           latitude: item.latitude,
           longitude: item.longitude,
@@ -834,6 +919,7 @@ router.get('/outside/export', async (req, res) => {
       'Last Out Plant Name',
       'Plant Out Date Time',
       'Last Location Date Time',
+      'Outside Hour',
       'Status',
       'Driver Name-Mobile',
       'Readable Location',
@@ -848,6 +934,19 @@ router.get('/outside/export', async (req, res) => {
       )
       .join('')}</tr>`;
 
+    function calculateOutsideHours(plantOutDate, currentDate = new Date()) {
+      if (!plantOutDate) return '—';
+      const outTime = new Date(plantOutDate);
+      if (isNaN(outTime.getTime())) return '—';
+      const diffMs = currentDate.getTime() - outTime.getTime();
+      if (diffMs < 0) return '00:00';
+      const totalMinutes = Math.floor(diffMs / (60 * 1000));
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = totalMinutes % 60;
+      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+    }
+
+    const now = new Date();
     const rowsHtml = currentStatuses
       .filter((st) => st.vehicleId && st.vehicleId.status === 'Active')
       .map((st) => {
@@ -855,6 +954,7 @@ router.get('/outside/export', async (req, res) => {
         const lastEntry = lastEntryMap.get(v._id.toString());
         const lastOutPlant = st.lastExitPlantName || (lastEntry ? lastEntry.plantName : (activePlants[0]?.plantName || 'Tea Plant'));
         const plantOutTime = st.lastExitDateTime || (lastEntry ? lastEntry.entryDateTime : st.lastUpdatedAt);
+        const outsideHour = calculateOutsideHours(plantOutTime, now);
         const driverMobile = v.driverName ? `${v.driverName} - ${v.mobile ? '+91 ' + v.mobile : ''}` : 'No Driver Available';
         const readableLoc = getReadableLocation(st.latitude, st.longitude, activePlants);
 
@@ -863,6 +963,7 @@ router.get('/outside/export', async (req, res) => {
           lastOutPlant,
           formatIST(plantOutTime),
           formatIST(st.lastUpdatedAt),
+          outsideHour,
           'Outside',
           driverMobile,
           readableLoc,

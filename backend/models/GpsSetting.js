@@ -35,6 +35,10 @@ const gpsSettingSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    last_evaluated_timestamp: {
+      type: Date,
+      default: null,
+    },
     lastError: {
       type: String,
       default: '',
