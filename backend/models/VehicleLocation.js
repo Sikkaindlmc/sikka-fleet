@@ -34,9 +34,41 @@ const vehicleLocationSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    ignition: {
+      type: Boolean,
+      default: false,
+    },
+    address: {
+      type: String,
+      default: '',
+    },
+    geofence_status: {
+      type: String,
+      enum: ['INSIDE', 'OUTSIDE', 'UNKNOWN'],
+      default: 'OUTSIDE',
+    },
+    plant_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Plant',
+      default: null,
+      index: true,
+    },
+    plantName: {
+      type: String,
+      default: '',
+    },
+    sync_source: {
+      type: String,
+      enum: ['AUTO', 'MANUAL', 'STARTUP', 'RETRY'],
+      default: 'AUTO',
+    },
+    rawEventId: {
+      type: String,
+      default: '',
+    },
     source: {
       type: String,
-      default: 'GPS Telematics',
+      default: 'WheelsEye GPS',
     },
   },
   {
@@ -45,6 +77,9 @@ const vehicleLocationSchema = new mongoose.Schema(
   }
 );
 
+// Indexes for fast querying & history lookups
+vehicleLocationSchema.index({ vehicleId: 1, gpsDateTime: -1 });
 vehicleLocationSchema.index({ vehicleNumber: 1, gpsDateTime: -1 });
+vehicleLocationSchema.index({ vehicleId: 1, gpsDateTime: 1 });
 
 module.exports = mongoose.model('VehicleLocation', vehicleLocationSchema);

@@ -6,16 +6,16 @@ const gpsSettingSchema = new mongoose.Schema(
       type: String,
       required: [true, 'GPS provider name is required'],
       trim: true,
-      default: 'Fleet Telematics GPS Provider',
+      default: 'WheelsEye GPS',
     },
     apiUrl: {
       type: String,
       trim: true,
-      default: 'https://api.gps-provider.local/v1/vehicles',
+      default: 'https://api.wheelseye.com/currentLoc?accessToken=53afc208-0981-48c7-b134-d85d2f33dc0c',
     },
     encryptedApiKey: {
       type: String,
-      default: 'sikka_live_gps_key_9948271',
+      default: '53afc208-0981-48c7-b134-d85d2f33dc0c',
     },
     apiSecret: {
       type: String,
@@ -39,13 +39,38 @@ const gpsSettingSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    last_sync_status: {
+      type: String,
+      enum: ['SUCCESS', 'FAILED', 'RUNNING', 'IDLE'],
+      default: 'IDLE',
+    },
+    next_scheduled_sync_at: {
+      type: Date,
+      default: null,
+    },
+    last_sync_source: {
+      type: String,
+      default: 'AUTO',
+    },
+    vehicles_processed: {
+      type: Number,
+      default: 0,
+    },
+    vehicles_updated: {
+      type: Number,
+      default: 0,
+    },
+    vehicles_failed: {
+      type: Number,
+      default: 0,
+    },
     lastError: {
       type: String,
       default: '',
     },
     pollIntervalSeconds: {
       type: Number,
-      default: 15,
+      default: 1800,
     },
     vehicleIcon: {
       type: String,

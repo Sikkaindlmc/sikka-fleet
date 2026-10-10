@@ -5,7 +5,7 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 const connectDB = require('./config/db');
-const { startGpsPoller } = require('./services/gpsPollerService');
+const { startGpsScheduler } = require('./services/gpsScheduler');
 const { startGpsCronWorker } = require('./services/gpsCronWorker');
 const { startSikkaAiScheduler } = require('./services/sikkaAiService');
 
@@ -13,6 +13,7 @@ const authRoutes = require('./routes/authRoutes');
 const plantRoutes = require('./routes/plantRoutes');
 const vehicleRoutes = require('./routes/vehicleRoutes');
 const gpsRoutes = require('./routes/gpsRoutes');
+const gpsSyncRoutes = require('./routes/gpsSyncRoutes');
 const fleetRoutes = require('./routes/fleetRoutes');
 const cronRoutes = require('./routes/cronRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
@@ -53,6 +54,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/plants', plantRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/gps', gpsRoutes);
+app.use('/api/gps-sync', gpsSyncRoutes);
 app.use('/api/fleet', fleetRoutes);
 app.use('/api/cron', cronRoutes);
 app.use('/api/dashboard', dashboardRoutes);
@@ -78,8 +80,8 @@ if (require.main === module) {
     console.log(`📡 URL: http://localhost:${PORT}`);
     console.log(`=========================================`);
 
-    // Start 30-minute automated background GPS sync cron worker (Node-cron)
-    startGpsCronWorker();
+    // Start 24x7 autonomous server-side GPS 30-minute scheduler
+    startGpsScheduler();
 
     // Start Sikka AI 30-minute automated vehicle GPS & driver location scheduler
     startSikkaAiScheduler();

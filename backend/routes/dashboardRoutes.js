@@ -164,7 +164,8 @@ router.get('/summary', async (req, res) => {
 
     const setting = await GpsSetting.findOne().sort({ updatedAt: -1 });
     const lastEvaluated = setting?.last_evaluated_timestamp || setting?.lastSync || new Date();
-    const nextSync = getNextFixed30MinSlot(new Date());
+    const nextSync = setting?.next_scheduled_sync_at || getNextFixed30MinSlot(new Date());
+    const syncStatus = setting?.last_sync_status || 'SUCCESS';
 
     res.json({
       plantWidgets,
@@ -178,11 +179,17 @@ router.get('/summary', async (req, res) => {
       totalActiveVehicles: activeVehicles.length,
       lastUpdated: lastEvaluated,
       last_evaluated_timestamp: lastEvaluated,
+      last_successful_sync_at: lastEvaluated,
+      next_scheduled_sync_at: nextSync,
       next_sync_timestamp: nextSync,
+      last_sync_status: syncStatus,
+      last_sync_source: setting?.last_sync_source || 'AUTO',
       autoSync: {
-        status: 'Active',
+        status: syncStatus === 'FAILED' ? 'Failed' : 'Active',
         intervalMinutes: 30,
         lastEvaluated,
+        lastSuccessfulSyncAt: lastEvaluated,
+        nextScheduledSyncAt: nextSync,
         nextSync,
       },
     });
@@ -250,6 +257,9 @@ router.get('/plants/:plantId/vehicles', async (req, res) => {
           status: 'Inside',
           location: readableLoc,
           readableLocation: readableLoc,
+          latest_gps_timestamp: item.latest_gps_timestamp || item.lastUpdatedAt || entryDateTime,
+          gps_status: item.gps_status || 'LIVE',
+          last_sync_source: item.last_sync_source || 'AUTO',
           plans: Array.isArray(item.plans) ? item.plans : [],
         };
       });
@@ -603,6 +613,9 @@ router.get('/outside/vehicles', async (req, res) => {
           latitude: item.latitude,
           longitude: item.longitude,
           readableLocation: getReadableLocation(item.latitude, item.longitude, activePlants),
+          latest_gps_timestamp: item.latest_gps_timestamp || item.lastUpdatedAt,
+          gps_status: item.gps_status || 'LIVE',
+          last_sync_source: item.last_sync_source || 'AUTO',
           fleetType: item.vehicleId.fleetType,
           ownerName: item.vehicleId.ownerName,
         };

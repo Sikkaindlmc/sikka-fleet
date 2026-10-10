@@ -88,6 +88,9 @@ interface PlantVehicle {
   ownerName?: string;
   entryDateTime: string;
   lastUpdateDateTime?: string | null;
+  latest_gps_timestamp?: string | null;
+  gps_status?: string | null;
+  last_sync_source?: string | null;
   latitude: number;
   longitude: number;
   distanceMeter?: number;
@@ -144,6 +147,9 @@ interface OutsideVehicle {
   lastOutPlantName?: string | null;
   plantOutDateTime?: string | null;
   lastLocationDateTime?: string | null;
+  latest_gps_timestamp?: string | null;
+  gps_status?: string | null;
+  last_sync_source?: string | null;
   lastLocationTime?: string;
   outsideHours?: string | null;
   status: string;
@@ -173,6 +179,9 @@ export default function DashboardPage() {
   } | null>(null);
   const [totalActiveVehicles, setTotalActiveVehicles] = useState(0);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [nextScheduledSyncAt, setNextScheduledSyncAt] = useState<string | null>(null);
+  const [syncStatusState, setSyncStatusState] = useState<'IDLE' | 'SUCCESS' | 'FAILED' | 'SYNCING'>('SUCCESS');
+  const [isBackendSyncing, setIsBackendSyncing] = useState(false);
   const [nextSyncCountdown, setNextSyncCountdown] = useState<string>('30:00');
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -297,15 +306,27 @@ export default function DashboardPage() {
         totalActiveVehicles: number;
         lastUpdated: string;
         last_evaluated_timestamp?: string;
+        last_successful_sync_at?: string;
         next_sync_timestamp?: string;
+        next_scheduled_sync_at?: string;
+        last_sync_status?: string;
       }>('/dashboard/summary');
 
       setPlantWidgets(data.plantWidgets || []);
       setOutsideWidget(data.outsideWidget);
       setTotalActiveVehicles(data.totalActiveVehicles || 0);
-      const evalTimestamp = data.last_evaluated_timestamp || data.lastUpdated;
+
+      const evalTimestamp = data.last_successful_sync_at || data.last_evaluated_timestamp || data.lastUpdated;
       if (evalTimestamp) {
         setLastUpdated(evalTimestamp);
+      }
+
+      if (data.next_scheduled_sync_at || data.next_sync_timestamp) {
+        setNextScheduledSyncAt(data.next_scheduled_sync_at || data.next_sync_timestamp || null);
+      }
+
+      if (data.last_sync_status) {
+        setSyncStatusState(data.last_sync_status as any);
       }
     } catch (err: any) {
       setAlert({
@@ -317,39 +338,71 @@ export default function DashboardPage() {
     }
   }, []);
 
-  // 1-second live countdown timer relative to current time and next fixed 30-minute block boundary (HH:00 or HH:30 IST)
+  // Live countdown timer display bound to server-provided next scheduled sync slot (Requirement 9)
   useEffect(() => {
-    let lastTriggeredBoundary = '';
+    let pollingWhileSyncing = false;
 
     const calculateCountdown = () => {
       const now = new Date();
-      const minutes = now.getMinutes();
-      const target = new Date(now);
+      let targetTime: Date;
 
-      if (minutes < 30) {
-        target.setMinutes(30, 0, 0);
-      } else {
-        target.setHours(target.getHours() + 1, 0, 0, 0);
-      }
-
-      if (target.getTime() <= now.getTime()) {
-        target.setMinutes(target.getMinutes() + 30, 0, 0);
-      }
-
-      const diffMs = target.getTime() - now.getTime();
-
-      if (diffMs <= 1000) {
-        const boundaryId = target.toISOString();
-        if (lastTriggeredBoundary !== boundaryId) {
-          lastTriggeredBoundary = boundaryId;
-          // Trigger immediate silent GET request to fetch updated DB state
-          fetchSummary(false);
-          // Also fetch after 3.5s to ensure backend cron cycle completion is captured
-          setTimeout(() => fetchSummary(false), 3500);
+      if (nextScheduledSyncAt) {
+        targetTime = new Date(nextScheduledSyncAt);
+        if (isNaN(targetTime.getTime())) {
+          targetTime = new Date(now.getTime() + 30 * 60 * 1000);
         }
+      } else {
+        const minutes = now.getMinutes();
+        const target = new Date(now);
+        if (minutes < 30) {
+          target.setMinutes(30, 0, 0);
+        } else {
+          target.setHours(target.getHours() + 1, 0, 0, 0);
+        }
+        targetTime = target;
+      }
+
+      const diffMs = targetTime.getTime() - now.getTime();
+
+      // When countdown reaches 00:00 (Requirement 9):
+      // DO NOT assume that sync succeeded. Refresh backend sync status. Show "Syncing GPS..."
+      if (diffMs <= 1000) {
+        setIsBackendSyncing(true);
+
+        if (!pollingWhileSyncing) {
+          pollingWhileSyncing = true;
+          setTimeout(async () => {
+            try {
+              const statusData = await apiRequest<{
+                last_successful_sync_at?: string;
+                next_scheduled_sync_at?: string;
+                last_sync_status?: string;
+                is_syncing?: boolean;
+              }>('/gps-sync/status');
+
+              if (statusData.last_successful_sync_at) {
+                setLastUpdated(statusData.last_successful_sync_at);
+              }
+              if (statusData.next_scheduled_sync_at) {
+                setNextScheduledSyncAt(statusData.next_scheduled_sync_at);
+              }
+              if (statusData.last_sync_status) {
+                setSyncStatusState(statusData.last_sync_status as any);
+              }
+              setIsBackendSyncing(Boolean(statusData.is_syncing));
+              await fetchSummary(false);
+            } catch {
+              setIsBackendSyncing(false);
+            } finally {
+              pollingWhileSyncing = false;
+            }
+          }, 3000);
+        }
+
         return '00:00';
       }
 
+      setIsBackendSyncing(false);
       const totalSeconds = Math.max(0, Math.floor(diffMs / 1000));
       const m = Math.floor(totalSeconds / 60);
       const s = totalSeconds % 60;
@@ -363,15 +416,15 @@ export default function DashboardPage() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [fetchSummary]);
+  }, [nextScheduledSyncAt, fetchSummary]);
 
-  // Reactive polling interval (every 60 seconds) to ensure synchronization with server-side cron
+  // Periodic polling interval (every 45 seconds) to ensure synchronization with server-side scheduler
   useEffect(() => {
     fetchSummary(true);
 
     const interval = setInterval(() => {
       fetchSummary(false);
-    }, 60 * 1000);
+    }, 45 * 1000);
 
     return () => clearInterval(interval);
   }, [fetchSummary]);
@@ -381,15 +434,30 @@ export default function DashboardPage() {
     setIsSyncing(true);
     setAlert(null);
     try {
-      // Trigger unified /api/fleet/sync-gps endpoint
       let result: {
         message?: string;
         last_evaluated_timestamp?: string;
+        last_successful_sync_at?: string;
+        next_scheduled_sync_at?: string;
         lastSync?: string;
         processedCount?: number;
+        vehiclesProcessed?: number;
       };
 
       try {
+        result = await apiRequest<{
+          message: string;
+          last_evaluated_timestamp?: string;
+          last_successful_sync_at?: string;
+          next_scheduled_sync_at?: string;
+          lastSync?: string;
+          processedCount?: number;
+          vehiclesProcessed?: number;
+        }>('/gps-sync/run', {
+          method: 'POST',
+          body: JSON.stringify({ triggerType: 'MANUAL_DASHBOARD_BUTTON' }),
+        });
+      } catch {
         result = await apiRequest<{
           message: string;
           last_evaluated_timestamp?: string;
@@ -398,24 +466,18 @@ export default function DashboardPage() {
         }>('/fleet/sync-gps', {
           method: 'POST',
         });
-      } catch {
-        // Fallback to /gps/trigger-sync for backward compatibility
-        result = await apiRequest<{
-          message: string;
-          last_evaluated_timestamp?: string;
-          lastSync?: string;
-          processedCount?: number;
-        }>('/gps/trigger-sync', {
-          method: 'POST',
-        });
       }
 
-      const updatedTime = result.last_evaluated_timestamp || result.lastSync || new Date().toISOString();
+      const updatedTime = result.last_successful_sync_at || result.last_evaluated_timestamp || result.lastSync || new Date().toISOString();
       setLastUpdated(updatedTime);
+      if (result.next_scheduled_sync_at) {
+        setNextScheduledSyncAt(result.next_scheduled_sync_at);
+      }
+      setSyncStatusState('SUCCESS');
 
       setAlert({
         type: 'success',
-        message: `${result.message || 'GPS synchronization completed.'} Evaluated positions for active vehicles.`,
+        message: `${result.message || 'GPS synchronization completed.'} Evaluated positions for ${result.vehiclesProcessed || result.processedCount || 0} active vehicles.`,
       });
 
       await fetchSummary(false);
@@ -427,6 +489,7 @@ export default function DashboardPage() {
         setPlantVehicles(data.vehicles || []);
       }
     } catch (err: any) {
+      setSyncStatusState('FAILED');
       setAlert({
         type: 'error',
         message: err.message || 'Unable to connect to GPS provider.',
@@ -622,25 +685,55 @@ export default function DashboardPage() {
                 className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200/90 text-emerald-800 text-xs font-semibold shadow-2xs select-none"
                 title="Synchronized to server-side 30-minute IST schedule slots (HH:00 and HH:30 IST)"
               >
-                <span>(Next sync in:</span>
-                <span className="font-mono font-bold text-emerald-700 tracking-tight">{nextSyncCountdown}</span>
-                <span>)</span>
+                {isBackendSyncing ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 text-emerald-600 animate-spin" />
+                    <span className="font-bold text-emerald-700">Syncing GPS...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>(Next sync in:</span>
+                    <span className="font-mono font-bold text-emerald-700 tracking-tight">{nextSyncCountdown}</span>
+                    <span>)</span>
+                  </>
+                )}
               </div>
             </div>
           </div>
 
           <div className="flex items-center flex-wrap gap-2.5">
-            {/* Visual Badge: Auto-Sync Active 🟢 */}
-            <div
-              className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-800 shadow-2xs select-none"
-              title="Automated 24/7 background GPS sync worker runs strictly every 30 minutes"
-            >
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-              <span>Auto-Sync Active 🟢</span>
-            </div>
+            {/* Visual Badge: Auto-Sync Active 🟢 / Retrying ⚠️ / Syncing 🔄 */}
+            {syncStatusState === 'FAILED' ? (
+              <div
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-800 shadow-2xs select-none"
+                title="Auto-Sync encountered an error and is retrying automatically"
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+                </span>
+                <span>Auto-Sync Retrying... ⚠️</span>
+              </div>
+            ) : isBackendSyncing ? (
+              <div
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl text-xs font-bold text-amber-800 shadow-2xs select-none"
+                title="Synchronizing live GPS data with Wheelseye server..."
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-amber-600 animate-spin" />
+                <span>Syncing GPS...</span>
+              </div>
+            ) : (
+              <div
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-800 shadow-2xs select-none"
+                title="Automated 24/7 background GPS sync worker runs strictly every 30 minutes (Server-Side)"
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <span>Auto-Sync Active 🟢</span>
+              </div>
+            )}
 
             <Link
               href="/sikka-ai"
@@ -956,18 +1049,40 @@ export default function DashboardPage() {
                     return (
                       <tr key={v.id} className="hover:bg-slate-50/70 transition">
                         <td className="px-5 py-3.5">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <VehicleIcon className="w-4 h-4 text-emerald-600 shrink-0" />
                             <span className="font-extrabold text-slate-900 text-sm tracking-wide">
                               {v.vehicleNumber}
                             </span>
+                            {v.gps_status === 'GPS STALE' && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300" title="GPS telemetry is older than 60 minutes">
+                                GPS STALE
+                              </span>
+                            )}
+                            {v.gps_status === 'GPS SYNC FAILED' && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300" title="GPS sync failed on last attempt">
+                                SYNC FAILED
+                              </span>
+                            )}
+                            {v.gps_status === 'GPS DATA UNAVAILABLE' && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-300" title="Vehicle not in latest telematics stream">
+                                NO GPS
+                              </span>
+                            )}
                           </div>
                         </td>
                         <td className="px-5 py-3.5 text-slate-700 font-semibold whitespace-nowrap">
                           {formatDateTime(v.entryDateTime)}
                         </td>
                         <td className="px-5 py-3.5 text-slate-600 font-medium whitespace-nowrap">
-                          {formatDateTime(v.lastUpdateDateTime || v.entryDateTime)}
+                          <div>
+                            <span>{formatDateTime(v.latest_gps_timestamp || v.lastUpdateDateTime || v.entryDateTime)}</span>
+                            {v.last_sync_source && (
+                              <span className="ml-1.5 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200">
+                                {v.last_sync_source}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-5 py-3.5 whitespace-nowrap">
                           {(() => {
@@ -1231,11 +1346,26 @@ export default function DashboardPage() {
                       <tr key={v.id} className="hover:bg-slate-50/70 transition">
                         {/* 1. Vehicle Number */}
                         <td className="px-5 py-3.5 whitespace-nowrap">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <VehicleIcon className="w-4 h-4 text-amber-600 shrink-0" />
                             <span className="font-extrabold text-slate-900 text-sm tracking-wide">
                               {v.vehicleNumber}
                             </span>
+                            {v.gps_status === 'GPS STALE' && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300" title="GPS telemetry is older than 60 minutes">
+                                GPS STALE
+                              </span>
+                            )}
+                            {v.gps_status === 'GPS SYNC FAILED' && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300" title="GPS sync failed on last attempt">
+                                SYNC FAILED
+                              </span>
+                            )}
+                            {v.gps_status === 'GPS DATA UNAVAILABLE' && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-300" title="Vehicle not in latest telematics stream">
+                                NO GPS
+                              </span>
+                            )}
                           </div>
                         </td>
 
@@ -1253,7 +1383,14 @@ export default function DashboardPage() {
 
                         {/* 4. Last Location Date Time */}
                         <td className="px-5 py-3.5 text-slate-700 whitespace-nowrap font-medium">
-                          {formatDateTime(lastGpsTime)}
+                          <div>
+                            <span>{formatDateTime(v.latest_gps_timestamp || lastGpsTime)}</span>
+                            {v.last_sync_source && (
+                              <span className="ml-1.5 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200">
+                                {v.last_sync_source}
+                              </span>
+                            )}
+                          </div>
                         </td>
 
                         {/* Outside Hour (left side of Status) */}
