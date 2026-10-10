@@ -1,11 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "crons": [
-    {
-      "path": "/api/gps-sync/run",
-      "schedule": "0,30 * * * *"
-    }
-  ],
   "services": {
     "sikka-fleet-backend": {
       "root": "backend",
