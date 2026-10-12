@@ -13,8 +13,10 @@ import {
   Truck,
   MapPin,
   Navigation,
+  Settings,
 } from 'lucide-react';
 import { useAuth } from '../lib/authContext';
+import { getApiBaseUrl } from '../lib/api';
 
 interface LoginFormProps {
   redirectUrl?: string;
@@ -32,10 +34,38 @@ export default function LoginForm({
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
+  const [showServerSettings, setShowServerSettings] = useState(false);
+  const [serverUrlInput, setServerUrlInput] = useState('');
 
   const { login } = useAuth();
   const router = useRouter();
   const usernameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('sikka_fleet_server_url') || '';
+      setServerUrlInput(stored || getApiBaseUrl());
+    }
+  }, []);
+
+  const handleSaveServerUrl = () => {
+    if (typeof window !== 'undefined') {
+      if (serverUrlInput.trim()) {
+        localStorage.setItem('sikka_fleet_server_url', serverUrlInput.trim());
+      } else {
+        localStorage.removeItem('sikka_fleet_server_url');
+      }
+      setShowServerSettings(false);
+    }
+  };
+
+  const handleResetServerUrl = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('sikka_fleet_server_url');
+      setServerUrlInput('http://192.168.1.38:5000/api');
+      setShowServerSettings(false);
+    }
+  };
 
   // Auto-focus username field once form is ready
   useEffect(() => {
@@ -289,6 +319,49 @@ export default function LoginForm({
             </span>
             <ArrowRight className="w-4 h-4" />
           </button>
+        </div>
+
+        {/* Mobile Server Connection Settings */}
+        <div className="pt-3 border-t border-slate-100 text-center">
+          <button
+            type="button"
+            onClick={() => setShowServerSettings(!showServerSettings)}
+            className="text-[11px] font-semibold text-slate-400 hover:text-emerald-600 transition inline-flex items-center gap-1.5 cursor-pointer"
+          >
+            <Settings className="w-3.5 h-3.5" />
+            <span>{showServerSettings ? 'Hide Server Settings' : 'Configure Server URL (Mobile)'}</span>
+          </button>
+
+          {showServerSettings && (
+            <div className="mt-2.5 p-3.5 bg-slate-50 border border-slate-200/90 rounded-2xl text-left text-xs space-y-2.5 animate-in fade-in duration-150">
+              <label className="block text-[11px] font-bold text-slate-700">
+                Backend Server API URL:
+              </label>
+              <input
+                type="url"
+                value={serverUrlInput}
+                onChange={(e) => setServerUrlInput(e.target.value)}
+                placeholder="http://192.168.1.38:5000/api"
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+              <div className="flex items-center justify-between pt-1">
+                <button
+                  type="button"
+                  onClick={handleSaveServerUrl}
+                  className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-[11px] cursor-pointer shadow-xs"
+                >
+                  Save URL
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetServerUrl}
+                  className="text-[11px] font-medium text-slate-400 hover:text-slate-600 cursor-pointer"
+                >
+                  Reset Default
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </form>
     </div>

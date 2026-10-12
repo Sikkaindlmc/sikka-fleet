@@ -5,18 +5,29 @@ const GpsSetting = require('../models/GpsSetting');
 
 const router = express.Router();
 
+const { timingSafeCompare } = require('../utils/security');
+const { verifyToken, requireRole } = require('../middleware/auth');
+
 /**
  * Middleware: Verify CRON_SECRET for security
  * Protects against unauthorized manual triggering of background cron jobs.
+ * Employs timing-safe string comparison to protect against timing attacks.
  */
 function verifyCronSecret(req, res, next) {
-  const configuredSecret = process.env.CRON_SECRET || 'sikka_fleet_cron_secure_key_2026';
+  const configuredSecret = process.env.CRON_SECRET;
+  if (!configuredSecret) {
+    return res.status(500).json({
+      success: false,
+      error: 'CRON_SECRET environment variable is not configured on the server.',
+    });
+  }
 
   const authHeader = req.headers.authorization;
   const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
   const xCronSecret = req.headers['x-cron-secret'];
 
-  if (bearerToken === configuredSecret || xCronSecret === configuredSecret) {
+  const callerSecret = bearerToken || xCronSecret;
+  if (callerSecret && timingSafeCompare(callerSecret, configuredSecret)) {
     req.cronCaller = 'Authorized Cron Runner';
     return next();
   }
@@ -58,8 +69,18 @@ router.post('/sync-gps', verifyCronSecret, handleCronSync);
 // GET /api/cron/sync-gps - Vercel Cron sends GET requests
 router.get('/sync-gps', verifyCronSecret, handleCronSync);
 
-// GET /api/cron/logs - Query recent 30-minute cron execution logs for verification
-router.get('/logs', async (req, res) => {
+// GET /api/cron/logs - Query recent 30-minute cron execution logs (Protected: requires authenticated user or cron secret)
+router.get('/logs', (req, res, next) => {
+  const configuredSecret = process.env.CRON_SECRET;
+  const authHeader = req.headers.authorization;
+  const xCron = req.headers['x-cron-secret'];
+  const token = (authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null) || xCron;
+
+  if (configuredSecret && token && timingSafeCompare(token, configuredSecret)) {
+    return next();
+  }
+  return verifyToken(req, res, next);
+}, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
     const logs = await CronExecutionLog.find().sort({ startedAt: -1 }).limit(limit);

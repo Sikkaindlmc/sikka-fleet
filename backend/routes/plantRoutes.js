@@ -1,6 +1,7 @@
 const express = require('express');
 const Plant = require('../models/Plant');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
+const { escapeRegex, isValidObjectId } = require('../utils/security');
 
 const router = express.Router();
 
@@ -55,8 +56,9 @@ router.post('/', async (req, res) => {
 
     // Duplicate prevention: do not allow duplicate active plant names
     if (plantStatus === 'Active') {
+      const safeName = escapeRegex(plantName.trim());
       const existingActive = await Plant.findOne({
-        plantName: { $regex: new RegExp(`^${plantName.trim()}$`, 'i') },
+        plantName: { $regex: new RegExp(`^${safeName}$`, 'i') },
         status: 'Active',
       });
       if (existingActive) {
@@ -88,6 +90,18 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid plant ID format.' });
+    }
+
+    // Authorization check for plant access if restricted
+    if (req.user.role !== 'Admin' && req.user.accessPlants && req.user.accessPlants.length > 0) {
+      const allowedIds = req.user.accessPlants.map((p) => (p._id ? p._id.toString() : p.toString()));
+      if (!allowedIds.includes(id.toString())) {
+        return res.status(403).json({ error: 'Access Denied: You do not have authorization to edit this plant.' });
+      }
+    }
+
     const { plantName, location, radiusMeter, radiusMeters, latitude, longitude, status } = req.body;
 
     const plant = await Plant.findById(id);
@@ -118,9 +132,10 @@ router.put('/:id', async (req, res) => {
 
     // Duplicate check if active
     if (plantStatus === 'Active') {
+      const safeName = escapeRegex(plantName.trim());
       const duplicate = await Plant.findOne({
         _id: { $ne: id },
-        plantName: { $regex: new RegExp(`^${plantName.trim()}$`, 'i') },
+        plantName: { $regex: new RegExp(`^${safeName}$`, 'i') },
         status: 'Active',
       });
       if (duplicate) {

@@ -6,51 +6,53 @@ const GpsSetting = require('../models/GpsSetting');
 
 const router = express.Router();
 
+const { getJwtSecret, verifyToken } = require('../middleware/auth');
+const { timingSafeCompare } = require('../utils/security');
+const { gpsSyncLimiter } = require('../middleware/rateLimiter');
+
 /**
- * Middleware allowing either:
+ * Middleware requiring either:
  * 1. Logged in user with valid Bearer token
- * 2. Vercel Cron or External Cron with CRON_SECRET
- * 3. Server-side or direct invocation if no CRON_SECRET configured
+ * 2. Vercel Cron or External Cron with verified CRON_SECRET
  */
 function authorizeSyncCaller(req, res, next) {
   const authHeader = req.headers.authorization;
   const cronSecretHeader = req.headers['x-cron-secret'];
   const configuredCronSecret = process.env.CRON_SECRET;
 
-  // 1. Check CRON_SECRET header or Bearer secret
+  // 1. Check CRON_SECRET header or Bearer secret via timing-safe comparison
   if (configuredCronSecret) {
-    if (cronSecretHeader === configuredCronSecret) {
+    if (cronSecretHeader && timingSafeCompare(cronSecretHeader, configuredCronSecret)) {
       req.syncCaller = 'Cron Worker (Secret Verified)';
       return next();
     }
-    if (authHeader && authHeader === `Bearer ${configuredCronSecret}`) {
+    if (authHeader && authHeader.startsWith('Bearer ') && timingSafeCompare(authHeader.slice(7).trim(), configuredCronSecret)) {
       req.syncCaller = 'Cron Worker (Bearer Secret Verified)';
       return next();
     }
   }
 
-  // 2. Check JWT User Token if provided
+  // 2. Check JWT User Token
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.split(' ')[1];
     try {
-      const decoded = jwt.verify(
-        token,
-        process.env.JWT_SECRET || 'sikka_fleet_super_secret_jwt_key_2025'
-      );
+      const decoded = jwt.verify(token, getJwtSecret(), { algorithms: ['HS256'] });
       req.user = decoded;
       req.syncCaller = `Manual (${decoded.name || decoded.username || 'User'})`;
       return next();
     } catch (err) {
-      // If token provided was invalid and CRON_SECRET was required, reject
-      if (configuredCronSecret) {
-        return res.status(401).json({ error: 'Invalid authentication token.' });
-      }
+      return res.status(401).json({
+        error: 'Invalid authentication token.',
+        code: 'TOKEN_INVALID',
+      });
     }
   }
 
-  // 3. Fallback for internal cron/server triggers
-  req.syncCaller = 'Automated Background Sync';
-  next();
+  // Reject unauthenticated requests
+  return res.status(401).json({
+    error: 'Authentication required. Please provide a valid Bearer token or x-cron-secret header.',
+    code: 'UNAUTHORIZED_SYNC_TRIGGER',
+  });
 }
 
 /**
@@ -85,13 +87,25 @@ async function handleSyncGps(req, res) {
 }
 
 // POST /api/fleet/sync-gps - Trigger GPS sync (Frontend button & automated webhooks)
-router.post('/sync-gps', authorizeSyncCaller, handleSyncGps);
+router.post('/sync-gps', gpsSyncLimiter, authorizeSyncCaller, handleSyncGps);
 
 // GET /api/fleet/sync-gps - Trigger GPS sync (Vercel Cron & HTTP health/runners)
-router.get('/sync-gps', authorizeSyncCaller, handleSyncGps);
+router.get('/sync-gps', gpsSyncLimiter, authorizeSyncCaller, handleSyncGps);
+
+// Middleware for status checking (Accepts JWT token or CRON_SECRET)
+function authorizeStatusView(req, res, next) {
+  const authHeader = req.headers.authorization;
+  const cronSecretHeader = req.headers['x-cron-secret'];
+  const configuredCronSecret = process.env.CRON_SECRET;
+
+  if (configuredCronSecret && cronSecretHeader && timingSafeCompare(cronSecretHeader, configuredCronSecret)) {
+    return next();
+  }
+  return verifyToken(req, res, next);
+}
 
 // GET /api/fleet/sync-status - View current background cron & sync state
-router.get('/sync-status', async (req, res) => {
+router.get('/sync-status', authorizeStatusView, async (req, res) => {
   try {
     const status = await getCronWorkerStatus();
     res.json({
@@ -104,7 +118,7 @@ router.get('/sync-status', async (req, res) => {
 });
 
 // GET /api/fleet/status - Alias for sync-status
-router.get('/status', async (req, res) => {
+router.get('/status', authorizeStatusView, async (req, res) => {
   try {
     const status = await getCronWorkerStatus();
     res.json({

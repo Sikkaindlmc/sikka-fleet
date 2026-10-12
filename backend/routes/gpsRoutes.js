@@ -5,6 +5,9 @@ const { syncGpsPositions, testGpsConnection } = require('../services/gpsPollerSe
 
 const router = express.Router();
 
+const { maskUrlSecret, isSafeExternalUrl } = require('../utils/security');
+const { gpsSyncLimiter } = require('../middleware/rateLimiter');
+
 // GET /api/gps/vehicle-icon - Retrieve active vehicle icon for map & GPS (Available application-wide)
 router.get('/vehicle-icon', async (req, res) => {
   try {
@@ -28,20 +31,20 @@ router.get('/', async (req, res) => {
 
     if (!setting) {
       setting = await GpsSetting.create({
-        provider: 'Fleet Telematics GPS Provider',
-        apiUrl: 'https://api.telematics-provider.local/v1/vehicles',
-        encryptedApiKey: 'sikka_live_gps_key_9948271',
+        provider: 'WheelsEye GPS',
+        apiUrl: process.env.WHEELSEYE_API_URL || 'https://api.wheelseye.com/currentLoc',
+        encryptedApiKey: '',
         status: 'Active',
         connectionStatus: 'Connected',
         lastSync: new Date(),
-        pollIntervalSeconds: 15,
+        pollIntervalSeconds: 1800,
       });
     }
 
     const maskedSetting = {
       _id: setting._id,
       provider: setting.provider,
-      apiUrl: setting.apiUrl,
+      apiUrl: maskUrlSecret(setting.apiUrl),
       status: setting.status,
       connectionStatus: setting.connectionStatus || 'Connected',
       lastSync: setting.lastSync,
@@ -132,6 +135,14 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'GPS Provider is required.' });
     }
 
+    if (apiUrl && apiUrl.trim()) {
+      if (!isSafeExternalUrl(apiUrl.trim())) {
+        return res.status(400).json({
+          error: 'Invalid API URL. Only secure public HTTP/HTTPS endpoints are permitted. Internal and private network IP addresses are forbidden.',
+        });
+      }
+    }
+
     let setting = await GpsSetting.findOne().sort({ updatedAt: -1 });
 
     const updateData = {
@@ -160,7 +171,7 @@ router.post('/', async (req, res) => {
       setting: {
         _id: setting._id,
         provider: setting.provider,
-        apiUrl: setting.apiUrl,
+        apiUrl: maskUrlSecret(setting.apiUrl),
         status: setting.status,
         connectionStatus: setting.connectionStatus,
         lastSync: setting.lastSync,
@@ -179,7 +190,7 @@ router.post('/', async (req, res) => {
 });
 
 // POST /api/gps/test-connection - Test provider connection
-router.post('/test-connection', async (req, res) => {
+router.post('/test-connection', gpsSyncLimiter, async (req, res) => {
   try {
     const result = await testGpsConnection();
     res.json(result);
@@ -194,7 +205,7 @@ router.post('/test-connection', async (req, res) => {
 });
 
 // POST /api/gps/trigger-sync - Manual GPS sync trigger
-router.post('/trigger-sync', async (req, res) => {
+router.post('/trigger-sync', gpsSyncLimiter, async (req, res) => {
   try {
     const result = await syncGpsPositions('Manual Sync');
     res.json({
@@ -388,7 +399,7 @@ router.get('/live-vehicles', async (req, res) => {
     res.json({
       totalCount: liveVehicles.length,
       provider: setting ? setting.provider : 'WheelsEye GPS',
-      apiUrl: setting ? setting.apiUrl : '',
+      apiUrl: setting ? maskUrlSecret(setting.apiUrl) : '',
       lastSync: new Date(),
       vehicles: liveVehicles,
     });

@@ -6,6 +6,7 @@ import { ShieldAlert, ArrowLeft } from 'lucide-react';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import MobileNav from './MobileNav';
+import BottomNav from './BottomNav';
 import PlantPlanNotificationIcon from './PlantPlanNotificationIcon';
 import { useAuth } from '../lib/authContext';
 
@@ -93,13 +94,16 @@ export default function AppLayout({
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <Header onOpenMobileNav={() => setMobileNavOpen(true)} title={pageTitle} />
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 pb-24 lg:pb-8">
           <div className="max-w-7xl mx-auto">{children}</div>
         </main>
       </div>
 
       {/* Global Plant Plan Notification Icon & Panel (Visible Across All Pages) */}
       <PlantPlanNotificationIcon />
+
+      {/* Mobile Bottom Navigation Bar */}
+      <BottomNav onOpenMobileNav={() => setMobileNavOpen(true)} />
     </div>
   );
 }

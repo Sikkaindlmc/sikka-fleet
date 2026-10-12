@@ -3,17 +3,21 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { JWT_SECRET, getJwtSecret, verifyToken } = require('../middleware/auth');
+const connectDB = require('../config/db');
 
 const router = express.Router();
 
 const Driver = require('../models/Driver');
 
+const { authLimiter } = require('../middleware/rateLimiter');
+
 // POST /api/auth/login
-router.post('/login', async (req, res) => {
+router.post('/login', authLimiter, async (req, res) => {
   try {
+    await connectDB();
     const { username, password, loginType = 'User', location } = req.body;
 
-    if (!username || !password) {
+    if (!username || typeof username !== 'string' || !password || typeof password !== 'string') {
       return res.status(400).json({
         error: loginType === 'Driver'
           ? 'DL Number and registered mobile number are required.'
@@ -60,13 +64,13 @@ router.post('/login', async (req, res) => {
       driver.lastLoginLocation = {
         latitude: location.latitude,
         longitude: location.longitude,
-        accuracy: location.accuracy || null,
+        accuracy: typeof location.accuracy === 'number' ? location.accuracy : null,
         capturedAt: new Date(),
       };
       driver.lastLoginAt = new Date();
       await driver.save();
 
-      // Issue long-lived persistent JWT token (365 days)
+      // Issue JWT token signed with HS256
       const token = jwt.sign(
         {
           userId: driver._id,
@@ -76,8 +80,8 @@ router.post('/login', async (req, res) => {
           role: 'Driver',
           loginType: 'Driver',
         },
-        getJwtSecret ? getJwtSecret() : JWT_SECRET,
-        { expiresIn: '365d' }
+        getJwtSecret(),
+        { algorithm: 'HS256', expiresIn: '30d' }
       );
 
       return res.json({
@@ -103,14 +107,6 @@ router.post('/login', async (req, res) => {
     const user = await User.findOne({ username: trimmedUsername }).populate('accessPlants', 'plantName status');
 
     if (!user) {
-      // Check if driver attempted to login under User login type
-      const possibleDriver = await Driver.findOne({ dlNumber: username.trim().toUpperCase() });
-      if (possibleDriver) {
-        return res.status(401).json({
-          error: 'Driver accounts cannot sign in as User. Please select "Driver" as Login Type.',
-        });
-      }
-
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
@@ -118,22 +114,12 @@ router.post('/login', async (req, res) => {
       return res.status(403).json({ error: 'Your account is inactive. Please contact your administrator.' });
     }
 
-    let isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (
-      !isMatch &&
-      user.username === 'ajaysomra' &&
-      (password === 'Somra@2012' ||
-        password === 'Somra@#2012' ||
-        password.toLowerCase() === 'somra@2012' ||
-        password.toLowerCase() === 'somra@#2012')
-    ) {
-      isMatch = true;
-    }
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
 
-    // Generate persistent JWT (365 days validity - persists until explicit user logout)
+    // Generate JWT signed with HS256
     const token = jwt.sign(
       {
         userId: user._id,
@@ -141,8 +127,8 @@ router.post('/login', async (req, res) => {
         role: user.role || 'User',
         loginType: 'User',
       },
-      getJwtSecret ? getJwtSecret() : JWT_SECRET,
-      { expiresIn: '365d' }
+      getJwtSecret(),
+      { algorithm: 'HS256', expiresIn: '30d' }
     );
 
     res.json({

@@ -7,7 +7,6 @@ const morgan = require('morgan');
 const connectDB = require('./config/db');
 const { startGpsScheduler } = require('./services/gpsScheduler');
 const { startGpsCronWorker } = require('./services/gpsCronWorker');
-const { startSikkaAiScheduler } = require('./services/sikkaAiService');
 
 const authRoutes = require('./routes/authRoutes');
 const plantRoutes = require('./routes/plantRoutes');
@@ -20,8 +19,11 @@ const dashboardRoutes = require('./routes/dashboardRoutes');
 const userRoutes = require('./routes/userRoutes');
 const driverRoutes = require('./routes/driverRoutes');
 const reportRoutes = require('./routes/reportRoutes');
-const sikkaAiRoutes = require('./routes/sikkaAiRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+
+const helmet = require('helmet');
+const mongoSanitize = require('./middleware/mongoSanitize');
+const { generalApiLimiter } = require('./middleware/rateLimiter');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -29,14 +31,64 @@ const PORT = process.env.PORT || 5000;
 // Connect to MongoDB
 connectDB();
 
-// Middleware
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Security: Disable Express fingerprinting header
+app.disable('x-powered-by');
+
+// Security: Enforce HTTP security headers via Helmet
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    contentSecurityPolicy: false, // Managed by frontend Next.js headers
+  })
+);
+
+// Security: CORS Allowlist configuration
+const rawAllowedOrigins = process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000,http://localhost:5000,https://sikka-fleet.vercel.app';
+const allowedOriginsList = rawAllowedOrigins.split(',').map((o) => o.trim()).filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (e.g. mobile native apps, curl, server-side cron triggers)
+      if (!origin) return callback(null, true);
+
+      // Check configured allowlist
+      if (allowedOriginsList.includes(origin) || allowedOriginsList.includes('*')) {
+        return callback(null, true);
+      }
+
+      // Allow Capacitor mobile origins and local network access
+      if (
+        origin === 'http://localhost' ||
+        origin === 'https://localhost' ||
+        origin.startsWith('capacitor://') ||
+        origin.startsWith('ionic://') ||
+        origin.startsWith('http://192.168.') ||
+        origin.startsWith('http://10.') ||
+        origin.startsWith('http://172.') ||
+        origin.includes('sikka-fleet')
+      ) {
+        return callback(null, true);
+      }
+
+      return callback(new Error('CORS request blocked by Sikka Fleet security policy.'));
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-cron-secret'],
+    credentials: true,
+  })
+);
+
+// Security: Limit request payload sizes to prevent memory-exhaustion DoS
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+
+// Security: Sanitize incoming input against MongoDB Operator Injection ($ and .)
+app.use(mongoSanitize);
+
+// Global rate limiting on API surface
+app.use('/api', generalApiLimiter);
+
 app.use(morgan('dev'));
 
 // Health check
@@ -61,14 +113,20 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/reports', reportRoutes);
-app.use('/api/sikka-ai', sikkaAiRoutes);
 app.use('/api/notifications', notificationRoutes);
 
 // Centralized Error Handling Middleware
 app.use((err, req, res, next) => {
+  const isProd = process.env.NODE_ENV === 'production';
   console.error('[Unhandled Server Error]:', err.stack || err);
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal server error occurred.',
+
+  const statusCode = err.status || 500;
+  const userSafeMessage = isProd && statusCode === 500
+    ? 'An unexpected internal server error occurred.'
+    : err.message || 'Internal server error occurred.';
+
+  res.status(statusCode).json({
+    error: userSafeMessage,
   });
 });
 
@@ -83,8 +141,6 @@ if (require.main === module) {
     // Start 24x7 autonomous server-side GPS 30-minute scheduler
     startGpsScheduler();
 
-    // Start Sikka AI 30-minute automated vehicle GPS & driver location scheduler
-    startSikkaAiScheduler();
   });
 }
 

@@ -1,13 +1,34 @@
-const isClient = typeof window !== 'undefined';
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  (isClient
-    ? (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
-        ? '/api'
-        : 'http://localhost:5000/api')
-    : (process.env.BACKEND_URL
-        ? `${process.env.BACKEND_URL}/api`
-        : 'http://localhost:5000/api'));
+export function getApiBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    const customUrl = localStorage.getItem('sikka_fleet_server_url');
+    if (customUrl && customUrl.trim()) {
+      return customUrl.trim().replace(/\/+$/, '');
+    }
+  }
+
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, '');
+  }
+
+  if (typeof window !== 'undefined') {
+    // Check if running inside mobile hybrid wrapper (Capacitor)
+    const isCapacitor = !!(window as any).Capacitor;
+    if (isCapacitor) {
+      // Default to LAN IP for physical device testing; easily updated via Settings in app
+      return 'http://192.168.1.38:5000/api';
+    }
+    if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      return '/api';
+    }
+    return 'http://localhost:5000/api';
+  }
+
+  return process.env.BACKEND_URL
+    ? `${process.env.BACKEND_URL}/api`
+    : 'http://localhost:5000/api';
+}
+
+export const API_BASE_URL = getApiBaseUrl();
 
 export class ApiError extends Error {
   status: number;
@@ -25,7 +46,8 @@ export async function apiRequest<T = any>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -75,9 +97,17 @@ export async function apiRequest<T = any>(
     if (err instanceof ApiError) {
       throw err;
     }
-    throw new ApiError(
-      err.message || 'Unable to connect to the fleet management server.',
-      0
-    );
+    const isNetworkError =
+      !err.status &&
+      (err.message?.includes('Failed to fetch') ||
+        err.message?.includes('NetworkError') ||
+        err.message?.includes('Network request failed') ||
+        err.name === 'TypeError');
+
+    const msg = isNetworkError
+      ? `Server connection failed (${baseUrl}). Kripya check karein ki backend server chalu hai aur phone same Wi-Fi network par hai, ya login form ke neeche Server URL check karein.`
+      : err.message || 'Unable to connect to the fleet management server.';
+
+    throw new ApiError(msg, 0);
   }
 }

@@ -22,7 +22,6 @@ import {
   CreditCard,
   Calendar,
   ExternalLink,
-  Sparkles,
 } from 'lucide-react';
 import Link from 'next/link';
 import AppLayout from '../../components/AppLayout';
@@ -735,13 +734,6 @@ export default function DashboardPage() {
               </div>
             )}
 
-            <Link
-              href="/sikka-ai"
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer border border-emerald-500/30 group"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-emerald-400 group-hover:rotate-12 transition-transform" />
-              <span>Sikka AI Assistant</span>
-            </Link>
 
             <button
               type="button"
@@ -1041,10 +1033,6 @@ export default function DashboardPage() {
                   {plantVehicles.map((v) => {
                     const hasPlans = Array.isArray(v.plans) && v.plans.length > 0;
                     const latestPlan = hasPlans ? v.plans![v.plans!.length - 1] : null;
-                    const olderPlans =
-                      hasPlans && v.plans!.length > 1
-                        ? v.plans!.slice(0, -1).reverse()
-                        : [];
 
                     return (
                       <tr key={v.id} className="hover:bg-slate-50/70 transition">
@@ -1139,31 +1127,16 @@ export default function DashboardPage() {
                               No plan assigned
                             </span>
                           ) : (
-                            <div className="space-y-1.5 max-w-[280px]">
+                            <div className="max-w-[280px]">
                               {/* Latest Plan */}
                               <div className="text-xs bg-emerald-50/90 p-2 rounded-lg border border-emerald-200/90 text-slate-800 shadow-2xs">
                                 <span className="text-[10px] font-bold text-emerald-800 uppercase block tracking-wider">
-                                  {v.plans!.length > 1 ? 'New Plan' : 'Plan'} by {latestPlan!.authorName} ({formatDateTime(latestPlan!.createdAt)}):
+                                  Plan by {latestPlan!.authorName} ({formatDateTime(latestPlan!.createdAt)}):
                                 </span>
                                 <p className="font-semibold text-slate-900 mt-0.5">
                                   {latestPlan!.planText}
                                 </p>
                               </div>
-
-                              {/* Older Plans History (Audit Trail) */}
-                              {olderPlans.map((oldPlan, idx) => (
-                                <div
-                                  key={idx}
-                                  className="text-[11px] bg-slate-50 p-1.5 rounded-md border border-slate-200 text-slate-600"
-                                >
-                                  <span className="text-[9px] font-bold text-slate-500 uppercase block">
-                                    Old Plan by {oldPlan.authorName} ({formatDateTime(oldPlan.createdAt)}):
-                                  </span>
-                                  <p className="italic text-slate-700 mt-0.5">
-                                    {oldPlan.planText}
-                                  </p>
-                                </div>
-                              ))}
                             </div>
                           )}
                         </td>
@@ -1221,20 +1194,23 @@ export default function DashboardPage() {
           )}
 
           <form onSubmit={handleSavePlan} className="space-y-4">
-            {/* If vehicle has previous plan history, show it */}
+            {/* Show only current/latest plan */}
             {selectedVehicleForPlan?.plans && selectedVehicleForPlan.plans.length > 0 && (
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 max-h-36 overflow-y-auto space-y-1.5 mb-2">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                  Existing Plan History
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 mb-2">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                  Current Plan
                 </span>
-                {selectedVehicleForPlan.plans.slice().reverse().map((p, idx) => (
-                  <div key={idx} className="text-xs bg-white p-2 rounded-lg border border-slate-200/80">
-                    <span className="text-[10px] font-bold text-slate-600 block">
-                      {idx === 0 ? 'Current Plan' : `Previous Revision`} by {p.authorName} ({formatDateTime(p.createdAt)}):
-                    </span>
-                    <p className="text-slate-800 font-medium mt-0.5">{p.planText}</p>
-                  </div>
-                ))}
+                {(() => {
+                  const currentPlan = selectedVehicleForPlan.plans[selectedVehicleForPlan.plans.length - 1];
+                  return (
+                    <div className="text-xs bg-white p-2 rounded-lg border border-slate-200/80">
+                      <span className="text-[10px] font-bold text-slate-600 block">
+                        Plan by {currentPlan.authorName} ({formatDateTime(currentPlan.createdAt)}):
+                      </span>
+                      <p className="text-slate-800 font-medium mt-0.5">{currentPlan.planText}</p>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 

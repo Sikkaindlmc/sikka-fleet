@@ -1,5 +1,6 @@
 const GpsSetting = require('../models/GpsSetting');
 const { executeGpsSync, DEFAULT_WHEELSEYE_URL } = require('./gpsSyncService');
+const { isSafeExternalUrl } = require('../utils/security');
 const axios = require('axios');
 
 async function syncGpsPositions(syncType = 'Auto Sync') {
@@ -14,6 +15,10 @@ async function testGpsConnection() {
   try {
     const config = await GpsSetting.findOne().sort({ updatedAt: -1 });
     const apiUrl = config?.apiUrl && config.apiUrl.includes('wheelseye') ? config.apiUrl : DEFAULT_WHEELSEYE_URL;
+
+    if (!isSafeExternalUrl(apiUrl)) {
+      throw new Error('Refusing to connect to unsafe or disallowed GPS API endpoint.');
+    }
 
     const res = await axios.get(apiUrl, { timeout: 10000 });
     let count = 0;

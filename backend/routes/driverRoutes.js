@@ -4,6 +4,7 @@ const DriverLocation = require('../models/DriverLocation');
 const DriverPlantRecord = require('../models/DriverPlantRecord');
 const Vehicle = require('../models/Vehicle');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
+const { escapeRegex, isValidObjectId } = require('../utils/security');
 const {
   processDriverLocation,
   recordDriverLocationFailure,
@@ -125,8 +126,8 @@ router.get('/', async (req, res) => {
       query.status = status;
     }
 
-    if (search && search.trim()) {
-      const regex = new RegExp(search.trim(), 'i');
+    if (search && typeof search === 'string' && search.trim()) {
+      const regex = new RegExp(escapeRegex(search.trim()), 'i');
       query.$or = [
         { driverName: regex },
         { dlNumber: regex },
@@ -164,6 +165,10 @@ router.get('/', async (req, res) => {
 // GET /api/drivers/:id - Retrieve single driver details
 router.get('/:id', async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ error: 'Invalid driver ID format.' });
+    }
+
     const driver = await Driver.findById(req.params.id);
     if (!driver) {
       return res.status(404).json({ error: 'Driver record not found.' });
@@ -178,6 +183,10 @@ router.get('/:id', async (req, res) => {
 // GET /api/drivers/:id/locations - Retrieve periodic 20-minute location history records
 router.get('/:id/locations', async (req, res) => {
   try {
+    if (!isValidObjectId(req.params.id)) {
+      return res.status(400).json({ error: 'Invalid driver ID format.' });
+    }
+
     const locations = await DriverLocation.find({ driverId: req.params.id })
       .sort({ capturedAt: -1 })
       .limit(50);
@@ -272,6 +281,10 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid driver ID format.' });
+    }
+
     const { driverName, dlNumber, dob, mobileNumber, status, photo } = req.body;
 
     const driver = await Driver.findById(id);

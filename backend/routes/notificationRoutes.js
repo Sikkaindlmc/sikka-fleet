@@ -4,6 +4,7 @@ const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
 const Vehicle = require('../models/Vehicle');
 const Plant = require('../models/Plant');
 const { verifyToken } = require('../middleware/auth');
+const { isValidObjectId } = require('../utils/security');
 const { getReadableLocation } = require('../services/locationHelper');
 
 const router = express.Router();
@@ -194,6 +195,10 @@ router.get('/unread-count', async (req, res) => {
 router.post('/:id/read', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid notification ID format.' });
+    }
+
     const userId = req.user._id || req.user.id;
 
     const notification = await PlanNotification.findById(id);

@@ -4,6 +4,7 @@ const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
 const VehicleLocation = require('../models/VehicleLocation');
 const PlantEntry = require('../models/PlantEntry');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
+const { isValidObjectId } = require('../utils/security');
 
 const router = express.Router();
 
@@ -114,6 +115,10 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid vehicle ID format.' });
+    }
+
     const { vehicleNumber, driverName, mobile, fleetType, ownerName, gpsDeviceId, status } = req.body;
 
     const vehicle = await Vehicle.findById(id);
@@ -121,7 +126,7 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Vehicle not found.' });
     }
 
-    if (!vehicleNumber || !vehicleNumber.trim()) {
+    if (!vehicleNumber || typeof vehicleNumber !== 'string' || !vehicleNumber.trim()) {
       return res.status(400).json({ error: 'Vehicle number is required.' });
     }
 
@@ -183,6 +188,9 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid vehicle ID format.' });
+    }
 
     const vehicle = await Vehicle.findById(id);
     if (!vehicle) {

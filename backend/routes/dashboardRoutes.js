@@ -14,6 +14,7 @@ const {
 const { calculateHaversineDistance } = require('../services/geofenceService');
 const { getReadableLocation } = require('../services/locationHelper');
 const { getNextFixed30MinSlot } = require('../services/gpsCronWorker');
+const { isValidObjectId, sanitizeText } = require('../utils/security');
 
 const router = express.Router();
 
@@ -207,6 +208,9 @@ router.get('/plants/:plantId/vehicles', async (req, res) => {
     }
 
     const { plantId } = req.params;
+    if (!isValidObjectId(plantId)) {
+      return res.status(400).json({ error: 'Invalid plant ID format.' });
+    }
 
     // RBAC check: enforce plant access if user has restrictions
     if (req.user.accessPlants && req.user.accessPlants.length > 0) {
@@ -298,6 +302,9 @@ router.get('/plants/:plantId/drivers', async (req, res) => {
     }
 
     const { plantId } = req.params;
+    if (!isValidObjectId(plantId)) {
+      return res.status(400).json({ error: 'Invalid plant ID format.' });
+    }
 
     // RBAC check: enforce plant access if user has restrictions
     if (req.user.accessPlants && req.user.accessPlants.length > 0) {
@@ -451,13 +458,21 @@ router.post('/vehicles/:vehicleId/plan', async (req, res) => {
     }
 
     const { vehicleId } = req.params;
+    if (!isValidObjectId(vehicleId)) {
+      return res.status(400).json({ error: 'Invalid vehicle ID format.' });
+    }
+
     const { planText } = req.body;
 
-    if (!planText || !planText.trim()) {
+    if (!planText || typeof planText !== 'string' || !planText.trim()) {
       return res.status(400).json({ error: 'Plan description is required.' });
     }
 
-    const trimmedPlan = planText.trim();
+    if (planText.trim().length > 500) {
+      return res.status(400).json({ error: 'Plan description cannot exceed 500 characters.' });
+    }
+
+    const sanitizedPlan = sanitizeText(planText.trim());
 
     let statusDoc = await VehicleCurrentStatus.findOne({ vehicleId });
     if (!statusDoc) {
@@ -470,13 +485,23 @@ router.post('/vehicles/:vehicleId/plan', async (req, res) => {
       });
     }
 
+    // RBAC: Check plant permission if user has restricted plant assignments and vehicle is inside a plant
+    if (req.user.role !== 'Admin' && req.user.accessPlants && req.user.accessPlants.length > 0) {
+      if (statusDoc.currentPlantId) {
+        const allowedIds = req.user.accessPlants.map((p) => (p._id ? p._id.toString() : p.toString()));
+        if (!allowedIds.includes(statusDoc.currentPlantId.toString())) {
+          return res.status(403).json({ error: 'Access Denied: You do not have permission for the plant where this vehicle is located.' });
+        }
+      }
+    }
+
     if (!Array.isArray(statusDoc.plans)) {
       statusDoc.plans = [];
     }
 
     const authorName = req.user.fullName || req.user.name || req.user.username || 'Sikka Team';
     const newPlanEntry = {
-      planText: trimmedPlan,
+      planText: sanitizedPlan,
       authorName,
       authorUsername: req.user.username,
       createdAt: new Date(),

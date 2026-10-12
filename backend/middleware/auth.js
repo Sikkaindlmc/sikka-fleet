@@ -2,7 +2,17 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Driver = require('../models/Driver');
 
-const getJwtSecret = () => process.env.JWT_SECRET || 'sikka_fleet_super_secret_jwt_key_2026';
+const getJwtSecret = () => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('FATAL: JWT_SECRET environment variable is missing.');
+    }
+    return 'sikka_fleet_super_secret_jwt_key_2026_production';
+  }
+  return secret;
+};
+
 const JWT_SECRET = getJwtSecret();
 
 const verifyToken = async (req, res, next) => {
@@ -12,39 +22,36 @@ const verifyToken = async (req, res, next) => {
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.split(' ')[1];
     } else if (req.query && req.query.token) {
-      token = req.query.token;
+      // Query tokens are strictly restricted to file export / download endpoints
+      const isDownloadEndpoint = req.path.includes('/export') || req.path.includes('/download');
+      if (isDownloadEndpoint) {
+        token = req.query.token;
+      }
     }
 
-    if (!token) {
+    if (!token || typeof token !== 'string') {
       return res.status(401).json({ 
-        error: 'Authentication required. No token provided.',
+        error: 'Authentication required. No valid token provided.',
         code: 'NO_TOKEN'
       });
     }
 
-    const currentSecret = getJwtSecret();
-    const candidateSecrets = Array.from(new Set([
-      currentSecret,
-      'sikka_fleet_super_secret_jwt_key_2026_production',
-      'sikka_fleet_super_secret_jwt_key_2026'
-    ])).filter(Boolean);
-
     let decoded = null;
-    let lastError = null;
-
-    for (const secret of candidateSecrets) {
-      try {
-        decoded = jwt.verify(token, secret);
-        if (decoded) break;
-      } catch (err) {
-        lastError = err;
-      }
-    }
-
-    if (!decoded) {
+    try {
+      decoded = jwt.verify(token, getJwtSecret(), {
+        algorithms: ['HS256'],
+      });
+    } catch (err) {
       return res.status(401).json({ 
         error: 'Invalid or expired authentication token.',
-        code: lastError?.name === 'TokenExpiredError' ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID'
+        code: err.name === 'TokenExpiredError' ? 'TOKEN_EXPIRED' : 'TOKEN_INVALID'
+      });
+    }
+
+    if (!decoded || !decoded.userId) {
+      return res.status(401).json({ 
+        error: 'Invalid authentication token payload.',
+        code: 'TOKEN_INVALID'
       });
     }
 
@@ -123,10 +130,29 @@ const checkPageAccess = (pageName) => {
   };
 };
 
+const requireRole = (...allowedRoles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Unauthorized.' });
+    }
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({
+        error: `Access Denied: Restricted to role(s): ${allowedRoles.join(', ')}.`,
+      });
+    }
+    next();
+  };
+};
+
 const checkPlantAccess = (plantIdParamKey = 'plantId') => {
   return (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Unauthorized.' });
+    }
+
+    // Admin has full access to all plants
+    if (req.user.role === 'Admin') {
+      return next();
     }
 
     const plantId = req.params[plantIdParamKey] || req.body[plantIdParamKey] || req.query[plantIdParamKey];
@@ -135,9 +161,8 @@ const checkPlantAccess = (plantIdParamKey = 'plantId') => {
     }
 
     // If user has specific plant assignments, verify that plantId is among them
-    // Note: If an admin has all plants or explicit access, allow
     if (req.user.accessPlants && req.user.accessPlants.length > 0) {
-      const allowedIds = req.user.accessPlants.map((p) => p._id.toString());
+      const allowedIds = req.user.accessPlants.map((p) => (p._id ? p._id.toString() : p.toString()));
       if (!allowedIds.includes(plantId.toString())) {
         return res.status(403).json({
           error: 'Access Denied: You do not have authorization for this plant.',
@@ -154,5 +179,6 @@ module.exports = {
   getJwtSecret,
   verifyToken,
   checkPageAccess,
+  requireRole,
   checkPlantAccess,
 };

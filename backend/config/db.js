@@ -14,14 +14,13 @@ const connectDB = async () => {
     return mongoose.connection;
   }
 
-  const primaryURI = process.env.MONGODB_URI || process.env.MONGO_URI;
+  // Direct Atlas replica-set fallback if SRV DNS encounters network/proxy issues
+  const directAtlasURI = 'mongodb://sikkalmc_db_user:p15pS1cvdirZuW8p@ac-reo4oj8-shard-00-00.9vylwot.mongodb.net:27017,ac-reo4oj8-shard-00-01.9vylwot.mongodb.net:27017,ac-reo4oj8-shard-00-02.9vylwot.mongodb.net:27017/sikka_fleet?ssl=true&authSource=admin&replicaSet=atlas-5s2o5v-shard-0&retryWrites=true&w=majority';
+  const primaryURI = process.env.MONGODB_URI || process.env.MONGO_URI || directAtlasURI;
   const localURI = 'mongodb://127.0.0.1:27017/sikka_fleet';
   const dbName = process.env.MONGODB_DB_NAME || 'sikka_fleet';
 
-  // Direct Atlas replica-set fallback if SRV DNS encounters network/proxy issues
-  const directAtlasURI = 'mongodb://sikkalmc_db_user:p15pS1cvdirZuW8p@ac-reo4oj8-shard-00-00.9vylwot.mongodb.net:27017,ac-reo4oj8-shard-00-01.9vylwot.mongodb.net:27017,ac-reo4oj8-shard-00-02.9vylwot.mongodb.net:27017/sikka_fleet?ssl=true&authSource=admin&replicaSet=atlas-5s2o5v-shard-0&retryWrites=true&w=majority';
-
-  // 1. Try Primary MongoDB URI (MongoDB Atlas SRV)
+  // 1. Try Primary MongoDB URI (MongoDB Atlas SRV or direct replica set)
   if (primaryURI && !primaryURI.includes('127.0.0.1') && !primaryURI.includes('localhost')) {
     try {
       console.log(`[Database] Connecting to MongoDB Atlas...`);

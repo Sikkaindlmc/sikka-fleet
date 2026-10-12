@@ -119,11 +119,11 @@ function GpsPageContent() {
   const [setting, setSetting] = useState<GpsSettingData | null>(null);
   const [formData, setFormData] = useState({
     provider: 'WheelsEye GPS',
-    apiUrl: 'https://api.wheelseye.com/currentLoc?accessToken=53afc208-0981-48c7-b134-d85d2f33dc0c',
-    apiKey: '53afc208-0981-48c7-b134-d85d2f33dc0c',
+    apiUrl: '',
+    apiKey: '',
     apiSecret: '',
     status: 'Active' as 'Active' | 'Inactive',
-    pollIntervalSeconds: 15,
+    pollIntervalSeconds: 1800,
   });
 
   // Vehicle Icon upload state
@@ -280,9 +280,7 @@ function GpsPageContent() {
       setSetting(data);
       setFormData({
         provider: data.provider || 'WheelsEye GPS',
-        apiUrl:
-          data.apiUrl ||
-          'https://api.wheelseye.com/currentLoc?accessToken=53afc208-0981-48c7-b134-d85d2f33dc0c',
+        apiUrl: data.apiUrl || '',
         apiKey: data.maskedApiKey || '',
         apiSecret: data.hasApiSecret ? '••••••••••••' : '',
         status: data.status || 'Active',
@@ -1148,7 +1146,7 @@ function GpsPageContent() {
                           <span className="flex items-center gap-1.5">
                             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                             <span>
-                              {selectedVehicle.loadingPlan.history.length > 1 ? 'New Plan' : 'Plan'} by{' '}
+                              Plan by{' '}
                               {selectedVehicle.loadingPlan.authorName || 'Dispatcher'}
                             </span>
                           </span>
@@ -1160,34 +1158,6 @@ function GpsPageContent() {
                           {selectedVehicle.loadingPlan.currentPlan}
                         </p>
                       </div>
-
-                      {/* Older Revision History */}
-                      {selectedVehicle.loadingPlan.history.length > 1 && (
-                        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
-                          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">
-                            Previous Plan Audit Trail
-                          </span>
-                          <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
-                            {selectedVehicle.loadingPlan.history
-                              .slice(0, -1)
-                              .reverse()
-                              .map((oldPlan, idx) => (
-                                <div
-                                  key={idx}
-                                  className="text-xs bg-white p-2.5 rounded-lg border border-slate-200 text-slate-700"
-                                >
-                                  <div className="flex items-center justify-between text-[10px] text-slate-400 font-semibold mb-0.5">
-                                    <span>Old Plan by {oldPlan.authorName}</span>
-                                    <span>{formatDateTime(oldPlan.createdAt)}</span>
-                                  </div>
-                                  <p className="font-medium italic text-slate-800">
-                                    {oldPlan.planText}
-                                  </p>
-                                </div>
-                              ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   ) : (
                     <div className="p-6 rounded-xl border border-dashed border-slate-300 text-center bg-slate-50/50">

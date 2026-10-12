@@ -1,5 +1,10 @@
 {
   "appId": "com.sikkaind.sikkafleet",
   "appName": "Sikka Fleet",
-  "webDir": "frontend/out"
+  "webDir": "frontend/out",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true,
+    "allowNavigation": ["*"]
+  }
 }

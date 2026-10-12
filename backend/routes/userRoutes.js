@@ -6,6 +6,8 @@ const { verifyToken, checkPageAccess } = require('../middleware/auth');
 
 const router = express.Router();
 
+const { isValidObjectId } = require('../utils/security');
+
 // Require authenticated user with 'User Management' page permission
 router.use(verifyToken, checkPageAccess('User Management'));
 
@@ -57,14 +59,17 @@ router.post('/', async (req, res) => {
   try {
     const { fullName, username, role, password, confirmPassword, accessPlants, accessPages, status } = req.body;
 
-    if (!fullName || !fullName.trim()) {
+    if (!fullName || typeof fullName !== 'string' || !fullName.trim()) {
       return res.status(400).json({ error: 'Full Name is required.' });
     }
-    if (!username || !username.trim()) {
+    if (!username || typeof username !== 'string' || !username.trim()) {
       return res.status(400).json({ error: 'Username is required.' });
     }
-    if (!password) {
+    if (!password || typeof password !== 'string') {
       return res.status(400).json({ error: 'Password is required.' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
     }
     if (password !== confirmPassword) {
       return res.status(400).json({ error: 'Passwords do not match.' });
@@ -84,6 +89,14 @@ router.post('/', async (req, res) => {
     // Resolve user role and default to Plant Operator if empty
     const validRoles = ['Admin', 'User', 'Plant Operator', 'Fleet Operator', 'Fleet Manager'];
     const userRole = (role && validRoles.includes(role.trim())) ? role.trim() : (role && role.trim()) || 'Plant Operator';
+
+    // Privilege Escalation Prevention: Only Admin can create an Admin user
+    if (userRole === 'Admin' && req.user.role !== 'Admin') {
+      return res.status(403).json({
+        error: 'Access Denied: Only Administrators can create an Admin account.',
+        code: 'PRIVILEGE_ESCALATION_BLOCKED',
+      });
+    }
 
     // If Admin, grant all system pages automatically from MongoDB
     let finalPages = allPageNames;
@@ -108,7 +121,7 @@ router.post('/', async (req, res) => {
       username: trimmedUsername,
       role: userRole,
       passwordHash,
-      accessPlants: Array.isArray(accessPlants) ? accessPlants : [],
+      accessPlants: Array.isArray(accessPlants) ? accessPlants.filter(isValidObjectId) : [],
       accessPages: finalPages,
       status: status === 'Inactive' ? 'Inactive' : 'Active',
     });
@@ -123,7 +136,7 @@ router.post('/', async (req, res) => {
     });
   } catch (error) {
     console.error('[Create User Error]:', error);
-    res.status(500).json({ error: error.message || 'Failed to create user account.' });
+    res.status(500).json({ error: 'Failed to create user account.' });
   }
 });
 
@@ -131,6 +144,10 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid user ID format.' });
+    }
+
     const { fullName, username, password, confirmPassword, accessPlants, accessPages, status, role } = req.body;
 
     const user = await User.findById(id);
@@ -138,10 +155,33 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'User not found.' });
     }
 
-    if (!fullName || !fullName.trim()) {
+    // Privilege Escalation Prevention: Only Admin can modify an Admin account
+    if (user.role === 'Admin' && req.user.role !== 'Admin') {
+      return res.status(403).json({
+        error: 'Access Denied: Only Administrators can modify an Admin account.',
+        code: 'PRIVILEGE_ESCALATION_BLOCKED',
+      });
+    }
+
+    if (role && role.trim() === 'Admin' && req.user.role !== 'Admin') {
+      return res.status(403).json({
+        error: 'Access Denied: Only Administrators can promote a user to Admin.',
+        code: 'PRIVILEGE_ESCALATION_BLOCKED',
+      });
+    }
+
+    // Protect against deactivating the last active Admin
+    if (user.role === 'Admin' && status === 'Inactive') {
+      const activeAdminCount = await User.countDocuments({ role: 'Admin', status: 'Active' });
+      if (activeAdminCount <= 1) {
+        return res.status(400).json({ error: 'Cannot deactivate the only active Administrator account.' });
+      }
+    }
+
+    if (!fullName || typeof fullName !== 'string' || !fullName.trim()) {
       return res.status(400).json({ error: 'Full Name is required.' });
     }
-    if (!username || !username.trim()) {
+    if (!username || typeof username !== 'string' || !username.trim()) {
       return res.status(400).json({ error: 'Username is required.' });
     }
 
@@ -158,6 +198,9 @@ router.put('/:id', async (req, res) => {
 
     // If updating password
     if (password) {
+      if (password.length < 6) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
+      }
       if (password !== confirmPassword) {
         return res.status(400).json({ error: 'Passwords do not match.' });
       }
@@ -180,7 +223,7 @@ router.put('/:id', async (req, res) => {
     }
 
     if (Array.isArray(accessPlants)) {
-      user.accessPlants = accessPlants;
+      user.accessPlants = accessPlants.filter(isValidObjectId);
     }
 
     user.fullName = fullName.trim();
@@ -199,7 +242,7 @@ router.put('/:id', async (req, res) => {
     });
   } catch (error) {
     console.error('[Update User Error]:', error);
-    res.status(500).json({ error: error.message || 'Failed to update user account.' });
+    res.status(500).json({ error: 'Failed to update user account.' });
   }
 });
 
@@ -207,6 +250,10 @@ router.put('/:id', async (req, res) => {
 router.patch('/:id/status', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid user ID format.' });
+    }
+
     const { status } = req.body;
 
     if (!['Active', 'Inactive'].includes(status)) {
@@ -216,6 +263,17 @@ router.patch('/:id/status', async (req, res) => {
     const user = await User.findById(id);
     if (!user) {
       return res.status(404).json({ error: 'User not found.' });
+    }
+
+    if (user.role === 'Admin' && req.user.role !== 'Admin') {
+      return res.status(403).json({ error: 'Access Denied: Only Administrators can change status of an Admin account.' });
+    }
+
+    if (user.role === 'Admin' && status === 'Inactive') {
+      const activeAdminCount = await User.countDocuments({ role: 'Admin', status: 'Active' });
+      if (activeAdminCount <= 1) {
+        return res.status(400).json({ error: 'Cannot deactivate the only active Administrator account.' });
+      }
     }
 
     user.status = status;

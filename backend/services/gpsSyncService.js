@@ -11,6 +11,7 @@ const GpsSyncLog = require('../models/GpsSyncLog');
 const CronExecutionLog = require('../models/CronExecutionLog');
 const { calculateHaversineDistance } = require('./geofenceService');
 const { getReadableLocation } = require('./locationHelper');
+const { isSafeExternalUrl } = require('../utils/security');
 
 const DEFAULT_WHEELSEYE_URL =
   process.env.WHEELSEYE_API_URL ||
@@ -170,6 +171,10 @@ async function releaseDistributedLock() {
  * Calls Wheelseye GPS Telemetry endpoint with 3 retry attempts (Requirement 4).
  */
 async function fetchWheelseyeTelemetryWithRetries(apiUrl, maxAttempts = 3) {
+  if (!apiUrl || !isSafeExternalUrl(apiUrl)) {
+    throw new Error('Refusing to query unsafe or invalid GPS API URL.');
+  }
+
   let lastErr = null;
   const backoffDelays = [0, 2000, 4000];
 
