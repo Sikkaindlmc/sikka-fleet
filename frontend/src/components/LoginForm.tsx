@@ -16,7 +16,7 @@ import {
   Settings,
 } from 'lucide-react';
 import { useAuth } from '../lib/authContext';
-import { getApiBaseUrl } from '../lib/api';
+import { getApiBaseUrl, CLOUD_API_URL, LOCAL_API_URL } from '../lib/api';
 
 interface LoginFormProps {
   redirectUrl?: string;
@@ -44,7 +44,12 @@ export default function LoginForm({
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('sikka_fleet_server_url') || '';
-      setServerUrlInput(stored || getApiBaseUrl());
+      if (stored === 'http://192.168.1.38:5000/api') {
+        localStorage.setItem('sikka_fleet_server_url', CLOUD_API_URL);
+        setServerUrlInput(CLOUD_API_URL);
+      } else {
+        setServerUrlInput(stored || getApiBaseUrl());
+      }
     }
   }, []);
 
@@ -62,8 +67,15 @@ export default function LoginForm({
   const handleResetServerUrl = () => {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('sikka_fleet_server_url');
-      setServerUrlInput('http://192.168.1.38:5000/api');
+      setServerUrlInput(CLOUD_API_URL);
       setShowServerSettings(false);
+    }
+  };
+
+  const handleSelectPreset = (url: string) => {
+    if (typeof window !== 'undefined') {
+      setServerUrlInput(url);
+      localStorage.setItem('sikka_fleet_server_url', url);
     }
   };
 
@@ -334,17 +346,46 @@ export default function LoginForm({
 
           {showServerSettings && (
             <div className="mt-2.5 p-3.5 bg-slate-50 border border-slate-200/90 rounded-2xl text-left text-xs space-y-2.5 animate-in fade-in duration-150">
-              <label className="block text-[11px] font-bold text-slate-700">
-                Backend Server API URL:
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="block text-[11px] font-bold text-slate-700">
+                  Backend Server API URL:
+                </label>
+                <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                  Auto-Failover Active
+                </span>
+              </div>
               <input
                 type="url"
                 value={serverUrlInput}
                 onChange={(e) => setServerUrlInput(e.target.value)}
-                placeholder="http://192.168.1.38:5000/api"
+                placeholder="https://sikka-fleet.vercel.app/api"
                 className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
-              <div className="flex items-center justify-between pt-1">
+              <div className="flex gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => handleSelectPreset(CLOUD_API_URL)}
+                  className={`flex-1 py-1.5 px-2 rounded-xl text-[10px] font-bold border transition ${
+                    serverUrlInput === CLOUD_API_URL
+                      ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  🌐 Cloud (Global/Mobile)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectPreset(LOCAL_API_URL)}
+                  className={`flex-1 py-1.5 px-2 rounded-xl text-[10px] font-bold border transition ${
+                    serverUrlInput === LOCAL_API_URL
+                      ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  🏠 Local Wi-Fi (LAN)
+                </button>
+              </div>
+              <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
                 <button
                   type="button"
                   onClick={handleSaveServerUrl}
