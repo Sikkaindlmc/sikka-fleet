@@ -16,7 +16,7 @@ import {
   Settings,
 } from 'lucide-react';
 import { useAuth } from '../lib/authContext';
-import { getApiBaseUrl, CLOUD_API_URL, isPrivateOrLanUrl } from '../lib/api';
+import { getApiBaseUrl, PRODUCTION_API_URL, BACKUP_CLOUD_API_URL, CLOUD_API_URL, isPrivateOrLanUrl } from '../lib/api';
 
 interface LoginFormProps {
   redirectUrl?: string;
@@ -55,10 +55,13 @@ export default function LoginForm({
 
   const handleSaveServerUrl = () => {
     if (typeof window !== 'undefined') {
-      if (serverUrlInput.trim()) {
-        localStorage.setItem('sikka_fleet_server_url', serverUrlInput.trim());
+      const trimmed = serverUrlInput.trim().replace(/\/+$/, '');
+      if (trimmed && !isPrivateOrLanUrl(trimmed)) {
+        localStorage.setItem('sikka_fleet_server_url', trimmed);
+        setServerUrlInput(trimmed);
       } else {
-        localStorage.removeItem('sikka_fleet_server_url');
+        localStorage.setItem('sikka_fleet_server_url', PRODUCTION_API_URL);
+        setServerUrlInput(PRODUCTION_API_URL);
       }
       setShowServerSettings(false);
     }
@@ -67,7 +70,7 @@ export default function LoginForm({
   const handleResetServerUrl = () => {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('sikka_fleet_server_url');
-      setServerUrlInput(CLOUD_API_URL);
+      setServerUrlInput(PRODUCTION_API_URL);
       setShowServerSettings(false);
     }
   };
@@ -367,45 +370,32 @@ export default function LoginForm({
                 type="url"
                 value={serverUrlInput}
                 onChange={(e) => setServerUrlInput(e.target.value)}
-                placeholder="https://sikka-fleet.vercel.app/api"
+                placeholder="https://fleet.sikkaind.com/api"
                 className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
               <div className="pt-0.5 space-y-1.5">
                 <button
                   type="button"
-                  onClick={() => handleSelectPreset(CLOUD_API_URL)}
+                  onClick={() => handleSelectPreset(PRODUCTION_API_URL)}
                   className={`w-full py-1.5 px-2 rounded-xl text-[10px] font-bold border transition text-left ${
-                    serverUrlInput === CLOUD_API_URL
+                    serverUrlInput === PRODUCTION_API_URL
                       ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
                       : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
                   }`}
                 >
-                  🌐 Cloud Production (Recommended)
+                  🌐 Official Domain (fleet.sikkaind.com)
                 </button>
-                <div className="grid grid-cols-2 gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => handleSelectPreset('http://192.168.1.33:5000/api')}
-                    className={`py-1.5 px-2 rounded-xl text-[10px] font-semibold border transition text-center truncate ${
-                      serverUrlInput === 'http://192.168.1.33:5000/api'
-                        ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
-                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    📶 Wi-Fi (.33)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSelectPreset('http://192.168.1.38:5000/api')}
-                    className={`py-1.5 px-2 rounded-xl text-[10px] font-semibold border transition text-center truncate ${
-                      serverUrlInput === 'http://192.168.1.38:5000/api'
-                        ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
-                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                    }`}
-                  >
-                    🔌 Ethernet (.38)
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => handleSelectPreset(BACKUP_CLOUD_API_URL)}
+                  className={`w-full py-1.5 px-2 rounded-xl text-[10px] font-semibold border transition text-left truncate ${
+                    serverUrlInput === BACKUP_CLOUD_API_URL
+                      ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  ☁️ Backup Cloud (sikka-fleet.vercel.app)
+                </button>
               </div>
               <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
                 <button

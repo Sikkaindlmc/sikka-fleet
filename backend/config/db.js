@@ -7,6 +7,8 @@ if (!process.env.MONGODB_URI && !process.env.MONGO_URI) {
 }
 
 const mongoose = require('mongoose');
+// Register all models and schema relations
+require('../models');
 
 const connectDB = async () => {
   // Reuse existing connection if available (for serverless environments like Vercel)

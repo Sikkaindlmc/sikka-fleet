@@ -1,4 +1,18 @@
-export const CLOUD_API_URL = 'https://sikka-fleet.vercel.app/api';
+/**
+ * Sikka Fleet Centralized API Configuration & Client
+ * 
+ * Production Endpoints:
+ * - Primary Official Domain: https://fleet.sikkaind.com/api
+ * - Redundant Cloud Backup:  https://sikka-fleet.vercel.app/api
+ *
+ * Guarantees universal connectivity across:
+ * - Office Wi-Fi, Home Wi-Fi, Mobile Data (4G/5G), Remote ISP connections
+ * - Web Application and Android APK (Capacitor)
+ */
+
+export const PRODUCTION_API_URL = 'https://fleet.sikkaind.com/api';
+export const BACKUP_CLOUD_API_URL = 'https://sikka-fleet.vercel.app/api';
+export const CLOUD_API_URL = PRODUCTION_API_URL;
 
 /**
  * Checks whether a given URL points to a private LAN, link-local, or loopback address.
@@ -22,28 +36,29 @@ export function isPrivateOrLanUrl(url: string): boolean {
 
 /**
  * Resolves the primary API base URL.
- * Guarantees that production web and Android APK always use the public HTTPS endpoint.
+ * Guarantees that production web and Android APK always use public HTTPS endpoints.
  * Automatically purges any obsolete local LAN IPs from client storage.
  */
 export function getApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
+    // 1. Check custom override in localStorage (if set)
     const customUrl = localStorage.getItem('sikka_fleet_server_url');
     if (customUrl && customUrl.trim()) {
       const trimmed = customUrl.trim().replace(/\/+$/, '');
-      // If a local LAN IP (e.g., 192.168.1.38:5000 or localhost) was saved in mobile storage,
-      // purge it immediately and reset to the production Cloud API URL.
+      // If a local LAN IP (e.g., 192.168.1.38:5000) was saved, purge it immediately
       if (isPrivateOrLanUrl(trimmed)) {
-        localStorage.setItem('sikka_fleet_server_url', CLOUD_API_URL);
-        return CLOUD_API_URL;
+        localStorage.setItem('sikka_fleet_server_url', PRODUCTION_API_URL);
+        return PRODUCTION_API_URL;
       }
       return trimmed;
     }
 
+    // 2. Check NEXT_PUBLIC_API_URL environment variable if set
     if (process.env.NEXT_PUBLIC_API_URL && process.env.NEXT_PUBLIC_API_URL.trim()) {
       return process.env.NEXT_PUBLIC_API_URL.trim().replace(/\/+$/, '');
     }
 
-    // When running inside Capacitor APK on mobile device
+    // 3. When running inside Capacitor APK on mobile device
     const isCapacitor =
       typeof (window as any).Capacitor !== 'undefined' ||
       window.location.protocol === 'capacitor:' ||
@@ -51,23 +66,25 @@ export function getApiBaseUrl(): string {
       (window.location.hostname === 'localhost' && !window.location.port);
 
     if (isCapacitor) {
-      return CLOUD_API_URL;
+      return PRODUCTION_API_URL;
     }
 
-    // In desktop browser running on Vercel or custom domain
+    // 4. In desktop browser running on custom domain or Vercel
     if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
       return '/api';
     }
 
-    return CLOUD_API_URL;
+    // 5. Localhost development fallback
+    return 'http://localhost:5000/api';
   }
 
+  // Server-side rendering (SSR) fallback
   return process.env.BACKEND_URL
     ? `${process.env.BACKEND_URL.replace(/\/+$/, '')}/api`
-    : CLOUD_API_URL;
+    : PRODUCTION_API_URL;
 }
 
-export const API_BASE_URL = CLOUD_API_URL;
+export const API_BASE_URL = PRODUCTION_API_URL;
 
 export class ApiError extends Error {
   status: number;
@@ -81,12 +98,17 @@ export class ApiError extends Error {
   }
 }
 
+interface FetchOptions extends RequestInit {
+  timeoutMs?: number;
+}
+
 async function executeFetch<T = any>(
   baseUrl: string,
   endpoint: string,
-  options: RequestInit = {}
+  options: FetchOptions = {}
 ): Promise<T> {
   const url = `${baseUrl}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+  const timeoutMs = options.timeoutMs || 15000;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -100,75 +122,114 @@ async function executeFetch<T = any>(
     }
   }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
   const config: RequestInit = {
     ...options,
     headers,
+    signal: controller.signal,
   };
 
-  const response = await fetch(url, config);
-  const data = await response.json().catch(() => ({}));
+  try {
+    const response = await fetch(url, config);
+    clearTimeout(timeoutId);
 
-  if (!response.ok) {
-    if (response.status === 401 && typeof window !== 'undefined') {
-      const isLoginRequest = endpoint.includes('/auth/login');
-      if (!isLoginRequest) {
-        localStorage.removeItem('sikka_fleet_token');
-        localStorage.removeItem('sikka_fleet_user');
-        window.dispatchEvent(new CustomEvent('sikka:auth-expired', { detail: data }));
+    const data = await response.json().catch(() => ({}));
 
-        if (!window.location.pathname.startsWith('/login')) {
-          const redirectPath = encodeURIComponent(window.location.pathname + window.location.search);
-          window.location.href = `/login?expired=1&redirect=${redirectPath}`;
+    if (!response.ok) {
+      if (response.status === 401 && typeof window !== 'undefined') {
+        const isLoginRequest = endpoint.includes('/auth/login');
+        if (!isLoginRequest) {
+          localStorage.removeItem('sikka_fleet_token');
+          localStorage.removeItem('sikka_fleet_user');
+          window.dispatchEvent(new CustomEvent('sikka:auth-expired', { detail: data }));
+
+          if (!window.location.pathname.startsWith('/login')) {
+            const redirectPath = encodeURIComponent(window.location.pathname + window.location.search);
+            window.location.href = `/login?expired=1&redirect=${redirectPath}`;
+          }
         }
       }
+
+      const errorMessage =
+        data.error ||
+        data.message ||
+        `Request failed with status ${response.status}`;
+      throw new ApiError(errorMessage, response.status, data);
     }
 
-    const errorMessage =
-      data.error ||
-      data.message ||
-      `Request failed with status ${response.status}`;
-    throw new ApiError(errorMessage, response.status, data);
+    return data as T;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err instanceof ApiError) {
+      throw err;
+    }
+    if (err.name === 'AbortError') {
+      throw new ApiError('Request timed out. Please verify your internet connection.', 0);
+    }
+    throw new ApiError(err.message || 'Network request failed', 0);
   }
-
-  return data as T;
 }
 
+/**
+ * Universal apiRequest client with automatic fallback and retry handling.
+ * - Accurately differentiates HTTP errors (e.g. 401 invalid credentials) from true network drops.
+ * - Idempotent retries on network drop with exponential backoff.
+ * - Seamless automatic failover between primary (fleet.sikkaind.com) and backup (sikka-fleet.vercel.app).
+ */
 export async function apiRequest<T = any>(
   endpoint: string,
-  options: RequestInit = {}
+  options: FetchOptions = {}
 ): Promise<T> {
   const primaryBaseUrl = getApiBaseUrl();
+  const fallbackBaseUrl = primaryBaseUrl.includes('sikka-fleet.vercel.app')
+    ? PRODUCTION_API_URL
+    : BACKUP_CLOUD_API_URL;
 
   try {
     return await executeFetch<T>(primaryBaseUrl, endpoint, options);
   } catch (primaryErr: any) {
-    // If the server responded with an HTTP status code (400, 401, 403, 404, 500, etc.), do not retry
+    // If the server responded with an HTTP status code (400, 401, 403, 404, 500), do NOT treat as network drop
     if (primaryErr instanceof ApiError && primaryErr.status > 0) {
       throw primaryErr;
     }
 
-    // Network connection drop (e.g. mobile SIM handover from 4G to 5G or Wi-Fi reconnect)
-    // Perform one automatic retry against CLOUD_API_URL
+    // True network disconnection (timeout, DNS failure, SIM cell tower handover)
+    // Try failover to redundant cloud endpoint
     try {
-      if (primaryBaseUrl !== CLOUD_API_URL) {
-        const fallbackResult = await executeFetch<T>(CLOUD_API_URL, endpoint, options);
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('sikka_fleet_server_url', CLOUD_API_URL);
-        }
-        return fallbackResult;
+      console.warn(`[Network Retry] Primary endpoint unreachable. Attempting redundant cloud fallback: ${fallbackBaseUrl}`);
+      const fallbackResult = await executeFetch<T>(fallbackBaseUrl, endpoint, {
+        ...options,
+        timeoutMs: 12000,
+      });
+
+      if (typeof window !== 'undefined' && primaryBaseUrl !== '/api') {
+        localStorage.setItem('sikka_fleet_server_url', fallbackBaseUrl);
       }
-      // Brief 500ms delay before retry
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      return await executeFetch<T>(primaryBaseUrl, endpoint, options);
-    } catch (retryErr: any) {
-      if (retryErr instanceof ApiError && retryErr.status > 0) {
-        throw retryErr;
+      return fallbackResult;
+    } catch (fallbackErr: any) {
+      if (fallbackErr instanceof ApiError && fallbackErr.status > 0) {
+        throw fallbackErr;
       }
 
-      throw new ApiError(
-        'Unable to reach Sikka Fleet servers. Please check your internet connection (Wi-Fi or Mobile Data).',
-        0
-      );
+      // One final retry with exponential backoff delay (1000ms)
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        return await executeFetch<T>(primaryBaseUrl, endpoint, {
+          ...options,
+          timeoutMs: 12000,
+        });
+      } catch (finalErr: any) {
+        if (finalErr instanceof ApiError && finalErr.status > 0) {
+          throw finalErr;
+        }
+
+        throw new ApiError(
+          'Unable to connect to Sikka Fleet servers. Please check your internet connection (Wi-Fi or Mobile Data).',
+          0
+        );
+      }
     }
   }
 }

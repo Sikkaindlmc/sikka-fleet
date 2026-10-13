@@ -1,13 +1,14 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+require('../models');
 const User = require('../models/User');
+const Driver = require('../models/Driver');
+const Plant = require('../models/Plant');
 const { JWT_SECRET, getJwtSecret, verifyToken } = require('../middleware/auth');
 const connectDB = require('../config/db');
 
 const router = express.Router();
-
-const Driver = require('../models/Driver');
 
 const { authLimiter } = require('../middleware/rateLimiter');
 

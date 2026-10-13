@@ -42,8 +42,23 @@ app.use(
   })
 );
 
+// Ensure all models are registered
+require('./models');
+
 // Security: CORS Allowlist configuration
-const rawAllowedOrigins = process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000,http://localhost:5000,https://sikka-fleet.vercel.app';
+const defaultOrigins = [
+  'https://fleet.sikkaind.com',
+  'http://fleet.sikkaind.com',
+  'https://sikka-fleet.vercel.app',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5000',
+  'http://localhost',
+  'https://localhost',
+  'capacitor://localhost',
+  'ionic://localhost',
+];
+const rawAllowedOrigins = process.env.ALLOWED_ORIGINS || defaultOrigins.join(',');
 const allowedOriginsList = rawAllowedOrigins.split(',').map((o) => o.trim()).filter(Boolean);
 
 app.use(
@@ -57,21 +72,38 @@ app.use(
         return callback(null, true);
       }
 
-      // Allow Capacitor mobile origins and local network access
+      // Check trusted production and mobile origins
+      try {
+        const parsed = new URL(origin);
+        const hostname = parsed.hostname.toLowerCase();
+
+        if (
+          hostname === 'fleet.sikkaind.com' ||
+          hostname.endsWith('.sikkaind.com') ||
+          hostname === 'sikkaind.com' ||
+          hostname === 'sikka-fleet.vercel.app' ||
+          hostname.endsWith('.vercel.app') ||
+          hostname === 'localhost' ||
+          hostname === '127.0.0.1'
+        ) {
+          return callback(null, true);
+        }
+      } catch {
+        // Fallback pattern matching
+      }
+
+      // Allow Capacitor mobile schemes
       if (
-        origin === 'http://localhost' ||
-        origin === 'https://localhost' ||
         origin.startsWith('capacitor://') ||
         origin.startsWith('ionic://') ||
-        origin.startsWith('http://192.168.') ||
-        origin.startsWith('http://10.') ||
-        origin.startsWith('http://172.') ||
-        origin.includes('sikka-fleet')
+        origin.startsWith('http://localhost') ||
+        origin.startsWith('https://localhost')
       ) {
         return callback(null, true);
       }
 
-      return callback(new Error('CORS request blocked by Sikka Fleet security policy.'));
+      // Origin not permitted by CORS policy
+      return callback(null, false);
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-cron-secret'],
@@ -137,7 +169,7 @@ if (require.main === module) {
     console.log(`🚀 Sikka Fleet Backend API running on port ${PORT}`);
     console.log(`📡 URL: http://0.0.0.0:${PORT}`);
     console.log(`📡 Local: http://localhost:${PORT}`);
-    console.log(`📡 Network: http://192.168.1.38:${PORT} / http://192.168.1.33:${PORT}`);
+    console.log(`📡 Production: https://fleet.sikkaind.com/api`);
     console.log(`=========================================`);
 
     // Start 24x7 autonomous server-side GPS 30-minute scheduler
