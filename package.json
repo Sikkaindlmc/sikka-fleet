@@ -11,6 +11,11 @@
     "start:frontend": "npm --prefix frontend run dev",
     "build": "npm --prefix frontend install && npm --prefix frontend run build",
     "build:frontend": "npm --prefix frontend run build",
+    "sync:ios": "npm run build:frontend && npx cap sync ios",
+    "sync:android": "npm run build:frontend && npx cap sync android",
+    "sync:all": "npm run build:frontend && npx cap sync",
+    "open:ios": "npx cap open ios",
+    "open:android": "npx cap open android",
     "deploy": "wrangler deploy",
     "seed": "node backend/scripts/seed.js"
   },
