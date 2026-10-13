@@ -30,3 +30,30 @@ input::placeholder, textarea::placeholder {
   color: #94a3b8 !important;
   opacity: 1;
 }
+
+/* iOS Safe Area & Touch Enhancements */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+
+.ios-safe-top {
+  padding-top: max(env(safe-area-inset-top, 0px), 12px);
+}
+
+.ios-safe-bottom {
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+}
+
+.ios-safe-area {
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}

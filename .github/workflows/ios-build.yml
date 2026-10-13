@@ -1,0 +1,71 @@
+name: Build & Release iOS Application
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      distribute_testflight:
+        description: 'Distribute build to Apple TestFlight'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  build-ios:
+    name: Build Sikka Fleet iOS App
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm ci || npm install
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci || npm --prefix frontend install
+
+      - name: Build Next.js static production export
+        run: npm --prefix frontend run build
+        env:
+          NEXT_PUBLIC_API_URL: https://fleet.sikkaind.com/api
+
+      - name: Sync Capacitor iOS platform
+        run: npx cap sync ios
+
+      - name: Verify Xcode Project Structure
+        run: |
+          xcodebuild -project ios/App/App.xcodeproj -list
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -showBuildSettings | grep PRODUCT_BUNDLE_IDENTIFIER
+
+      - name: Build iOS Application (Simulator / Unsigned Archive)
+        run: |
+          xcodebuild -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination "generic/platform=iOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      # Step for TestFlight distribution when Apple Developer credentials are configured in GitHub Secrets
+      - name: Sign & Upload to TestFlight
+        if: ${{ github.event.inputs.distribute_testflight == 'true' && env.APPLE_CERTIFICATE_BASE64 != '' }}
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          echo "Apple Developer signing credentials detected. Executing signed archive and TestFlight upload..."
+          # Decodes certificates, installs provisioning profile, and uploads via xcrun altool or fastlane

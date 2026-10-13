@@ -55,6 +55,14 @@ const server = app.listen(5099, '127.0.0.1', async () => {
     const health = await makeRequest('/api/health');
     assertTest('GET /api/health returns 200 OK', health.status === 200 && health.body.status === 'OK');
 
+    // 1b. App Version Check for iOS and Android
+    const appVersion = await makeRequest('/api/app/version');
+    assertTest(
+      'GET /api/app/version returns valid cross-platform version information',
+      appVersion.status === 200 && appVersion.body.latestVersion === '1.0.0' && !!appVersion.body.iosAppStoreUrl,
+      `[Version: ${appVersion.body.latestVersion}, iOS URL: ${appVersion.body.iosAppStoreUrl}]`
+    );
+
     // 2. CORS preflight from https://fleet.sikkaind.com
     const corsPreflightFleet = await makeRequest('/api/auth/login', {
       method: 'OPTIONS',

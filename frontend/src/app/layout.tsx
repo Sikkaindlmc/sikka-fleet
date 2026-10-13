@@ -1,7 +1,17 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { AuthProvider } from '../lib/authContext';
 import { VehicleIconProvider } from '../lib/vehicleIconContext';
+import AppVersionChecker from '../components/AppVersionChecker';
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: 'cover',
+  themeColor: '#0f172a',
+};
 
 export const metadata: Metadata = {
   title: 'Sikka Fleet – Fleet Management Application',
@@ -25,7 +35,10 @@ export default function RootLayout({
     <html lang="en" className="h-full bg-slate-50 antialiased">
       <body className="h-full text-slate-900 selection:bg-emerald-500 selection:text-white">
         <AuthProvider>
-          <VehicleIconProvider>{children}</VehicleIconProvider>
+          <VehicleIconProvider>
+            {children}
+            <AppVersionChecker />
+          </VehicleIconProvider>
         </AuthProvider>
       </body>
     </html>

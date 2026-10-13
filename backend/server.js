@@ -83,6 +83,26 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Cross-Platform Version Management & Automatic Update Check (iOS & Android)
+app.get('/api/app/version', (req, res) => {
+  res.json({
+    latestVersion: '1.0.0',
+    minimumSupportedVersion: '1.0.0',
+    buildNumber: 1,
+    mandatoryUpdate: false,
+    iosAppStoreUrl: 'https://apps.apple.com/app/sikka-fleet/id6740000000',
+    androidPlayStoreUrl: 'https://play.google.com/store/apps/details?id=com.sikkaind.sikkafleet',
+    releaseNotes: 'Sikka Fleet v1.0.0: Enterprise fleet management, real-time Wheelseye GPS telemetry, plant geofencing, and multi-network cross-platform connectivity.',
+    features: [
+      'Universal iOS and Android connectivity',
+      'Real-time Wheelseye GPS auto-sync every 30 minutes',
+      'Plant geofence inside/outside monitoring',
+      'Secure Driver and User authentication',
+    ],
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/plants', plantRoutes);

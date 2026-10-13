@@ -4,7 +4,14 @@
   "webDir": "frontend/out",
   "server": {
     "androidScheme": "https",
+    "iosScheme": "capacitor",
     "cleartext": true,
     "allowNavigation": ["*"]
+  },
+  "ios": {
+    "contentInset": "automatic",
+    "scrollEnabled": true,
+    "allowsLinkPreview": false,
+    "limitsNavigationsToAppBoundDomains": false
   }
 }
