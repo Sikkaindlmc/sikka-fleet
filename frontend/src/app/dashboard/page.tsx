@@ -22,6 +22,8 @@ import {
   CreditCard,
   Calendar,
   ExternalLink,
+  Bell,
+  MessageSquare,
 } from 'lucide-react';
 import Link from 'next/link';
 import AppLayout from '../../components/AppLayout';
@@ -164,6 +166,7 @@ interface OutsideVehicle {
   latitude: number;
   longitude: number;
   readableLocation?: string;
+  plans?: VehiclePlanItem[];
 }
 
 export default function DashboardPage() {
@@ -203,7 +206,7 @@ export default function DashboardPage() {
   // Plan Management Modal State
   const { user } = useAuth();
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false);
-  const [selectedVehicleForPlan, setSelectedVehicleForPlan] = useState<PlantVehicle | null>(null);
+  const [selectedVehicleForPlan, setSelectedVehicleForPlan] = useState<PlantVehicle | OutsideVehicle | null>(null);
   const [planInput, setPlanInput] = useState('');
   const [isSavingPlan, setIsSavingPlan] = useState(false);
   const [planError, setPlanError] = useState('');
@@ -235,7 +238,7 @@ export default function DashboardPage() {
   };
 
   // Open Add/Edit Plan Modal for a Vehicle
-  const openPlanModal = (v: PlantVehicle) => {
+  const openPlanModal = (v: PlantVehicle | OutsideVehicle) => {
     setSelectedVehicleForPlan(v);
     setPlanError('');
     // If editing, start with empty input or existing plan so user can write updated plan
@@ -266,12 +269,19 @@ export default function DashboardPage() {
         body: JSON.stringify({
           planText: planInput.trim(),
           plantId: selectedPlant?.id || undefined,
-          plantName: selectedPlant?.name || undefined,
+          plantName: selectedPlant?.name || (activeModal === 'outside' ? 'Outside' : undefined),
         }),
       });
 
       // Update in local plantVehicles state immediately
       setPlantVehicles((prev) =>
+        prev.map((v) =>
+          v.id === selectedVehicleForPlan.id ? { ...v, plans: res.plans } : v
+        )
+      );
+
+      // Update in local outsideVehicles state immediately
+      setOutsideVehicles((prev) =>
         prev.map((v) =>
           v.id === selectedVehicleForPlan.id ? { ...v, plans: res.plans } : v
         )
@@ -1180,8 +1190,8 @@ export default function DashboardPage() {
           onClose={() => !isSavingPlan && setIsPlanModalOpen(false)}
           title={
             selectedVehicleForPlan?.plans && selectedVehicleForPlan.plans.length > 0
-              ? `Edit Dispatch Plan – ${selectedVehicleForPlan?.vehicleNumber}`
-              : `Add Dispatch Plan – ${selectedVehicleForPlan?.vehicleNumber}`
+              ? `Edit Trip Plan – ${selectedVehicleForPlan?.vehicleNumber}`
+              : `Add Next Trip Plan – ${selectedVehicleForPlan?.vehicleNumber}`
           }
           subtitle={`Plan author: ${user?.fullName || 'User'} (@${user?.username || 'user'})`}
           maxWidth="md"
@@ -1217,8 +1227,8 @@ export default function DashboardPage() {
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                 {selectedVehicleForPlan?.plans && selectedVehicleForPlan.plans.length > 0
-                  ? 'New Plan (approx. 20 words) *'
-                  : 'Vehicle Plan (approx. 20 words) *'}
+                  ? 'Update Trip Plan (approx. 20 words) *'
+                  : 'Next Trip Plan (approx. 20 words) *'}
               </label>
               <textarea
                 rows={3}
@@ -1309,6 +1319,7 @@ export default function DashboardPage() {
                     <th className="px-5 py-3">Outside Hour</th>
                     <th className="px-5 py-3">Status</th>
                     <th className="px-5 py-3">Driver Name-Mobile</th>
+                    <th className="px-5 py-3">Next Trip Plan</th>
                     <th className="px-5 py-3 text-center">GPS</th>
                   </tr>
                 </thead>
@@ -1407,6 +1418,74 @@ export default function DashboardPage() {
                               setIsDriversModalOpen(true);
                             }}
                           />
+                        </td>
+
+                        {/* Next Trip Plan (Add Button / Latest Plan with Popup Icon & Notification Icon / Edit option) */}
+                        <td className="px-5 py-3.5">
+                          {(() => {
+                            const hasPlans = Array.isArray(v.plans) && v.plans.length > 0;
+                            // Only latest update display
+                            const latestPlan = hasPlans ? v.plans![v.plans!.length - 1] : null;
+
+                            if (!hasPlans) {
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => openPlanModal(v)}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition cursor-pointer whitespace-nowrap"
+                                  title={`Add Next Trip Plan for ${v.vehicleNumber}`}
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>Next Trip Plan</span>
+                                </button>
+                              );
+                            }
+
+                            return (
+                              <div className="min-w-[220px] max-w-[300px]">
+                                {/* Only Latest Plan Card */}
+                                <div className="text-xs bg-emerald-50/90 p-2.5 rounded-xl border border-emerald-200/90 text-slate-800 shadow-2xs">
+                                  <div className="flex items-center justify-between gap-1.5 mb-1.5">
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      {/* Popup Plan Icon */}
+                                      <span
+                                        className="inline-flex items-center justify-center w-5 h-5 rounded-md bg-emerald-100 text-emerald-800 shrink-0"
+                                        title="Trip Plan Note Popup"
+                                      >
+                                        <MessageSquare className="w-3 h-3" />
+                                      </span>
+                                      {/* Notification Indicator Icon */}
+                                      <span
+                                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200/80 shrink-0"
+                                        title="Active notification alert"
+                                      >
+                                        <Bell className="w-2.5 h-2.5 fill-amber-500 text-amber-600" />
+                                        <span>Alert</span>
+                                      </span>
+                                    </div>
+
+                                    {/* Edit Option */}
+                                    <button
+                                      type="button"
+                                      onClick={() => openPlanModal(v)}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg font-bold text-[11px] bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 transition cursor-pointer shadow-2xs shrink-0"
+                                      title="Edit Trip Plan"
+                                    >
+                                      <Edit3 className="w-3 h-3" />
+                                      <span>Edit</span>
+                                    </button>
+                                  </div>
+
+                                  <span className="text-[10px] font-bold text-emerald-800 uppercase block tracking-wider">
+                                    Plan by {latestPlan!.authorName} ({formatDateTime(latestPlan!.createdAt)}):
+                                  </span>
+                                  <p className="font-semibold text-slate-900 mt-1 break-words leading-relaxed">
+                                    {latestPlan!.planText}
+                                  </p>
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </td>
 
                         {/* 7. GPS: [ Track Now ] (Requirement 24.7) */}

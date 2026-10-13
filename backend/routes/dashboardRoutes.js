@@ -530,16 +530,18 @@ router.post('/vehicles/:vehicleId/plan', async (req, res) => {
 
       let location = statusDoc.readableLocation || statusDoc.location;
       if (!location && typeof statusDoc.latitude === 'number' && typeof statusDoc.longitude === 'number') {
-        location = await getReadableLocation(statusDoc.latitude, statusDoc.longitude);
+        const { getReadableLocation } = require('../services/locationHelper');
+        const activePlants = await Plant.find({ status: 'Active' });
+        location = getReadableLocation(statusDoc.latitude, statusDoc.longitude, activePlants);
       }
       if (!location) {
-        location = plantName || 'Plant Location';
+        location = plantName || 'Outside Location';
       }
 
       // Prevent duplicate notification for identical note within last 30 seconds
       const duplicate = await PlanNotification.findOne({
         vehicleId: statusDoc.vehicleId,
-        planNote: trimmedPlan,
+        planNote: sanitizedPlan,
         createdAt: { $gte: new Date(Date.now() - 30 * 1000) },
       });
 
@@ -555,10 +557,9 @@ router.post('/vehicles/:vehicleId/plan', async (req, res) => {
           location,
           latitude: statusDoc.latitude,
           longitude: statusDoc.longitude,
-          planNote: trimmedPlan,
+          planNote: sanitizedPlan,
           createdAt: newPlanEntry.createdAt,
-          // Creator automatically marked as read so they don't see unread badge for their own note
-          readBy: [{ userId, readAt: new Date() }],
+          readBy: [],
         });
       }
     } catch (notifErr) {
@@ -643,6 +644,7 @@ router.get('/outside/vehicles', async (req, res) => {
           last_sync_source: item.last_sync_source || 'AUTO',
           fleetType: item.vehicleId.fleetType,
           ownerName: item.vehicleId.ownerName,
+          plans: Array.isArray(item.plans) ? item.plans : [],
         };
       });
 
@@ -960,6 +962,7 @@ router.get('/outside/export', async (req, res) => {
       'Outside Hour',
       'Status',
       'Driver Name-Mobile',
+      'Next Trip Plan',
       'Readable Location',
     ];
 
@@ -995,6 +998,11 @@ router.get('/outside/export', async (req, res) => {
         const outsideHour = calculateOutsideHours(plantOutTime, now);
         const driverMobile = v.driverName ? `${v.driverName} - ${v.mobile ? '+91 ' + v.mobile : ''}` : 'No Driver Available';
         const readableLoc = getReadableLocation(st.latitude, st.longitude, activePlants);
+        const plans = Array.isArray(st.plans) ? st.plans : [];
+        const latestPlan = plans.length > 0 ? plans[plans.length - 1] : null;
+        const latestPlanStr = latestPlan
+          ? `${latestPlan.planText} (by ${latestPlan.authorName} on ${formatIST(latestPlan.createdAt)})`
+          : 'No Plan';
 
         const cells = [
           v.vehicleNumber,
@@ -1004,6 +1012,7 @@ router.get('/outside/export', async (req, res) => {
           outsideHour,
           'Outside',
           driverMobile,
+          latestPlanStr,
           readableLoc,
         ];
 
