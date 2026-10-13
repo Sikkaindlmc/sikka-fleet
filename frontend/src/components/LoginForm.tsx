@@ -16,7 +16,7 @@ import {
   Settings,
 } from 'lucide-react';
 import { useAuth } from '../lib/authContext';
-import { getApiBaseUrl, CLOUD_API_URL, LOCAL_API_URL } from '../lib/api';
+import { getApiBaseUrl, CLOUD_API_URL, isPrivateOrLanUrl } from '../lib/api';
 
 interface LoginFormProps {
   redirectUrl?: string;
@@ -44,7 +44,7 @@ export default function LoginForm({
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('sikka_fleet_server_url') || '';
-      if (stored === 'http://192.168.1.38:5000/api') {
+      if (isPrivateOrLanUrl(stored)) {
         localStorage.setItem('sikka_fleet_server_url', CLOUD_API_URL);
         setServerUrlInput(CLOUD_API_URL);
       } else {
@@ -84,13 +84,14 @@ export default function LoginForm({
     usernameInputRef.current?.focus();
   }, [loginType]);
 
-  // Request browser device location (mandatory for Driver login)
-  const getDeviceLocation = (): Promise<{ latitude: number; longitude: number; accuracy: number }> => {
-    return new Promise((resolve, reject) => {
-      if (!('geolocation' in navigator)) {
-        return reject(new Error('Geolocation is not supported by your browser.'));
+  // Request browser device location (with fallback so driver is never blocked)
+  const getDeviceLocation = (): Promise<{ latitude: number; longitude: number; accuracy: number } | null> => {
+    return new Promise((resolve) => {
+      if (typeof window === 'undefined' || !('geolocation' in navigator)) {
+        return resolve(null);
       }
 
+      // First try: High accuracy GPS with 4-second timeout
       navigator.geolocation.getCurrentPosition(
         (position) => {
           resolve({
@@ -99,12 +100,30 @@ export default function LoginForm({
             accuracy: position.coords.accuracy,
           });
         },
-        (error) => {
-          reject(error);
+        () => {
+          // Second try fallback: Standard network location with 3-second timeout
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              resolve({
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+                accuracy: pos.coords.accuracy,
+              });
+            },
+            () => {
+              // Gracefully resolve null so login succeeds even if GPS is off
+              resolve(null);
+            },
+            {
+              enableHighAccuracy: false,
+              timeout: 3000,
+              maximumAge: 60000,
+            }
+          );
         },
         {
           enableHighAccuracy: true,
-          timeout: 10000,
+          timeout: 4000,
           maximumAge: 0,
         }
       );
@@ -136,26 +155,16 @@ export default function LoginForm({
 
     let locationData: { latitude: number; longitude: number; accuracy: number } | undefined = undefined;
 
-    // Mandatory device location access for Driver login (Requirement 14 & 16)
+    // Capture device location for Driver telematics
     if (loginType === 'Driver') {
       setIsLocating(true);
       try {
-        locationData = await getDeviceLocation();
-      } catch (locErr: any) {
-        setIsLoading(false);
-        setIsLocating(false);
-
-        let guidance = 'Please allow location permission in your browser/device to log in as a Driver.';
-        if (locErr.code === 1) {
-          guidance = 'Location permission was denied. Please click the site settings/lock icon in your browser URL bar and allow Location access.';
-        } else if (locErr.code === 2) {
-          guidance = 'Location unavailable. Please make sure your device GPS/Location Services are turned on.';
-        } else if (locErr.code === 3) {
-          guidance = 'Location request timed out. Please verify strong GPS reception and try again.';
+        const loc = await getDeviceLocation();
+        if (loc) {
+          locationData = loc;
         }
-
-        setErrorMessage(`Driver Location Required: ${guidance}`);
-        return;
+      } catch {
+        // Location will be updated in background by dashboard
       } finally {
         setIsLocating(false);
       }
@@ -351,7 +360,7 @@ export default function LoginForm({
                   Backend Server API URL:
                 </label>
                 <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                  Auto-Failover Active
+                  Cloud HTTPS Active
                 </span>
               </div>
               <input
@@ -361,28 +370,17 @@ export default function LoginForm({
                 placeholder="https://sikka-fleet.vercel.app/api"
                 className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
-              <div className="flex gap-2 pt-0.5">
+              <div className="pt-0.5">
                 <button
                   type="button"
                   onClick={() => handleSelectPreset(CLOUD_API_URL)}
-                  className={`flex-1 py-1.5 px-2 rounded-xl text-[10px] font-bold border transition ${
+                  className={`w-full py-1.5 px-2 rounded-xl text-[10px] font-bold border transition ${
                     serverUrlInput === CLOUD_API_URL
                       ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
                       : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
                   }`}
                 >
-                  🌐 Cloud (Global/Mobile)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSelectPreset(LOCAL_API_URL)}
-                  className={`flex-1 py-1.5 px-2 rounded-xl text-[10px] font-bold border transition ${
-                    serverUrlInput === LOCAL_API_URL
-                      ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                  }`}
-                >
-                  🏠 Local Wi-Fi (LAN)
+                  🌐 Cloud Production (https://sikka-fleet.vercel.app/api)
                 </button>
               </div>
               <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">

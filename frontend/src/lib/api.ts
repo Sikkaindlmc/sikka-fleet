@@ -1,42 +1,73 @@
 export const CLOUD_API_URL = 'https://sikka-fleet.vercel.app/api';
-export const LOCAL_API_URL = 'http://192.168.1.38:5000/api';
 
+/**
+ * Checks whether a given URL points to a private LAN, link-local, or loopback address.
+ */
+export function isPrivateOrLanUrl(url: string): boolean {
+  if (!url) return false;
+  return (
+    url.includes('192.168.') ||
+    url.includes('10.') ||
+    url.includes('172.16.') ||
+    url.includes('172.17.') ||
+    url.includes('172.18.') ||
+    url.includes('172.19.') ||
+    url.includes('172.2') ||
+    url.includes('172.30.') ||
+    url.includes('172.31.') ||
+    url.includes('localhost') ||
+    url.includes('127.0.0.1')
+  );
+}
+
+/**
+ * Resolves the primary API base URL.
+ * Guarantees that production web and Android APK always use the public HTTPS endpoint.
+ * Automatically purges any obsolete local LAN IPs from client storage.
+ */
 export function getApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
     const customUrl = localStorage.getItem('sikka_fleet_server_url');
-    // If the stored URL is the obsolete local LAN IP on mobile, migrate to Cloud URL
-    if (customUrl === 'http://192.168.1.38:5000/api') {
-      localStorage.setItem('sikka_fleet_server_url', CLOUD_API_URL);
-      return CLOUD_API_URL;
-    }
     if (customUrl && customUrl.trim()) {
-      return customUrl.trim().replace(/\/+$/, '');
+      const trimmed = customUrl.trim().replace(/\/+$/, '');
+      // If a local LAN IP (e.g., 192.168.1.38:5000 or localhost) was saved in mobile storage,
+      // purge it immediately and reset to the production Cloud API URL.
+      if (isPrivateOrLanUrl(trimmed)) {
+        localStorage.setItem('sikka_fleet_server_url', CLOUD_API_URL);
+        return CLOUD_API_URL;
+      }
+      return trimmed;
     }
-  }
 
-  if (process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, '');
-  }
+    if (process.env.NEXT_PUBLIC_API_URL && process.env.NEXT_PUBLIC_API_URL.trim()) {
+      return process.env.NEXT_PUBLIC_API_URL.trim().replace(/\/+$/, '');
+    }
 
-  if (typeof window !== 'undefined') {
-    // Check if running inside mobile hybrid wrapper (Capacitor)
-    const isCapacitor = !!(window as any).Capacitor;
+    // When running inside Capacitor APK on mobile device
+    const isCapacitor =
+      typeof (window as any).Capacitor !== 'undefined' ||
+      window.location.protocol === 'capacitor:' ||
+      window.location.protocol === 'ionic:' ||
+      (window.location.hostname === 'localhost' && !window.location.port);
+
     if (isCapacitor) {
-      // Default to live cloud server so it works globally on cellular 4G/5G and Wi-Fi
       return CLOUD_API_URL;
     }
+
+    // In desktop browser running on Vercel or custom domain
     if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
       return '/api';
     }
-    return 'http://localhost:5000/api';
+
+    return CLOUD_API_URL;
   }
 
   return process.env.BACKEND_URL
-    ? `${process.env.BACKEND_URL}/api`
+    ? `${process.env.BACKEND_URL.replace(/\/+$/, '')}/api`
     : CLOUD_API_URL;
 }
 
-export const API_BASE_URL = getApiBaseUrl();
+export const API_BASE_URL = CLOUD_API_URL;
 
 export class ApiError extends Error {
   status: number;
@@ -107,34 +138,31 @@ export async function apiRequest<T = any>(
   options: RequestInit = {}
 ): Promise<T> {
   const primaryBaseUrl = getApiBaseUrl();
-  const alternateBaseUrl = primaryBaseUrl.includes('vercel.app')
-    ? LOCAL_API_URL
-    : CLOUD_API_URL;
 
   try {
     return await executeFetch<T>(primaryBaseUrl, endpoint, options);
   } catch (primaryErr: any) {
-    // If server responded with an HTTP status code (401, 403, 400, etc.), do not failover
+    // If the server responded with an HTTP status code (400, 401, 403, 404, 500, etc.), do not retry
     if (primaryErr instanceof ApiError && primaryErr.status > 0) {
       throw primaryErr;
     }
 
-    // Network connection failure (e.g. phone on cellular data cannot reach local LAN IP)
-    // Automatically try the alternate server
+    // Network connection drop (e.g. mobile SIM handover from 4G to 5G or Wi-Fi reconnect)
+    // Perform one automatic retry against CLOUD_API_URL
     try {
-      console.warn(`[API Failover] Connection to ${primaryBaseUrl} failed. Trying ${alternateBaseUrl}...`);
-      const fallbackResult = await executeFetch<T>(alternateBaseUrl, endpoint, options);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('sikka_fleet_server_url', alternateBaseUrl);
+      if (primaryBaseUrl !== CLOUD_API_URL) {
+        return await executeFetch<T>(CLOUD_API_URL, endpoint, options);
       }
-      return fallbackResult;
-    } catch (fallbackErr: any) {
-      if (fallbackErr instanceof ApiError && fallbackErr.status > 0) {
-        throw fallbackErr;
+      // Brief 500ms delay before retry
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return await executeFetch<T>(primaryBaseUrl, endpoint, options);
+    } catch (retryErr: any) {
+      if (retryErr instanceof ApiError && retryErr.status > 0) {
+        throw retryErr;
       }
 
       throw new ApiError(
-        `Unable to reach fleet servers (${primaryBaseUrl}). Please check your internet connection or verify backend server is active.`,
+        'Unable to reach Sikka Fleet servers. Please check your internet connection (Wi-Fi or Mobile Data).',
         0
       );
     }

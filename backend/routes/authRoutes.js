@@ -32,17 +32,6 @@ router.post('/login', authLimiter, async (req, res) => {
       const trimmedDl = username.trim().toUpperCase();
       const cleanedMobile = password.toString().replace(/\D/g, '');
 
-      // Verify mandatory device location
-      if (
-        !location ||
-        typeof location.latitude !== 'number' ||
-        typeof location.longitude !== 'number'
-      ) {
-        return res.status(400).json({
-          error: 'Location access is mandatory for Driver login. Please allow location permission to continue.',
-        });
-      }
-
       const driver = await Driver.findOne({ dlNumber: trimmedDl });
       if (!driver) {
         return res.status(401).json({ error: 'Invalid DL Number or mobile number.' });
@@ -60,13 +49,19 @@ router.post('/login', authLimiter, async (req, res) => {
         });
       }
 
-      // Record driver location and login timestamp
-      driver.lastLoginLocation = {
-        latitude: location.latitude,
-        longitude: location.longitude,
-        accuracy: typeof location.accuracy === 'number' ? location.accuracy : null,
-        capturedAt: new Date(),
-      };
+      // Record driver location if provided, and record login timestamp
+      if (
+        location &&
+        typeof location.latitude === 'number' &&
+        typeof location.longitude === 'number'
+      ) {
+        driver.lastLoginLocation = {
+          latitude: location.latitude,
+          longitude: location.longitude,
+          accuracy: typeof location.accuracy === 'number' ? location.accuracy : null,
+          capturedAt: new Date(),
+        };
+      }
       driver.lastLoginAt = new Date();
       await driver.save();
 

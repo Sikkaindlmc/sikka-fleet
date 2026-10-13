@@ -49,8 +49,8 @@ const allowedOriginsList = rawAllowedOrigins.split(',').map((o) => o.trim()).fil
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile native apps, curl, server-side cron triggers)
-      if (!origin) return callback(null, true);
+      // Allow requests with no origin or 'null' origin (e.g. mobile native apps, Android WebView sandboxed frames, curl, server-side cron triggers)
+      if (!origin || origin === 'null') return callback(null, true);
 
       // Check configured allowlist
       if (allowedOriginsList.includes(origin) || allowedOriginsList.includes('*')) {
