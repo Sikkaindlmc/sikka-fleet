@@ -1184,89 +1184,6 @@ export default function DashboardPage() {
           )}
         </Modal>
 
-        {/* Modal: Add / Edit Dispatch Plan */}
-        <Modal
-          isOpen={isPlanModalOpen}
-          onClose={() => !isSavingPlan && setIsPlanModalOpen(false)}
-          title={
-            selectedVehicleForPlan?.plans && selectedVehicleForPlan.plans.length > 0
-              ? `Edit Trip Plan – ${selectedVehicleForPlan?.vehicleNumber}`
-              : `Add Next Trip Plan – ${selectedVehicleForPlan?.vehicleNumber}`
-          }
-          subtitle={`Plan author: ${user?.fullName || 'User'} (@${user?.username || 'user'})`}
-          maxWidth="md"
-        >
-          {planError && (
-            <div className="flex items-center gap-2 p-3 mb-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-              <span>{planError}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleSavePlan} className="space-y-4">
-            {/* Show only current/latest plan */}
-            {selectedVehicleForPlan?.plans && selectedVehicleForPlan.plans.length > 0 && (
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 mb-2">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
-                  Current Plan
-                </span>
-                {(() => {
-                  const currentPlan = selectedVehicleForPlan.plans[selectedVehicleForPlan.plans.length - 1];
-                  return (
-                    <div className="text-xs bg-white p-2 rounded-lg border border-slate-200/80">
-                      <span className="text-[10px] font-bold text-slate-600 block">
-                        Plan by {currentPlan.authorName} ({formatDateTime(currentPlan.createdAt)}):
-                      </span>
-                      <p className="text-slate-800 font-medium mt-0.5">{currentPlan.planText}</p>
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                {selectedVehicleForPlan?.plans && selectedVehicleForPlan.plans.length > 0
-                  ? 'Update Trip Plan (approx. 20 words) *'
-                  : 'Next Trip Plan (approx. 20 words) *'}
-              </label>
-              <textarea
-                rows={3}
-                value={planInput}
-                onChange={(e) => setPlanInput(e.target.value)}
-                placeholder="e.g. This vehicle will load for Ghaziabad"
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden"
-                disabled={isSavingPlan}
-                required
-              />
-              <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
-                <span>Example: &ldquo;This vehicle will load for Ghaziabad&rdquo;</span>
-                <span>
-                  {planInput.trim().split(/\s+/).filter(Boolean).length} words
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setIsPlanModalOpen(false)}
-                disabled={isSavingPlan}
-                className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isSavingPlan}
-                className="px-5 py-2 text-xs font-bold text-slate-950 bg-emerald-500 hover:bg-emerald-600 rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
-              >
-                {isSavingPlan ? 'Saving...' : 'Save Plan'}
-              </button>
-            </div>
-          </form>
-        </Modal>
-
         {/* Modal: Outside Vehicles Drilldown (Requirement 24) */}
         <Modal
           isOpen={activeModal === 'outside'}
@@ -1730,6 +1647,90 @@ export default function DashboardPage() {
               </div>
             );
           })()}
+        </Modal>
+
+        {/* Modal: Add / Edit Dispatch Plan (Rendered as child modal with zIndex={70} to appear in front of parent popups) */}
+        <Modal
+          isOpen={isPlanModalOpen}
+          onClose={() => !isSavingPlan && setIsPlanModalOpen(false)}
+          title={
+            selectedVehicleForPlan?.plans && selectedVehicleForPlan.plans.length > 0
+              ? `Edit Trip Plan – ${selectedVehicleForPlan?.vehicleNumber}`
+              : `Add Next Trip Plan – ${selectedVehicleForPlan?.vehicleNumber}`
+          }
+          subtitle={`Plan author: ${user?.fullName || 'User'} (@${user?.username || 'user'})`}
+          maxWidth="md"
+          zIndex={70}
+        >
+          {planError && (
+            <div className="flex items-center gap-2 p-3 mb-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{planError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSavePlan} className="space-y-4">
+            {/* Show only current/latest plan */}
+            {selectedVehicleForPlan?.plans && selectedVehicleForPlan.plans.length > 0 && (
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 mb-2">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                  Current Plan
+                </span>
+                {(() => {
+                  const currentPlan = selectedVehicleForPlan.plans[selectedVehicleForPlan.plans.length - 1];
+                  return (
+                    <div className="text-xs bg-white p-2 rounded-lg border border-slate-200/80">
+                      <span className="text-[10px] font-bold text-slate-600 block">
+                        Plan by {currentPlan.authorName} ({formatDateTime(currentPlan.createdAt)}):
+                      </span>
+                      <p className="text-slate-800 font-medium mt-0.5">{currentPlan.planText}</p>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                {selectedVehicleForPlan?.plans && selectedVehicleForPlan.plans.length > 0
+                  ? 'Update Trip Plan (approx. 20 words) *'
+                  : 'Next Trip Plan (approx. 20 words) *'}
+              </label>
+              <textarea
+                rows={3}
+                value={planInput}
+                onChange={(e) => setPlanInput(e.target.value)}
+                placeholder="e.g. This vehicle will load for Ghaziabad"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden"
+                disabled={isSavingPlan}
+                required
+              />
+              <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
+                <span>Example: &ldquo;This vehicle will load for Ghaziabad&rdquo;</span>
+                <span>
+                  {planInput.trim().split(/\s+/).filter(Boolean).length} words
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsPlanModalOpen(false)}
+                disabled={isSavingPlan}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSavingPlan}
+                className="px-5 py-2 text-xs font-bold text-slate-950 bg-emerald-500 hover:bg-emerald-600 rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+              >
+                {isSavingPlan ? 'Saving...' : 'Save Plan'}
+              </button>
+            </div>
+          </form>
         </Modal>
 
         {/* Modal: Nearest Drivers Popup (Requirement 23.3 & 23.10) */}

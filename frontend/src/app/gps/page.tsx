@@ -1290,6 +1290,7 @@ function GpsPageContent() {
           }
           subtitle={`Plan author: ${user?.fullName || 'User'} (@${user?.username || 'user'})`}
           maxWidth="md"
+          zIndex={70}
         >
           {planError && (
             <div className="flex items-center gap-2 p-3 mb-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium">

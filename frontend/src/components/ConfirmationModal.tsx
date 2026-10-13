@@ -32,7 +32,7 @@ export default function ConfirmationModal({
   }[confirmVariant];
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={title} maxWidth="sm">
+    <Modal isOpen={isOpen} onClose={onClose} title={title} maxWidth="sm" zIndex={80}>
       <div className="flex flex-col items-center text-center space-y-4">
         <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
           <AlertTriangle className="w-6 h-6" />

@@ -30,7 +30,7 @@ export default function NearestDriversModal({
   drivers,
 }: NearestDriversModalProps) {
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={title} maxWidth="2xl">
+    <Modal isOpen={isOpen} onClose={onClose} title={title} maxWidth="2xl" zIndex={70}>
       <div className="space-y-4">
         <div className="flex items-center justify-between pb-2 border-b border-slate-100 text-xs">
           <p className="text-slate-500 font-medium">

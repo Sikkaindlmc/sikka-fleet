@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useId } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -10,7 +11,12 @@ interface ModalProps {
   subtitle?: string;
   children: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl' | '5xl';
+  zIndex?: number;
 }
+
+// Module-level tracking for nested modals
+let activeModalCount = 0;
+const modalStack: string[] = [];
 
 export default function Modal({
   isOpen,
@@ -19,24 +25,50 @@ export default function Modal({
   subtitle,
   children,
   maxWidth = 'lg',
+  zIndex = 50,
 }: ModalProps) {
+  const [mounted, setMounted] = useState(false);
+  const modalId = useId();
+
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
-        onClose();
-      }
-    };
-    if (isOpen) {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    activeModalCount++;
+    modalStack.push(modalId);
+    if (activeModalCount === 1) {
       document.body.style.overflow = 'hidden';
     }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.body.style.overflow = 'unset';
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        // Only the top-most modal in the stack handles Escape
+        if (modalStack.length > 0 && modalStack[modalStack.length - 1] === modalId) {
+          e.stopPropagation();
+          onClose();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      const idx = modalStack.lastIndexOf(modalId);
+      if (idx !== -1) {
+        modalStack.splice(idx, 1);
+      }
+      activeModalCount = Math.max(0, activeModalCount - 1);
+      if (activeModalCount === 0) {
+        document.body.style.overflow = 'unset';
+      }
+    };
+  }, [isOpen, onClose, modalId]);
+
+  if (!isOpen || !mounted) return null;
 
   const maxWidthClasses = {
     sm: 'max-w-sm',
@@ -49,8 +81,11 @@ export default function Modal({
     '5xl': 'max-w-5xl',
   }[maxWidth];
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+  const modalContent = (
+    <div
+      className="fixed inset-0 flex items-center justify-center p-3 sm:p-4 overflow-y-auto bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
+      style={{ zIndex }}
+    >
       <div
         className="fixed inset-0"
         onClick={onClose}
@@ -70,7 +105,7 @@ export default function Modal({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-lg transition-colors"
+            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-lg transition-colors cursor-pointer"
             aria-label="Close modal"
           >
             <X className="w-5 h-5" />
@@ -82,4 +117,6 @@ export default function Modal({
       </div>
     </div>
   );
+
+  return createPortal(modalContent, document.body);
 }
