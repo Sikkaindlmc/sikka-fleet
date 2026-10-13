@@ -41,16 +41,10 @@ export function isPrivateOrLanUrl(url: string): boolean {
  */
 export function getApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
-    // 1. Check custom override in localStorage (if set)
+    // 1. Check custom override in localStorage (if set by user)
     const customUrl = localStorage.getItem('sikka_fleet_server_url');
     if (customUrl && customUrl.trim()) {
-      const trimmed = customUrl.trim().replace(/\/+$/, '');
-      // If a local LAN IP (e.g., 192.168.1.38:5000) was saved, purge it immediately
-      if (isPrivateOrLanUrl(trimmed)) {
-        localStorage.setItem('sikka_fleet_server_url', PRODUCTION_API_URL);
-        return PRODUCTION_API_URL;
-      }
-      return trimmed;
+      return customUrl.trim().replace(/\/+$/, '');
     }
 
     // 2. Check NEXT_PUBLIC_API_URL environment variable if set

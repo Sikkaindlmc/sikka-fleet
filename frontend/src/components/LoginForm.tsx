@@ -56,11 +56,11 @@ export default function LoginForm({
   const handleSaveServerUrl = () => {
     if (typeof window !== 'undefined') {
       const trimmed = serverUrlInput.trim().replace(/\/+$/, '');
-      if (trimmed && !isPrivateOrLanUrl(trimmed)) {
+      if (trimmed) {
         localStorage.setItem('sikka_fleet_server_url', trimmed);
         setServerUrlInput(trimmed);
       } else {
-        localStorage.setItem('sikka_fleet_server_url', PRODUCTION_API_URL);
+        localStorage.removeItem('sikka_fleet_server_url');
         setServerUrlInput(PRODUCTION_API_URL);
       }
       setShowServerSettings(false);

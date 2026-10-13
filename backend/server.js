@@ -28,6 +28,9 @@ const { generalApiLimiter } = require('./middleware/rateLimiter');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Trust reverse proxies (Vercel, Cloudflare, mobile carrier CGNAT)
+app.set('trust proxy', true);
+
 // Connect to MongoDB
 connectDB();
 
@@ -45,68 +48,15 @@ app.use(
 // Ensure all models are registered
 require('./models');
 
-// Security: CORS Allowlist configuration
-const defaultOrigins = [
-  'https://fleet.sikkaind.com',
-  'http://fleet.sikkaind.com',
-  'https://sikka-fleet.vercel.app',
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  'http://localhost:5000',
-  'http://localhost',
-  'https://localhost',
-  'capacitor://localhost',
-  'ionic://localhost',
-];
-const rawAllowedOrigins = process.env.ALLOWED_ORIGINS || defaultOrigins.join(',');
-const allowedOriginsList = rawAllowedOrigins.split(',').map((o) => o.trim()).filter(Boolean);
-
+// Universal Multi-Network CORS: Full access from all IP addresses, networks, and origins
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin or 'null' origin (e.g. mobile native apps, Android WebView sandboxed frames, curl, server-side cron triggers)
-      if (!origin || origin === 'null') return callback(null, true);
-
-      // Check configured allowlist
-      if (allowedOriginsList.includes(origin) || allowedOriginsList.includes('*')) {
-        return callback(null, true);
-      }
-
-      // Check trusted production and mobile origins
-      try {
-        const parsed = new URL(origin);
-        const hostname = parsed.hostname.toLowerCase();
-
-        if (
-          hostname === 'fleet.sikkaind.com' ||
-          hostname.endsWith('.sikkaind.com') ||
-          hostname === 'sikkaind.com' ||
-          hostname === 'sikka-fleet.vercel.app' ||
-          hostname.endsWith('.vercel.app') ||
-          hostname === 'localhost' ||
-          hostname === '127.0.0.1'
-        ) {
-          return callback(null, true);
-        }
-      } catch {
-        // Fallback pattern matching
-      }
-
-      // Allow Capacitor mobile schemes
-      if (
-        origin.startsWith('capacitor://') ||
-        origin.startsWith('ionic://') ||
-        origin.startsWith('http://localhost') ||
-        origin.startsWith('https://localhost')
-      ) {
-        return callback(null, true);
-      }
-
-      // Origin not permitted by CORS policy
-      return callback(null, false);
+      // Unconditionally allow all network clients, IPs, browsers, and mobile devices
+      callback(null, true);
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-cron-secret'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-cron-secret', 'x-requested-with'],
     credentials: true,
   })
 );
