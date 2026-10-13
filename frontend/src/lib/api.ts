@@ -151,7 +151,11 @@ export async function apiRequest<T = any>(
     // Perform one automatic retry against CLOUD_API_URL
     try {
       if (primaryBaseUrl !== CLOUD_API_URL) {
-        return await executeFetch<T>(CLOUD_API_URL, endpoint, options);
+        const fallbackResult = await executeFetch<T>(CLOUD_API_URL, endpoint, options);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('sikka_fleet_server_url', CLOUD_API_URL);
+        }
+        return fallbackResult;
       }
       // Brief 500ms delay before retry
       await new Promise((resolve) => setTimeout(resolve, 500));

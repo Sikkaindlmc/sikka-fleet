@@ -370,18 +370,42 @@ export default function LoginForm({
                 placeholder="https://sikka-fleet.vercel.app/api"
                 className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
-              <div className="pt-0.5">
+              <div className="pt-0.5 space-y-1.5">
                 <button
                   type="button"
                   onClick={() => handleSelectPreset(CLOUD_API_URL)}
-                  className={`w-full py-1.5 px-2 rounded-xl text-[10px] font-bold border transition ${
+                  className={`w-full py-1.5 px-2 rounded-xl text-[10px] font-bold border transition text-left ${
                     serverUrlInput === CLOUD_API_URL
                       ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
                       : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
                   }`}
                 >
-                  🌐 Cloud Production (https://sikka-fleet.vercel.app/api)
+                  🌐 Cloud Production (Recommended)
                 </button>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleSelectPreset('http://192.168.1.33:5000/api')}
+                    className={`py-1.5 px-2 rounded-xl text-[10px] font-semibold border transition text-center truncate ${
+                      serverUrlInput === 'http://192.168.1.33:5000/api'
+                        ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
+                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    📶 Wi-Fi (.33)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectPreset('http://192.168.1.38:5000/api')}
+                    className={`py-1.5 px-2 rounded-xl text-[10px] font-semibold border transition text-center truncate ${
+                      serverUrlInput === 'http://192.168.1.38:5000/api'
+                        ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
+                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    🔌 Ethernet (.38)
+                  </button>
+                </div>
               </div>
               <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
                 <button

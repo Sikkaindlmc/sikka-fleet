@@ -64,6 +64,10 @@ export default function PlantPlanNotificationIcon() {
         setUnreadCount(data.unreadCount || 0);
       }
     } catch (err: any) {
+      // Suppress console spam if session expired or unauthenticated; auth layer handles re-login
+      if (err?.status === 401 || err?.message?.includes('Authentication') || err?.message?.includes('token')) {
+        return;
+      }
       console.warn('[PlantPlanNotification fetch failed]:', err?.message || err);
     } finally {
       if (showLoading) setIsLoading(false);

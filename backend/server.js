@@ -132,10 +132,12 @@ app.use((err, req, res, next) => {
 
 // Start Server if run directly
 if (require.main === module) {
-  app.listen(PORT, () => {
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`=========================================`);
     console.log(`🚀 Sikka Fleet Backend API running on port ${PORT}`);
-    console.log(`📡 URL: http://localhost:${PORT}`);
+    console.log(`📡 URL: http://0.0.0.0:${PORT}`);
+    console.log(`📡 Local: http://localhost:${PORT}`);
+    console.log(`📡 Network: http://192.168.1.38:${PORT} / http://192.168.1.33:${PORT}`);
     console.log(`=========================================`);
 
     // Start 24x7 autonomous server-side GPS 30-minute scheduler

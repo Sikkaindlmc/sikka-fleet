@@ -1,6 +1,9 @@
+const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Driver = require('../models/Driver');
+require('../models/Plant');
+const connectDB = require('../config/db');
 
 const getJwtSecret = () => {
   const secret = process.env.JWT_SECRET;
@@ -17,6 +20,8 @@ const JWT_SECRET = getJwtSecret();
 
 const verifyToken = async (req, res, next) => {
   try {
+    await connectDB();
+
     let token = null;
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -48,7 +53,7 @@ const verifyToken = async (req, res, next) => {
       });
     }
 
-    if (!decoded || !decoded.userId) {
+    if (!decoded || !decoded.userId || !mongoose.Types.ObjectId.isValid(decoded.userId)) {
       return res.status(401).json({ 
         error: 'Invalid authentication token payload.',
         code: 'TOKEN_INVALID'
@@ -103,8 +108,11 @@ const verifyToken = async (req, res, next) => {
     req.user = account;
     next();
   } catch (error) {
-    console.error('[Auth Middleware Error]:', error);
-    res.status(500).json({ error: 'Authentication verification failed.' });
+    console.error('[Auth Middleware Error]:', error.message || error);
+    res.status(401).json({ 
+      error: 'Authentication verification failed. Please sign in again.',
+      code: 'AUTH_FAILED' 
+    });
   }
 };
 
