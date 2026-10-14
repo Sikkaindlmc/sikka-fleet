@@ -102,7 +102,13 @@ const vehicleCurrentStatusSchema = new mongoose.Schema(
         planText: { type: String, required: true },
         authorName: { type: String, required: true },
         authorUsername: { type: String },
+        planType: {
+          type: String,
+          enum: ['Add Plan', 'Next Trip Plan'],
+          default: 'Add Plan',
+        },
         createdAt: { type: Date, default: Date.now },
+        expiresAt: { type: Date, default: null, index: true },
       },
     ],
   },

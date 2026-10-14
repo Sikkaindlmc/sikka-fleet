@@ -2,6 +2,7 @@ const express = require('express');
 const GpsSetting = require('../models/GpsSetting');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
 const { syncGpsPositions, testGpsConnection } = require('../services/gpsPollerService');
+const { filterActivePlans } = require('../utils/planHelper');
 
 const router = express.Router();
 
@@ -285,7 +286,8 @@ router.get('/live-vehicles', async (req, res) => {
         }
       }
 
-      const plans = matchedStatus && Array.isArray(matchedStatus.plans) ? matchedStatus.plans : [];
+      const rawPlans = matchedStatus && Array.isArray(matchedStatus.plans) ? matchedStatus.plans : [];
+      const plans = filterActivePlans(rawPlans, matchedPlant ? 'Add Plan' : 'Next Trip Plan');
       const latestPlan = plans.length > 0 ? plans[plans.length - 1] : null;
 
       return {
@@ -351,7 +353,8 @@ router.get('/live-vehicles', async (req, res) => {
           }
         }
 
-        const plans = Array.isArray(st.plans) ? st.plans : [];
+        const rawPlans = Array.isArray(st.plans) ? st.plans : [];
+        const plans = filterActivePlans(rawPlans, matchedPlant ? 'Add Plan' : 'Next Trip Plan');
         const latestPlan = plans.length > 0 ? plans[plans.length - 1] : null;
 
         liveVehicles.push({

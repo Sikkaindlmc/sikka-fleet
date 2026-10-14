@@ -18,6 +18,7 @@ const CronExecutionLog = require('./CronExecutionLog');
 const DriverLocation = require('./DriverLocation');
 const DriverPlantRecord = require('./DriverPlantRecord');
 const Page = require('./Page');
+const PlanAuditLog = require('./PlanAuditLog');
 
 module.exports = {
   User,
@@ -27,6 +28,7 @@ module.exports = {
   VehicleCurrentStatus,
   VehicleLocation,
   PlanNotification,
+  PlanAuditLog,
   PlantEntry,
   PlantEntryEvent,
   GpsConfig,

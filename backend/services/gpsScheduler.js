@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const { executeGpsSync, getNextFixed30MinSlotIST } = require('./gpsSyncService');
 const GpsSetting = require('../models/GpsSetting');
 const PlanNotification = require('../models/PlanNotification');
+const { cleanupExpiredPlans } = require('../utils/planHelper');
 
 let cronJob = null;
 let heartbeatTimer = null;
@@ -53,13 +54,9 @@ async function runScheduledGpsSync(triggerType = 'GPS_AUTO_SYNC_30MIN') {
       lastSlotExecuted = currentSlot;
     }
 
-    // Auto-cleanup expired plan notifications older than 48 hours
+    // Auto-cleanup expired plans (Add Plan >12h, Next Trip Plan >24h)
     try {
-      const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
-      const del = await PlanNotification.deleteMany({ createdAt: { $lt: cutoff } });
-      if (del.deletedCount > 0) {
-        console.log(`[GPS Scheduler] Cleaned up ${del.deletedCount} expired plan notifications (>48h).`);
-      }
+      await cleanupExpiredPlans();
     } catch (cleanupErr) {
       // Non-critical
     }
@@ -101,6 +98,11 @@ function startGpsScheduler() {
   console.log('🌐 Fixed Slots: HH:00:00 IST and HH:30:00 IST (24x7 Autonomous)');
   console.log('🔒 Independent of browser, dashboard, user session, or client PC');
   console.log('===========================================================');
+
+  // Initial cleanup of expired plans on scheduler startup (Add Plan >12h, Next Trip Plan >24h)
+  cleanupExpiredPlans().catch((err) => {
+    console.warn('[GPS Scheduler Startup Cleanup Warning]:', err.message);
+  });
 
   // Layer 1: Node-Cron on minute 0 and 30 in Asia/Kolkata timezone
   try {

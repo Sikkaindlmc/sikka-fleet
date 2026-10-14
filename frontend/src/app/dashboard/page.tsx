@@ -17,6 +17,7 @@ import {
   FileSpreadsheet,
   Plus,
   Edit3,
+  Trash2,
   Users,
   ChevronRight,
   CreditCard,
@@ -60,8 +61,44 @@ export interface VehiclePlanItem {
   planText: string;
   authorName: string;
   authorUsername?: string;
+  planType?: 'Add Plan' | 'Next Trip Plan';
   createdAt: string;
+  expiresAt?: string;
 }
+
+const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+
+export const isPlanActive = (
+  plan?: VehiclePlanItem | null,
+  fallbackType: 'Add Plan' | 'Next Trip Plan' = 'Add Plan'
+): boolean => {
+  if (!plan) return false;
+  const now = Date.now();
+
+  if (plan.expiresAt) {
+    const expTime = new Date(plan.expiresAt).getTime();
+    if (!isNaN(expTime)) {
+      return now < expTime;
+    }
+  }
+
+  const isNextTrip = plan.planType === 'Next Trip Plan' || fallbackType === 'Next Trip Plan';
+  const durationMs = isNextTrip ? TWENTY_FOUR_HOURS_MS : TWELVE_HOURS_MS;
+
+  const createdTime = plan.createdAt ? new Date(plan.createdAt).getTime() : 0;
+  if (!createdTime || isNaN(createdTime)) return false;
+
+  return now - createdTime < durationMs;
+};
+
+export const getActivePlans = (
+  plans?: VehiclePlanItem[],
+  fallbackType: 'Add Plan' | 'Next Trip Plan' = 'Add Plan'
+): VehiclePlanItem[] => {
+  if (!Array.isArray(plans)) return [];
+  return plans.filter((p) => isPlanActive(p, fallbackType));
+};
 
 interface PlantWidget {
   id: string;
@@ -211,6 +248,14 @@ export default function DashboardPage() {
   const [isSavingPlan, setIsSavingPlan] = useState(false);
   const [planError, setPlanError] = useState('');
 
+  // Delete Plan Confirmation Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [vehicleForDelete, setVehicleForDelete] = useState<PlantVehicle | OutsideVehicle | null>(null);
+  const [planForDelete, setPlanForDelete] = useState<VehiclePlanItem | null>(null);
+  const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [isDeletingPlan, setIsDeletingPlan] = useState(false);
+
   // Helper to escape HTML characters for Excel table XML/HTML
   const escapeXml = (val: string | number | null | undefined): string => {
     if (val === null || val === undefined) return '';
@@ -241,10 +286,95 @@ export default function DashboardPage() {
   const openPlanModal = (v: PlantVehicle | OutsideVehicle) => {
     setSelectedVehicleForPlan(v);
     setPlanError('');
-    // If editing, start with empty input or existing plan so user can write updated plan
-    const latestPlan = v.plans && v.plans.length > 0 ? v.plans[v.plans.length - 1] : null;
+    // If editing, start with empty input or existing active plan so user can write updated plan
+    const fallbackType = activeModal === 'outside' || v.status === 'Outside' ? 'Next Trip Plan' : 'Add Plan';
+    const activePlans = getActivePlans(v.plans, fallbackType);
+    const latestPlan = activePlans.length > 0 ? activePlans[activePlans.length - 1] : null;
     setPlanInput(latestPlan ? latestPlan.planText : '');
     setIsPlanModalOpen(true);
+  };
+
+  // Open Mandatory Delete Plan Confirmation Popup
+  const openDeleteConfirmation = (
+    v: PlantVehicle | OutsideVehicle,
+    plan?: VehiclePlanItem | null
+  ) => {
+    setVehicleForDelete(v);
+    const fallbackType = activeModal === 'outside' || v.status === 'Outside' ? 'Next Trip Plan' : 'Add Plan';
+    const activePlans = getActivePlans(v.plans, fallbackType);
+    const targetPlan = plan || (activePlans.length > 0 ? activePlans[activePlans.length - 1] : null);
+    setPlanForDelete(targetPlan);
+    setDeleteConfirmationText('');
+    setDeleteError('');
+    setIsDeleteModalOpen(true);
+  };
+
+  // Handle Confirmed Delete Submission
+  const handleConfirmDeletePlan = async () => {
+    if (!vehicleForDelete) return;
+
+    // Strict validation: must type exact word "Delete"
+    if (deleteConfirmationText.trim() !== 'Delete') {
+      setDeleteError('Please type the exact word "Delete" to confirm deletion.');
+      return;
+    }
+
+    setIsDeletingPlan(true);
+    setDeleteError('');
+
+    try {
+      const res = await apiRequest<{
+        success: boolean;
+        message: string;
+        vehicleNumber: string;
+        plans: VehiclePlanItem[];
+      }>(`/dashboard/vehicles/${vehicleForDelete.id}/plan`, {
+        method: 'DELETE',
+        body: JSON.stringify({
+          confirmation: deleteConfirmationText.trim(),
+          planId: (planForDelete as any)?._id || (planForDelete as any)?.id || undefined,
+        }),
+      });
+
+      // Update in local plantVehicles state immediately
+      setPlantVehicles((prev) =>
+        prev.map((v) =>
+          v.id === vehicleForDelete.id ? { ...v, plans: res.plans || [] } : v
+        )
+      );
+
+      // Update in local outsideVehicles state immediately
+      setOutsideVehicles((prev) =>
+        prev.map((v) =>
+          v.id === vehicleForDelete.id ? { ...v, plans: res.plans || [] } : v
+        )
+      );
+
+      // If Edit Plan modal is currently open for this vehicle, close it
+      if (selectedVehicleForPlan?.id === vehicleForDelete.id) {
+        setIsPlanModalOpen(false);
+        setSelectedVehicleForPlan(null);
+      }
+
+      // Dispatch event to trigger immediate notification panel refresh
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('plant-plan-updated'));
+      }
+
+      setIsDeleteModalOpen(false);
+      setVehicleForDelete(null);
+      setPlanForDelete(null);
+      setDeleteConfirmationText('');
+
+      setAlert({
+        type: 'success',
+        message: res.message || `Plan for vehicle ${vehicleForDelete.vehicleNumber} successfully deleted.`,
+      });
+    } catch (err: any) {
+      setDeleteError(err.message || 'Failed to delete vehicle plan.');
+    } finally {
+      setIsDeletingPlan(false);
+    }
   };
 
   // Handle Save Plan Submission
@@ -258,6 +388,9 @@ export default function DashboardPage() {
       return;
     }
 
+    const isNextTrip = activeModal === 'outside' || selectedVehicleForPlan.status === 'Outside';
+    const planType = isNextTrip ? 'Next Trip Plan' : 'Add Plan';
+
     setIsSavingPlan(true);
     try {
       const res = await apiRequest<{
@@ -268,8 +401,9 @@ export default function DashboardPage() {
         method: 'POST',
         body: JSON.stringify({
           planText: planInput.trim(),
+          planType,
           plantId: selectedPlant?.id || undefined,
-          plantName: selectedPlant?.name || (activeModal === 'outside' ? 'Outside' : undefined),
+          plantName: selectedPlant?.name || (isNextTrip ? 'Outside' : undefined),
         }),
       });
 
@@ -1041,8 +1175,9 @@ export default function DashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white font-medium">
                   {plantVehicles.map((v) => {
-                    const hasPlans = Array.isArray(v.plans) && v.plans.length > 0;
-                    const latestPlan = hasPlans ? v.plans![v.plans!.length - 1] : null;
+                    const activePlans = getActivePlans(v.plans, 'Add Plan');
+                    const hasPlans = activePlans.length > 0;
+                    const latestPlan = hasPlans ? activePlans[activePlans.length - 1] : null;
 
                     return (
                       <tr key={v.id} className="hover:bg-slate-50/70 transition">
@@ -1151,29 +1286,44 @@ export default function DashboardPage() {
                           )}
                         </td>
 
-                        {/* Action Column: Add Plan / Edit */}
+                        {/* Action Column: Add Plan / Edit & Delete */}
                         <td className="px-5 py-3.5 text-right whitespace-nowrap">
-                          <button
-                            type="button"
-                            onClick={() => openPlanModal(v)}
-                            className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold text-xs transition cursor-pointer shadow-2xs ${
-                              !hasPlans
-                                ? 'bg-emerald-500 hover:bg-emerald-600 text-slate-950 shadow-emerald-500/20'
-                                : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200'
-                            }`}
-                          >
-                            {!hasPlans ? (
-                              <>
-                                <Plus className="w-3.5 h-3.5" />
-                                <span>Add Plan</span>
-                              </>
-                            ) : (
-                              <>
-                                <Edit3 className="w-3.5 h-3.5" />
-                                <span>Edit</span>
-                              </>
+                          <div className="inline-flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openPlanModal(v)}
+                              className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold text-xs transition cursor-pointer shadow-2xs ${
+                                !hasPlans
+                                  ? 'bg-emerald-500 hover:bg-emerald-600 text-slate-950 shadow-emerald-500/20'
+                                  : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200'
+                              }`}
+                            >
+                              {!hasPlans ? (
+                                <>
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>Add Plan</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <span>Edit</span>
+                                </>
+                              )}
+                            </button>
+
+                            {/* Delete Plan Icon / Button inside Edit Plan action area */}
+                            {hasPlans && (
+                              <button
+                                type="button"
+                                onClick={() => openDeleteConfirmation(v, latestPlan)}
+                                className="inline-flex items-center justify-center p-1.5 rounded-xl font-bold text-xs bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition cursor-pointer shadow-2xs"
+                                title="Delete Plan"
+                                aria-label={`Delete Plan for ${v.vehicleNumber}`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                              </button>
                             )}
-                          </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1340,9 +1490,10 @@ export default function DashboardPage() {
                         {/* Next Trip Plan (Add Button / Latest Plan with Popup Icon & Notification Icon / Edit option) */}
                         <td className="px-5 py-3.5">
                           {(() => {
-                            const hasPlans = Array.isArray(v.plans) && v.plans.length > 0;
-                            // Only latest update display
-                            const latestPlan = hasPlans ? v.plans![v.plans!.length - 1] : null;
+                            const activePlans = getActivePlans(v.plans, 'Next Trip Plan');
+                            const hasPlans = activePlans.length > 0;
+                            // Only latest active plan display
+                            const latestPlan = hasPlans ? activePlans[activePlans.length - 1] : null;
 
                             if (!hasPlans) {
                               return (
@@ -1381,16 +1532,31 @@ export default function DashboardPage() {
                                       </span>
                                     </div>
 
-                                    {/* Edit Option */}
-                                    <button
-                                      type="button"
-                                      onClick={() => openPlanModal(v)}
-                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg font-bold text-[11px] bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 transition cursor-pointer shadow-2xs shrink-0"
-                                      title="Edit Trip Plan"
-                                    >
-                                      <Edit3 className="w-3 h-3" />
-                                      <span>Edit</span>
-                                    </button>
+                                    <div className="flex items-center gap-1">
+                                      {/* Edit Option */}
+                                      <button
+                                        type="button"
+                                        onClick={() => openPlanModal(v)}
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg font-bold text-[11px] bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 transition cursor-pointer shadow-2xs shrink-0"
+                                        title="Edit Trip Plan"
+                                        aria-label={`Edit Trip Plan for ${v.vehicleNumber}`}
+                                      >
+                                        <Edit3 className="w-3 h-3" />
+                                        <span>Edit</span>
+                                      </button>
+
+                                      {/* Delete Option */}
+                                      <button
+                                        type="button"
+                                        onClick={() => openDeleteConfirmation(v, latestPlan)}
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg font-bold text-[11px] bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 transition cursor-pointer shadow-2xs shrink-0"
+                                        title="Delete Plan"
+                                        aria-label={`Delete Trip Plan for ${v.vehicleNumber}`}
+                                      >
+                                        <Trash2 className="w-3 h-3 text-rose-600" />
+                                        <span>Delete</span>
+                                      </button>
+                                    </div>
                                   </div>
 
                                   <span className="text-[10px] font-bold text-emerald-800 uppercase block tracking-wider">
@@ -1650,87 +1816,256 @@ export default function DashboardPage() {
         </Modal>
 
         {/* Modal: Add / Edit Dispatch Plan (Rendered as child modal with zIndex={70} to appear in front of parent popups) */}
-        <Modal
-          isOpen={isPlanModalOpen}
-          onClose={() => !isSavingPlan && setIsPlanModalOpen(false)}
-          title={
-            selectedVehicleForPlan?.plans && selectedVehicleForPlan.plans.length > 0
-              ? `Edit Trip Plan – ${selectedVehicleForPlan?.vehicleNumber}`
-              : `Add Next Trip Plan – ${selectedVehicleForPlan?.vehicleNumber}`
-          }
-          subtitle={`Plan author: ${user?.fullName || 'User'} (@${user?.username || 'user'})`}
-          maxWidth="md"
-          zIndex={70}
-        >
-          {planError && (
-            <div className="flex items-center gap-2 p-3 mb-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-              <span>{planError}</span>
-            </div>
-          )}
+        {(() => {
+          const isNextTrip = activeModal === 'outside' || selectedVehicleForPlan?.status === 'Outside';
+          const planType = isNextTrip ? 'Next Trip Plan' : 'Add Plan';
+          const activePlans = getActivePlans(selectedVehicleForPlan?.plans, planType);
+          const hasActive = activePlans.length > 0;
+          const currentPlan = hasActive ? activePlans[activePlans.length - 1] : null;
+          const durationHours = isNextTrip ? '24 Hours' : '12 Hours';
 
-          <form onSubmit={handleSavePlan} className="space-y-4">
-            {/* Show only current/latest plan */}
-            {selectedVehicleForPlan?.plans && selectedVehicleForPlan.plans.length > 0 && (
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 mb-2">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
-                  Current Plan
-                </span>
-                {(() => {
-                  const currentPlan = selectedVehicleForPlan.plans[selectedVehicleForPlan.plans.length - 1];
-                  return (
+          return (
+            <Modal
+              isOpen={isPlanModalOpen}
+              onClose={() => !isSavingPlan && setIsPlanModalOpen(false)}
+              title={
+                isNextTrip
+                  ? (hasActive ? `Edit Next Trip Plan – ${selectedVehicleForPlan?.vehicleNumber}` : `Add Next Trip Plan – ${selectedVehicleForPlan?.vehicleNumber}`)
+                  : (hasActive ? `Edit Plan – ${selectedVehicleForPlan?.vehicleNumber}` : `Add Plan – ${selectedVehicleForPlan?.vehicleNumber}`)
+              }
+              subtitle={`Plan author: ${user?.fullName || 'User'} (@${user?.username || 'user'}) | Auto-removes after ${durationHours} from Added Date & Time`}
+              maxWidth="md"
+              zIndex={70}
+            >
+              {planError && (
+                <div className="flex items-center gap-2 p-3 mb-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{planError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleSavePlan} className="space-y-4">
+                {/* Auto-removal badge notice */}
+                <div className="flex items-center gap-2 p-2.5 rounded-xl bg-amber-50/90 border border-amber-200 text-amber-900 text-xs">
+                  <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>
+                    <strong>Auto-Removal Notice:</strong> {isNextTrip ? 'Next Trip Plan will automatically be removed after 24 Hours' : 'Add Plan will automatically be removed after 12 Hours'} from Added Date &amp; Time.
+                  </span>
+                </div>
+
+                {/* Show current active plan */}
+                {currentPlan && (
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 mb-2">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                      Current Active Plan
+                    </span>
                     <div className="text-xs bg-white p-2 rounded-lg border border-slate-200/80">
                       <span className="text-[10px] font-bold text-slate-600 block">
                         Plan by {currentPlan.authorName} ({formatDateTime(currentPlan.createdAt)}):
                       </span>
                       <p className="text-slate-800 font-medium mt-0.5">{currentPlan.planText}</p>
                     </div>
-                  );
-                })()}
-              </div>
-            )}
+                  </div>
+                )}
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                {selectedVehicleForPlan?.plans && selectedVehicleForPlan.plans.length > 0
-                  ? 'Update Trip Plan (approx. 20 words) *'
-                  : 'Next Trip Plan (approx. 20 words) *'}
-              </label>
-              <textarea
-                rows={3}
-                value={planInput}
-                onChange={(e) => setPlanInput(e.target.value)}
-                placeholder="e.g. This vehicle will load for Ghaziabad"
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden"
-                disabled={isSavingPlan}
-                required
-              />
-              <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
-                <span>Example: &ldquo;This vehicle will load for Ghaziabad&rdquo;</span>
-                <span>
-                  {planInput.trim().split(/\s+/).filter(Boolean).length} words
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    {isNextTrip
+                      ? (hasActive ? 'Update Next Trip Plan (approx. 20 words) *' : 'Next Trip Plan (approx. 20 words) *')
+                      : (hasActive ? 'Update Plan (approx. 20 words) *' : 'Add Plan (approx. 20 words) *')}
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={planInput}
+                    onChange={(e) => setPlanInput(e.target.value)}
+                    placeholder={
+                      isNextTrip
+                        ? 'e.g. Next trip scheduled for loading from Aligarh Plant'
+                        : 'e.g. This vehicle will load for Ghaziabad'
+                    }
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden"
+                    disabled={isSavingPlan}
+                    required
+                  />
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
+                    <span>Recommended ~20 words (max 500 chars)</span>
+                    <span>
+                      {planInput.trim().split(/\s+/).filter(Boolean).length} words
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 pt-3 border-t border-slate-100">
+                  {hasActive ? (
+                    <button
+                      type="button"
+                      onClick={() => openDeleteConfirmation(selectedVehicleForPlan!, currentPlan)}
+                      disabled={isSavingPlan}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition cursor-pointer"
+                      title="Delete Plan"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                      <span>Delete Plan</span>
+                    </button>
+                  ) : <div />}
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsPlanModalOpen(false)}
+                      disabled={isSavingPlan}
+                      className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSavingPlan}
+                      className="px-5 py-2 text-xs font-bold text-slate-950 bg-emerald-500 hover:bg-emerald-600 rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+                    >
+                      {isSavingPlan ? 'Saving...' : 'Save Plan'}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </Modal>
+          );
+        })()}
+
+        {/* Modal: Mandatory Delete Plan Confirmation (zIndex={80} in front of all popups) */}
+        <Modal
+          isOpen={isDeleteModalOpen}
+          onClose={() => !isDeletingPlan && setIsDeleteModalOpen(false)}
+          title="Delete Plan Confirmation"
+          subtitle="Mandatory verification required for permanent plan removal"
+          maxWidth="md"
+          zIndex={80}
+        >
+          {deleteError && (
+            <div className="flex items-center gap-2 p-3 mb-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{deleteError}</span>
+            </div>
+          )}
+
+          <div className="space-y-4">
+            {/* Warning Box */}
+            <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 text-xs space-y-1">
+              <div className="flex items-center gap-1.5 font-bold text-amber-900 text-sm">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Warning: Permanent Action</span>
+              </div>
+              <p className="leading-relaxed">
+                You are about to permanently delete this plan. This action cannot be undone. Please verify the plan details before proceeding.
+              </p>
+            </div>
+
+            {/* Plan Snapshot Details */}
+            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5 text-xs">
+              <div className="grid grid-cols-2 gap-3 pb-2.5 border-b border-slate-200/80">
+                <div>
+                  <span className="text-[11px] text-slate-500 block mb-0.5">Vehicle Number</span>
+                  <strong className="text-slate-900 font-mono font-bold text-sm flex items-center gap-1.5">
+                    <Truck className="w-4 h-4 text-emerald-600" />
+                    {vehicleForDelete?.vehicleNumber || '—'}
+                  </strong>
+                </div>
+                <div>
+                  <span className="text-[11px] text-slate-500 block mb-0.5">Plant / Location</span>
+                  <strong className="text-indigo-900 font-bold text-sm flex items-center gap-1.5">
+                    <Building2 className="w-4 h-4 text-indigo-500" />
+                    {selectedPlant?.name || (vehicleForDelete?.status === 'Outside' ? 'Outside' : 'Plant')}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 pb-2.5 border-b border-slate-200/80">
+                <div>
+                  <span className="text-[11px] text-slate-500 block mb-0.5">Created By</span>
+                  <span className="text-slate-800 font-semibold flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-slate-400" />
+                    {planForDelete?.authorName || '—'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[11px] text-slate-500 block mb-0.5">Created Date &amp; Time</span>
+                  <span className="text-slate-800 font-mono font-medium flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-slate-400" />
+                    {planForDelete?.createdAt ? formatDateTime(planForDelete.createdAt) : '—'}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block mb-1">
+                  Plan Details:
                 </span>
+                <div className="p-2.5 rounded-lg bg-white border border-slate-200/90 text-slate-900 font-medium text-xs leading-relaxed break-words max-h-32 overflow-y-auto">
+                  {planForDelete?.planText || '—'}
+                </div>
               </div>
             </div>
 
+            {/* Mandatory Confirmation Input */}
+            <div className="pt-1">
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                To confirm deletion, please type <span className="font-mono text-rose-600 font-black text-sm">Delete</span> below: *
+              </label>
+              <input
+                type="text"
+                value={deleteConfirmationText}
+                onChange={(e) => setDeleteConfirmationText(e.target.value)}
+                placeholder='Type "Delete" here'
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-semibold focus:border-rose-500 focus:ring-1 focus:ring-rose-500 focus:outline-hidden"
+                disabled={isDeletingPlan}
+                autoComplete="off"
+                autoFocus
+              />
+              <div className="flex items-center justify-between text-[11px] mt-1.5 text-slate-500">
+                <span>Confirmation is case-sensitive: type exact word &quot;Delete&quot;</span>
+                {deleteConfirmationText.trim() === 'Delete' ? (
+                  <span className="text-emerald-600 font-bold flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Confirmed</span>
+                  </span>
+                ) : deleteConfirmationText.trim().length > 0 ? (
+                  <span className="text-rose-500 font-semibold">
+                    Must match exact word &quot;Delete&quot;
+                  </span>
+                ) : null}
+              </div>
+            </div>
+
+            {/* Confirmation Actions */}
             <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
               <button
                 type="button"
-                onClick={() => setIsPlanModalOpen(false)}
-                disabled={isSavingPlan}
+                onClick={() => setIsDeleteModalOpen(false)}
+                disabled={isDeletingPlan}
                 className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition cursor-pointer"
               >
                 Cancel
               </button>
               <button
-                type="submit"
-                disabled={isSavingPlan}
-                className="px-5 py-2 text-xs font-bold text-slate-950 bg-emerald-500 hover:bg-emerald-600 rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+                type="button"
+                onClick={handleConfirmDeletePlan}
+                disabled={isDeletingPlan || deleteConfirmationText.trim() !== 'Delete'}
+                className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 active:bg-rose-800 rounded-xl shadow-xs transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {isSavingPlan ? 'Saving...' : 'Save Plan'}
+                {isDeletingPlan ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Deleting Plan...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Plan</span>
+                  </>
+                )}
               </button>
             </div>
-          </form>
+          </div>
         </Modal>
 
         {/* Modal: Nearest Drivers Popup (Requirement 23.3 & 23.10) */}

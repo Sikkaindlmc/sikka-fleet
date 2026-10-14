@@ -27,7 +27,17 @@ export interface PlanNotificationItem {
   latitude?: number;
   longitude?: number;
   planNote: string;
+  planType?: 'Add Plan' | 'Next Trip Plan';
+  activityType?: 'PLAN_CREATED' | 'PLAN_DELETED';
+  deletedBy?: string | null;
+  deletedByUsername?: string | null;
+  deletedAt?: string | null;
+  formattedDeletedAt?: string | null;
+  planCreatedAt?: string | null;
+  formattedPlanCreatedAt?: string | null;
+  planId?: string | null;
   createdAt: string;
+  expiresAt?: string;
   formattedDateTime: string;
   isRead: boolean;
 }
@@ -55,11 +65,24 @@ export default function PlantPlanNotificationIcon() {
       }>('/notifications?limit=50');
 
       if (data && data.success) {
-        // Enforce 48-Hour auto-removal window from added date & time
-        const cutoffTime = Date.now() - 48 * 60 * 60 * 1000;
-        const validList = (data.notifications || []).filter(
-          (item) => new Date(item.createdAt).getTime() >= cutoffTime
-        );
+        // Auto-removal window from added date & time:
+        // - Next Trip Plan: 24 Hours
+        // - Add Plan: 12 Hours
+        const now = Date.now();
+        const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+        const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+
+        const validList = (data.notifications || []).filter((item) => {
+          if (item.expiresAt) {
+            const exp = new Date(item.expiresAt).getTime();
+            if (!isNaN(exp)) return now < exp;
+          }
+          const isNextTrip = item.planType === 'Next Trip Plan' || item.plantName === 'Outside';
+          const maxAge = isNextTrip ? TWENTY_FOUR_HOURS_MS : TWELVE_HOURS_MS;
+          const created = new Date(item.createdAt).getTime();
+          return now - created < maxAge;
+        });
+
         setNotifications(validList);
         setUnreadCount(data.unreadCount || 0);
       }
@@ -286,17 +309,32 @@ export default function PlantPlanNotificationIcon() {
                 >
                   {/* Top Bar: Title Badge & Time */}
                   <div className="flex items-start justify-between gap-2 mb-2">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs font-extrabold text-slate-900 flex items-center gap-1">
-                        📢 <span className="text-emerald-700">New Plant Plan</span>
-                      </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {item.activityType === 'PLAN_DELETED' ? (
+                        <span className="text-xs font-extrabold text-slate-900 flex items-center gap-1">
+                          🗑️ <span className="text-rose-700">Plan Deleted</span>
+                          <span className="text-[10px] text-rose-700 bg-rose-50 px-1.5 py-0.2 rounded border border-rose-200 font-semibold">Activity</span>
+                        </span>
+                      ) : item.planType === 'Next Trip Plan' || item.plantName === 'Outside' ? (
+                        <span className="text-xs font-extrabold text-slate-900 flex items-center gap-1">
+                          📢 <span className="text-amber-700">Next Trip Plan</span>
+                          <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200 font-semibold">24h</span>
+                        </span>
+                      ) : (
+                        <span className="text-xs font-extrabold text-slate-900 flex items-center gap-1">
+                          📢 <span className="text-emerald-700">Plant Plan</span>
+                          <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200 font-semibold">12h</span>
+                        </span>
+                      )}
                       {!item.isRead && (
                         <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-emerald-200 animate-pulse" />
                       )}
                     </div>
                     <span className="text-[10px] font-medium text-slate-400 flex items-center gap-1 shrink-0">
                       <Clock className="w-3 h-3 text-slate-400" />
-                      {item.formattedDateTime}
+                      {item.activityType === 'PLAN_DELETED' && item.formattedDeletedAt
+                        ? item.formattedDeletedAt
+                        : item.formattedDateTime}
                     </span>
                   </div>
 
@@ -318,29 +356,77 @@ export default function PlantPlanNotificationIcon() {
                       </div>
                     </div>
 
-                    {/* Plan By */}
-                    <div className="flex items-center gap-1.5 text-slate-600">
-                      <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <span className="text-slate-500">Plan By:</span>
-                      <strong className="text-slate-800 font-semibold">{item.planBy}</strong>
-                    </div>
+                    {item.activityType === 'PLAN_DELETED' ? (
+                      <>
+                        {/* Deleted By */}
+                        <div className="flex items-center gap-1.5 text-slate-600">
+                          <User className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                          <span className="text-slate-500 font-medium">Deleted By:</span>
+                          <strong className="text-rose-900 font-bold">{item.deletedBy || 'Authorized User'}</strong>
+                        </div>
 
-                    {/* Date & Time */}
-                    <div className="flex items-center gap-1.5 text-slate-600">
-                      <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <span className="text-slate-500">Date & Time:</span>
-                      <strong className="font-mono text-slate-800 text-[11px]">
-                        {item.formattedDateTime}
-                      </strong>
-                    </div>
+                        {/* Created By */}
+                        <div className="flex items-center gap-1.5 text-slate-600">
+                          <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span className="text-slate-500">Created by:</span>
+                          <span className="text-slate-800 font-semibold">
+                            {item.planBy}
+                            {item.formattedPlanCreatedAt && (
+                              <span className="text-slate-500 font-normal ml-1">
+                                (Date {item.formattedPlanCreatedAt})
+                              </span>
+                            )}
+                          </span>
+                        </div>
+
+                        {/* Deleted At */}
+                        <div className="flex items-center gap-1.5 text-slate-600">
+                          <Clock className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                          <span className="text-slate-500">Deleted At:</span>
+                          <strong className="font-mono text-slate-800 text-[11px]">
+                            {item.formattedDeletedAt || item.formattedDateTime}
+                          </strong>
+                        </div>
+
+                        {/* Activity */}
+                        <div className="flex items-center gap-1.5 text-slate-600">
+                          <span className="text-slate-500">Activity:</span>
+                          <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-100 text-rose-800 uppercase tracking-wide">
+                            Plan Deleted
+                          </span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {/* Plan By */}
+                        <div className="flex items-center gap-1.5 text-slate-600">
+                          <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span className="text-slate-500">Plan By:</span>
+                          <strong className="text-slate-800 font-semibold">{item.planBy}</strong>
+                        </div>
+
+                        {/* Date & Time */}
+                        <div className="flex items-center gap-1.5 text-slate-600">
+                          <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span className="text-slate-500">Date & Time:</span>
+                          <strong className="font-mono text-slate-800 text-[11px]">
+                            {item.formattedDateTime}
+                          </strong>
+                        </div>
+                      </>
+                    )}
 
                     {/* Plan Note Box */}
                     <div className="mt-2 pt-2 border-t border-slate-100">
                       <div className="text-[11px] font-semibold text-slate-500 mb-0.5 flex items-center gap-1">
-                        <FileText className="w-3 h-3 text-emerald-600" />
-                        <span>Plan Note:</span>
+                        <FileText className={`w-3 h-3 ${item.activityType === 'PLAN_DELETED' ? 'text-rose-600' : 'text-emerald-600'}`} />
+                        <span>{item.activityType === 'PLAN_DELETED' ? 'Deleted Plan Details:' : 'Plan Note:'}</span>
                       </div>
-                      <div className="p-2 rounded-lg bg-emerald-50/70 border border-emerald-200/80 text-emerald-950 text-xs font-medium leading-relaxed break-words">
+                      <div className={`p-2 rounded-lg text-xs font-medium leading-relaxed break-words ${
+                        item.activityType === 'PLAN_DELETED'
+                          ? 'bg-rose-50/70 border border-rose-200/80 text-rose-950'
+                          : 'bg-emerald-50/70 border border-emerald-200/80 text-emerald-950'
+                      }`}>
                         {item.planNote}
                       </div>
                     </div>
@@ -396,17 +482,27 @@ export default function PlantPlanNotificationIcon() {
         <div className="fixed inset-0 z-60 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             {/* Modal Header */}
-            <div className="px-6 py-4.5 bg-slate-900 text-white flex items-center justify-between">
+            <div className={`px-6 py-4.5 text-white flex items-center justify-between ${
+              selectedNotification.activityType === 'PLAN_DELETED' ? 'bg-slate-950' : 'bg-slate-900'
+            }`}>
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-emerald-500 flex items-center justify-center text-slate-950 font-black">
-                  📢
+                <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black ${
+                  selectedNotification.activityType === 'PLAN_DELETED'
+                    ? 'bg-rose-500 text-white'
+                    : 'bg-emerald-500 text-slate-950'
+                }`}>
+                  {selectedNotification.activityType === 'PLAN_DELETED' ? '🗑️' : '📢'}
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-white">
-                    New Plant Plan Details
+                    {selectedNotification.activityType === 'PLAN_DELETED'
+                      ? 'Plan Deleted – Audit Record'
+                      : 'New Plant Plan Details'}
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Vehicle Dispatch & Operational Plan
+                    {selectedNotification.activityType === 'PLAN_DELETED'
+                      ? 'Permanently removed vehicle dispatch plan'
+                      : 'Vehicle Dispatch & Operational Plan'}
                   </p>
                 </div>
               </div>
@@ -438,29 +534,71 @@ export default function PlantPlanNotificationIcon() {
                   </strong>
                 </div>
 
-                <div>
-                  <span className="text-xs text-slate-500 block mb-0.5">Plan By</span>
-                  <strong className="text-slate-800 font-semibold text-sm flex items-center gap-1.5">
-                    <User className="w-4 h-4 text-slate-400" />
-                    {selectedNotification.planBy}
-                  </strong>
-                </div>
+                {selectedNotification.activityType === 'PLAN_DELETED' ? (
+                  <>
+                    <div>
+                      <span className="text-xs text-slate-500 block mb-0.5">Deleted By</span>
+                      <strong className="text-rose-900 font-bold text-sm flex items-center gap-1.5">
+                        <User className="w-4 h-4 text-rose-500" />
+                        {selectedNotification.deletedBy || 'Authorized User'}
+                      </strong>
+                    </div>
 
-                <div>
-                  <span className="text-xs text-slate-500 block mb-0.5">Date & Time</span>
-                  <strong className="text-slate-800 font-mono font-semibold text-xs flex items-center gap-1.5">
-                    <Clock className="w-4 h-4 text-slate-400" />
-                    {selectedNotification.formattedDateTime}
-                  </strong>
-                </div>
+                    <div>
+                      <span className="text-xs text-slate-500 block mb-0.5">Deleted At</span>
+                      <strong className="text-slate-800 font-mono font-semibold text-xs flex items-center gap-1.5">
+                        <Clock className="w-4 h-4 text-rose-500" />
+                        {selectedNotification.formattedDeletedAt || selectedNotification.formattedDateTime}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span className="text-xs text-slate-500 block mb-0.5">Originally Created By</span>
+                      <strong className="text-slate-800 font-semibold text-sm flex items-center gap-1.5">
+                        <User className="w-4 h-4 text-slate-400" />
+                        {selectedNotification.planBy}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span className="text-xs text-slate-500 block mb-0.5">Created Date & Time</span>
+                      <strong className="text-slate-800 font-mono font-semibold text-xs flex items-center gap-1.5">
+                        <Clock className="w-4 h-4 text-slate-400" />
+                        {selectedNotification.formattedPlanCreatedAt || '—'}
+                      </strong>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <span className="text-xs text-slate-500 block mb-0.5">Plan By</span>
+                      <strong className="text-slate-800 font-semibold text-sm flex items-center gap-1.5">
+                        <User className="w-4 h-4 text-slate-400" />
+                        {selectedNotification.planBy}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <span className="text-xs text-slate-500 block mb-0.5">Date & Time</span>
+                      <strong className="text-slate-800 font-mono font-semibold text-xs flex items-center gap-1.5">
+                        <Clock className="w-4 h-4 text-slate-400" />
+                        {selectedNotification.formattedDateTime}
+                      </strong>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div>
                 <span className="text-xs font-bold text-slate-700 block mb-1 flex items-center gap-1.5">
-                  <FileText className="w-4 h-4 text-emerald-600" />
-                  Plan Note
+                  <FileText className={`w-4 h-4 ${selectedNotification.activityType === 'PLAN_DELETED' ? 'text-rose-600' : 'text-emerald-600'}`} />
+                  {selectedNotification.activityType === 'PLAN_DELETED' ? 'Deleted Plan Details' : 'Plan Note'}
                 </span>
-                <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 font-medium text-sm leading-relaxed whitespace-pre-wrap">
+                <div className={`p-4 rounded-xl font-medium text-sm leading-relaxed whitespace-pre-wrap ${
+                  selectedNotification.activityType === 'PLAN_DELETED'
+                    ? 'bg-rose-50 border border-rose-200 text-rose-950'
+                    : 'bg-emerald-50 border border-emerald-200 text-emerald-950'
+                }`}>
                   {selectedNotification.planNote}
                 </div>
               </div>

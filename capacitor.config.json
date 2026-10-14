@@ -3,10 +3,19 @@
   "appName": "Sikka Fleet",
   "webDir": "frontend/out",
   "server": {
+    "url": "https://sikka-fleet.vercel.app",
     "androidScheme": "https",
     "iosScheme": "capacitor",
     "cleartext": true,
-    "allowNavigation": ["*"]
+    "allowNavigation": [
+      "sikka-fleet.vercel.app",
+      "*.vercel.app",
+      "fleet.sikkaind.com",
+      "*.sikkaind.com"
+    ]
+  },
+  "android": {
+    "allowMixedContent": true
   },
   "ios": {
     "contentInset": "automatic",

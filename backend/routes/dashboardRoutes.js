@@ -14,7 +14,15 @@ const {
 const { calculateHaversineDistance } = require('../services/geofenceService');
 const { getReadableLocation } = require('../services/locationHelper');
 const { getNextFixed30MinSlot } = require('../services/gpsCronWorker');
+const mongoose = require('mongoose');
+const PlanAuditLog = require('../models/PlanAuditLog');
 const { isValidObjectId, sanitizeText } = require('../utils/security');
+const {
+  filterActivePlans,
+  getPlanExpiresAt,
+  TWELVE_HOURS_MS,
+  TWENTY_FOUR_HOURS_MS,
+} = require('../utils/planHelper');
 
 const router = express.Router();
 
@@ -264,7 +272,13 @@ router.get('/plants/:plantId/vehicles', async (req, res) => {
           latest_gps_timestamp: item.latest_gps_timestamp || item.lastUpdatedAt || entryDateTime,
           gps_status: item.gps_status || 'LIVE',
           last_sync_source: item.last_sync_source || 'AUTO',
-          plans: Array.isArray(item.plans) ? item.plans : [],
+          plans: (() => {
+            const activePlans = filterActivePlans(item.plans, 'Add Plan');
+            if (Array.isArray(item.plans) && item.plans.length !== activePlans.length) {
+              VehicleCurrentStatus.updateOne({ _id: item._id }, { $set: { plans: activePlans } }).catch(() => {});
+            }
+            return activePlans;
+          })(),
         };
       });
 
@@ -498,16 +512,33 @@ router.post('/vehicles/:vehicleId/plan', async (req, res) => {
     if (!Array.isArray(statusDoc.plans)) {
       statusDoc.plans = [];
     }
+    const isOutsideVehicle =
+      req.body.planType === 'Next Trip Plan' ||
+      req.body.plantName === 'Outside' ||
+      statusDoc.status === 'Outside';
+
+    const planType = isOutsideVehicle ? 'Next Trip Plan' : 'Add Plan';
+    const createdAt = new Date();
+    const expiresAt = getPlanExpiresAt(createdAt, planType);
+
+    // Filter out already expired plans before saving new one
+    const activeExistingPlans = filterActivePlans(
+      statusDoc.plans,
+      statusDoc.status === 'Outside' ? 'Next Trip Plan' : 'Add Plan'
+    );
 
     const authorName = req.user.fullName || req.user.name || req.user.username || 'Sikka Team';
     const newPlanEntry = {
       planText: sanitizedPlan,
       authorName,
       authorUsername: req.user.username,
-      createdAt: new Date(),
+      planType,
+      createdAt,
+      expiresAt,
     };
 
-    statusDoc.plans.push(newPlanEntry);
+    activeExistingPlans.push(newPlanEntry);
+    statusDoc.plans = activeExistingPlans;
     await statusDoc.save();
 
     // Automatically create Plant Plan Notification for real-time alerts across all logged in users
@@ -552,6 +583,7 @@ router.post('/vehicles/:vehicleId/plan', async (req, res) => {
           plantName,
           vehicleId: statusDoc.vehicleId,
           vehicleNumber,
+          planType,
           planBy: authorName,
           planByUserId: userId,
           location,
@@ -559,6 +591,7 @@ router.post('/vehicles/:vehicleId/plan', async (req, res) => {
           longitude: statusDoc.longitude,
           planNote: sanitizedPlan,
           createdAt: newPlanEntry.createdAt,
+          expiresAt,
           readBy: [],
         });
       }
@@ -574,6 +607,181 @@ router.post('/vehicles/:vehicleId/plan', async (req, res) => {
   } catch (error) {
     console.error('[Add Vehicle Plan Error]:', error);
     res.status(500).json({ error: 'Failed to save vehicle plan.' });
+  }
+});
+
+// DELETE /api/dashboard/vehicles/:vehicleId/plan - Delete dispatch plan with mandatory confirmation
+router.delete('/vehicles/:vehicleId/plan', async (req, res) => {
+  try {
+    if (req.user.role === 'Driver') {
+      return res.status(403).json({ error: 'Access Denied: Drivers cannot delete vehicle plans.' });
+    }
+
+    const { vehicleId } = req.params;
+    if (!isValidObjectId(vehicleId)) {
+      return res.status(400).json({ error: 'Invalid vehicle ID format.' });
+    }
+
+    const { confirmation, planId } = req.body || {};
+    // Mandatory confirmation: user must enter exact word "Delete"
+    if (!confirmation || typeof confirmation !== 'string' || confirmation.trim() !== 'Delete') {
+      return res.status(400).json({
+        error: 'Mandatory confirmation failed. You must enter the exact word "Delete" to confirm deletion.',
+      });
+    }
+
+    const statusDoc = await VehicleCurrentStatus.findOne({ vehicleId });
+    if (!statusDoc || !Array.isArray(statusDoc.plans) || statusDoc.plans.length === 0) {
+      return res.status(404).json({ error: 'No active plan found for this vehicle to delete.' });
+    }
+
+    // RBAC: Check plant permission if user has restricted plant assignments and vehicle is inside a plant
+    if (req.user.role !== 'Admin' && req.user.accessPlants && req.user.accessPlants.length > 0) {
+      if (statusDoc.currentPlantId) {
+        const allowedIds = req.user.accessPlants.map((p) => (p._id ? p._id.toString() : p.toString()));
+        if (!allowedIds.includes(statusDoc.currentPlantId.toString())) {
+          return res.status(403).json({
+            error: 'Access Denied: You do not have permission for the plant where this vehicle is located.',
+          });
+        }
+      }
+    }
+
+    // Find the target plan to delete: by planId if provided, or the latest active plan
+    let planIndex = -1;
+    if (planId) {
+      planIndex = statusDoc.plans.findIndex((p) => p._id && p._id.toString() === planId.toString());
+    }
+    if (planIndex === -1) {
+      planIndex = statusDoc.plans.length - 1;
+    }
+
+    const targetPlan = statusDoc.plans[planIndex];
+    if (!targetPlan) {
+      return res.status(404).json({ error: 'Target plan could not be found.' });
+    }
+
+    // Capture plan snapshot details BEFORE deletion
+    const capturedPlanId = targetPlan._id ? targetPlan._id.toString() : new mongoose.Types.ObjectId().toString();
+    const capturedPlanText = targetPlan.planText;
+    const capturedAuthorName = targetPlan.authorName || 'Unknown';
+    const capturedAuthorUsername = targetPlan.authorUsername || '';
+    const capturedCreatedAt = targetPlan.createdAt || new Date();
+    const capturedPlanType = targetPlan.planType || (statusDoc.status === 'Outside' ? 'Next Trip Plan' : 'Add Plan');
+
+    // Remove the plan from statusDoc
+    statusDoc.plans.splice(planIndex, 1);
+    await statusDoc.save();
+
+    // Retrieve vehicle details for audit & notification
+    const vehicle = await Vehicle.findById(vehicleId);
+    const vehicleNumber = vehicle?.vehicleNumber ? vehicle.vehicleNumber.toUpperCase() : (statusDoc.vehicleNumber || 'UNKNOWN');
+
+    // Retrieve plant / location
+    let plantId = statusDoc.currentPlantId || null;
+    let plantName = statusDoc.lastExitPlantName;
+    if (plantId) {
+      const plantDoc = await Plant.findById(plantId);
+      if (plantDoc) plantName = plantDoc.plantName;
+    }
+    if (!plantName) {
+      plantName = statusDoc.status === 'Outside' ? 'Outside' : 'Plant';
+    }
+
+    let location = statusDoc.readableLocation || statusDoc.location;
+    if (!location && typeof statusDoc.latitude === 'number' && typeof statusDoc.longitude === 'number') {
+      const { getReadableLocation } = require('../services/locationHelper');
+      const activePlants = await Plant.find({ status: 'Active' });
+      location = getReadableLocation(statusDoc.latitude, statusDoc.longitude, activePlants);
+    }
+    if (!location) {
+      location = plantName || 'Outside Location';
+    }
+
+    // Capture authenticated deleting user information
+    const deletedByName = req.user.fullName || req.user.name || req.user.username || 'Authorized User';
+    const deletedByUsername = req.user.username || 'user';
+    const deletedByUserId = req.user._id || req.user.id;
+    const deletedAt = new Date();
+
+    // 1. Create Permanent Audit Record (Permanent Audit Trail - Requirement 6)
+    try {
+      await PlanAuditLog.create({
+        activityType: 'PLAN_DELETED',
+        planId: capturedPlanId,
+        vehicleId: statusDoc.vehicleId,
+        vehicleNumber,
+        plantId,
+        plantName,
+        location,
+        planType: capturedPlanType,
+        planText: capturedPlanText,
+        planAuthorName: capturedAuthorName,
+        planAuthorUsername: capturedAuthorUsername,
+        planCreatedAt: capturedCreatedAt,
+        deletedByName,
+        deletedByUsername,
+        deletedByUserId,
+        deletedAt,
+        metadata: {
+          ip: req.ip,
+          userAgent: req.headers['user-agent'],
+        },
+      });
+    } catch (auditErr) {
+      console.error('[Plan Deletion Audit Log Error]:', auditErr.message);
+    }
+
+    // 2. Create Notification Bar Entry (Mandatory Delete Activity Notification - Requirements 3 & 4)
+    try {
+      const notifDuration = capturedPlanType === 'Next Trip Plan' ? TWENTY_FOUR_HOURS_MS : TWELVE_HOURS_MS;
+      const notifExpiresAt = new Date(deletedAt.getTime() + notifDuration);
+
+      await PlanNotification.create({
+        activityType: 'PLAN_DELETED',
+        plantId,
+        plantName,
+        vehicleId: statusDoc.vehicleId,
+        vehicleNumber,
+        planType: capturedPlanType,
+        planBy: capturedAuthorName, // Original plan creator
+        planByUserId: null,
+        deletedBy: deletedByName,
+        deletedByUsername,
+        deletedByUserId,
+        deletedAt,
+        location,
+        latitude: statusDoc.latitude,
+        longitude: statusDoc.longitude,
+        planNote: capturedPlanText,
+        planCreatedAt: capturedCreatedAt,
+        planId: capturedPlanId,
+        createdAt: deletedAt,
+        expiresAt: notifExpiresAt,
+        readBy: [],
+      });
+    } catch (notifErr) {
+      console.error('[Plan Deletion Notification Error]:', notifErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: `Plan for vehicle ${vehicleNumber} successfully deleted.`,
+      vehicleNumber,
+      plans: statusDoc.plans,
+      deletedPlan: {
+        planId: capturedPlanId,
+        vehicleNumber,
+        planText: capturedPlanText,
+        planAuthorName: capturedAuthorName,
+        planCreatedAt: capturedCreatedAt,
+        deletedByName,
+        deletedAt,
+      },
+    });
+  } catch (error) {
+    console.error('[Delete Vehicle Plan Error]:', error);
+    res.status(500).json({ error: 'Failed to delete vehicle plan.' });
   }
 });
 
@@ -644,7 +852,13 @@ router.get('/outside/vehicles', async (req, res) => {
           last_sync_source: item.last_sync_source || 'AUTO',
           fleetType: item.vehicleId.fleetType,
           ownerName: item.vehicleId.ownerName,
-          plans: Array.isArray(item.plans) ? item.plans : [],
+          plans: (() => {
+            const activePlans = filterActivePlans(item.plans, 'Next Trip Plan');
+            if (Array.isArray(item.plans) && item.plans.length !== activePlans.length) {
+              VehicleCurrentStatus.updateOne({ _id: item._id }, { $set: { plans: activePlans } }).catch(() => {});
+            }
+            return activePlans;
+          })(),
         };
       });
 
@@ -839,7 +1053,7 @@ router.get('/plants/:plantId/export', async (req, res) => {
       .filter((st) => st.vehicleId && st.vehicleId.status === 'Active')
       .map((st) => {
         const v = st.vehicleId;
-        const plans = Array.isArray(st.plans) ? st.plans : [];
+        const plans = filterActivePlans(st.plans, 'Add Plan');
         const latestPlan = plans.length > 0 ? plans[plans.length - 1] : null;
         const latestPlanStr = latestPlan
           ? `${latestPlan.planText} (by ${latestPlan.authorName} on ${formatIST(latestPlan.createdAt)})`
@@ -998,7 +1212,7 @@ router.get('/outside/export', async (req, res) => {
         const outsideHour = calculateOutsideHours(plantOutTime, now);
         const driverMobile = v.driverName ? `${v.driverName} - ${v.mobile ? '+91 ' + v.mobile : ''}` : 'No Driver Available';
         const readableLoc = getReadableLocation(st.latitude, st.longitude, activePlants);
-        const plans = Array.isArray(st.plans) ? st.plans : [];
+        const plans = filterActivePlans(st.plans, 'Next Trip Plan');
         const latestPlan = plans.length > 0 ? plans[plans.length - 1] : null;
         const latestPlanStr = latestPlan
           ? `${latestPlan.planText} (by ${latestPlan.authorName} on ${formatIST(latestPlan.createdAt)})`

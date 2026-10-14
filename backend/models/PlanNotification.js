@@ -27,6 +27,23 @@ const planNotificationSchema = new mongoose.Schema(
       uppercase: true,
       index: true,
     },
+    planType: {
+      type: String,
+      enum: ['Add Plan', 'Next Trip Plan'],
+      default: 'Add Plan',
+      index: true,
+    },
+    activityType: {
+      type: String,
+      enum: ['PLAN_CREATED', 'PLAN_DELETED'],
+      default: 'PLAN_CREATED',
+      index: true,
+    },
+    planId: {
+      type: String,
+      default: null,
+      index: true,
+    },
     planBy: {
       type: String,
       required: true,
@@ -36,6 +53,29 @@ const planNotificationSchema = new mongoose.Schema(
     planByUserId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
+      default: null,
+    },
+    planCreatedAt: {
+      type: Date,
+      default: null,
+    },
+    deletedBy: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    deletedByUsername: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    deletedByUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    deletedAt: {
+      type: Date,
       default: null,
     },
     location: {
@@ -60,7 +100,10 @@ const planNotificationSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
       index: true,
-      expires: 172800, // Auto-remove from database after 48 hours (48 * 60 * 60 seconds)
+    },
+    expiresAt: {
+      type: Date,
+      default: null,
     },
     readBy: [
       {
@@ -84,5 +127,8 @@ const planNotificationSchema = new mongoose.Schema(
 
 // Compound index for deduplication and quick sorting
 planNotificationSchema.index({ vehicleId: 1, createdAt: -1 });
+
+// MongoDB TTL index: automatically deletes document once expiresAt timestamp is reached
+planNotificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 module.exports = mongoose.model('PlanNotification', planNotificationSchema);

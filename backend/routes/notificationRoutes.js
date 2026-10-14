@@ -6,6 +6,12 @@ const Plant = require('../models/Plant');
 const { verifyToken } = require('../middleware/auth');
 const { isValidObjectId } = require('../utils/security');
 const { getReadableLocation } = require('../services/locationHelper');
+const {
+  cleanupExpiredPlans,
+  TWELVE_HOURS_MS,
+  TWENTY_FOUR_HOURS_MS,
+  getPlanExpiresAt,
+} = require('../utils/planHelper');
 
 const router = express.Router();
 
@@ -79,17 +85,27 @@ async function backfillExistingPlansIfNeeded() {
       let loc = statusDoc.readableLocation || statusDoc.location || 'Plant Location';
 
       for (const p of statusDoc.plans) {
+        const isNextTrip = p.planType === 'Next Trip Plan' || statusDoc.status === 'Outside' || pName === 'Outside';
+        const planType = isNextTrip ? 'Next Trip Plan' : 'Add Plan';
+        const pCreatedAt = p.createdAt || new Date();
+        const pExpiresAt = p.expiresAt || getPlanExpiresAt(pCreatedAt, planType);
+
+        // Skip seeding if already expired
+        if (new Date() >= new Date(pExpiresAt)) continue;
+
         await PlanNotification.create({
           plantId: statusDoc.currentPlantId?._id || null,
           plantName: pName,
           vehicleId: statusDoc.vehicleId._id,
           vehicleNumber: vNum,
+          planType,
           planBy: p.authorName || 'Sikka Team',
           location: loc,
           latitude: statusDoc.latitude,
           longitude: statusDoc.longitude,
           planNote: p.planText,
-          createdAt: p.createdAt || new Date(),
+          createdAt: pCreatedAt,
+          expiresAt: pExpiresAt,
         });
       }
     }
@@ -101,30 +117,61 @@ async function backfillExistingPlansIfNeeded() {
 // Run backfill non-blocking on startup
 backfillExistingPlansIfNeeded();
 
-const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-
 /**
- * Returns Date object representing 48 hours before current timestamp
+ * Returns Mongo query filter for notifications that are currently active (not expired).
+ * - Add Plan: within 12 hours of createdAt
+ * - Next Trip Plan: within 24 hours of createdAt
  */
-function get48HourCutoff() {
-  return new Date(Date.now() - FORTY_EIGHT_HOURS_MS);
+function buildActiveNotificationFilter() {
+  const now = new Date();
+  const nowTime = now.getTime();
+  const twelveHoursAgo = new Date(nowTime - TWELVE_HOURS_MS);
+  const twentyFourHoursAgo = new Date(nowTime - TWENTY_FOUR_HOURS_MS);
+
+  return {
+    $or: [
+      { expiresAt: { $gt: now } },
+      {
+        expiresAt: null,
+        planType: 'Next Trip Plan',
+        createdAt: { $gte: twentyFourHoursAgo },
+      },
+      {
+        expiresAt: null,
+        planType: 'Add Plan',
+        createdAt: { $gte: twelveHoursAgo },
+      },
+      {
+        expiresAt: null,
+        planType: { $exists: false },
+        plantName: 'Outside',
+        createdAt: { $gte: twentyFourHoursAgo },
+      },
+      {
+        expiresAt: null,
+        planType: { $exists: false },
+        plantName: { $ne: 'Outside' },
+        createdAt: { $gte: twelveHoursAgo },
+      },
+    ],
+  };
 }
 
-// GET /api/notifications - Get all plan notifications (within 48 hours, latest first)
+// GET /api/notifications - Get all active plan notifications (12h for Add Plan, 24h for Next Trip Plan)
 router.get('/', async (req, res) => {
   try {
     const userIdStr = (req.user._id || req.user.id).toString();
-    const cutoffDate = get48HourCutoff();
 
-    // Auto-remove any records older than 48 hours from DB
-    PlanNotification.deleteMany({ createdAt: { $lt: cutoffDate } }).catch((delErr) => {
-      console.warn('[Auto-remove 48h stale notifications]:', delErr.message);
+    // Trigger non-blocking cleanup of expired records from DB
+    cleanupExpiredPlans().catch((delErr) => {
+      console.warn('[Auto-cleanup stale plan notifications]:', delErr.message);
     });
 
     const accessFilter = buildAccessFilter(req);
+    const activeFilter = buildActiveNotificationFilter();
     const filter = {
       ...accessFilter,
-      createdAt: { $gte: cutoffDate },
+      ...activeFilter,
     };
 
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
@@ -145,13 +192,23 @@ router.get('/', async (req, res) => {
         plantName: item.plantName,
         vehicleId: item.vehicleId,
         vehicleNumber: item.vehicleNumber,
+        planType: item.planType || (item.plantName === 'Outside' ? 'Next Trip Plan' : 'Add Plan'),
         planBy: item.planBy,
         location: item.location || 'Plant Location',
         latitude: item.latitude,
         longitude: item.longitude,
         planNote: item.planNote,
         createdAt: item.createdAt,
+        expiresAt: item.expiresAt,
         formattedDateTime: formatISTDateTime(item.createdAt),
+        activityType: item.activityType || 'PLAN_CREATED',
+        deletedBy: item.deletedBy || null,
+        deletedByUsername: item.deletedByUsername || null,
+        deletedAt: item.deletedAt || null,
+        formattedDeletedAt: item.deletedAt ? formatISTDateTime(item.deletedAt) : null,
+        planCreatedAt: item.planCreatedAt || item.createdAt,
+        formattedPlanCreatedAt: formatISTDateTime(item.planCreatedAt || item.createdAt),
+        planId: item.planId || null,
         isRead,
       };
     });
@@ -168,16 +225,16 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /api/notifications/unread-count - Lightweight polling endpoint for unread count badge (strictly within 48h)
+// GET /api/notifications/unread-count - Lightweight polling endpoint for unread count badge
 router.get('/unread-count', async (req, res) => {
   try {
-    const cutoffDate = get48HourCutoff();
     const accessFilter = buildAccessFilter(req);
+    const activeFilter = buildActiveNotificationFilter();
 
-    // Find all notifications matching filter where readBy doesn't contain current userId and created within 48h
+    // Find all active notifications matching filter where readBy doesn't contain current userId
     const unreadCount = await PlanNotification.countDocuments({
       ...accessFilter,
-      createdAt: { $gte: cutoffDate },
+      ...activeFilter,
       'readBy.userId': { $ne: req.user._id || req.user.id },
     });
 
