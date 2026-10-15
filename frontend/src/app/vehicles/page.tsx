@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Edit2, Trash2, Truck, Phone, User, Building, AlertCircle, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Plus, Edit2, Trash2, Truck, Phone, User, Building, AlertCircle, AlertTriangle, RefreshCw, Eye, CheckCircle2 } from 'lucide-react';
 import AppLayout from '../../components/AppLayout';
 import Modal from '../../components/Modal';
 import AlertBanner, { AlertState } from '../../components/AlertBanner';
 import VehicleIcon from '../../components/VehicleIcon';
+import NearestDriversModal, { NearestDriverItem } from '../../components/NearestDriversModal';
 import { apiRequest } from '../../lib/api';
 import { formatDateTime, clean10DigitPhone, normalizeVehicleNumber } from '../../lib/formatters';
 
@@ -18,6 +19,10 @@ interface VehicleRecord {
   ownerName?: string;
   gpsDeviceId?: string;
   status: 'Active' | 'Inactive';
+  assignedDriverId?: string | null;
+  assignmentType?: 'MANUAL' | 'AUTO_GPS' | 'NONE';
+  assignedAt?: string | null;
+  matchingDrivers?: NearestDriverItem[];
   createdAt: string;
   updatedAt: string;
 }
@@ -36,6 +41,11 @@ export default function VehicleRegisterPage() {
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // View Drivers Modal States (Requirement 4 & 5)
+  const [isViewDriversModalOpen, setIsViewDriversModalOpen] = useState(false);
+  const [selectedVehicleForDrivers, setSelectedVehicleForDrivers] = useState<VehicleRecord | null>(null);
+  const [isAssigningDriver, setIsAssigningDriver] = useState(false);
 
   // Form states
   const [formData, setFormData] = useState({
@@ -109,6 +119,38 @@ export default function VehicleRegisterPage() {
     setDeleteConfirmText('');
     setDeleteError('');
     setIsDeleteModalOpen(true);
+  };
+
+  // Open View Drivers modal for vehicle with multiple matches
+  const openDriversModal = (vehicle: VehicleRecord) => {
+    setSelectedVehicleForDrivers(vehicle);
+    setIsViewDriversModalOpen(true);
+  };
+
+  // Handle manual driver assignment from View Drivers popup
+  const handleAssignDriver = async (driver: NearestDriverItem) => {
+    if (!selectedVehicleForDrivers) return;
+    setIsAssigningDriver(true);
+    try {
+      const res = await apiRequest<{ success: boolean; message: string; vehicle: VehicleRecord }>(
+        `/vehicles/${selectedVehicleForDrivers._id}/assign-driver`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ driverId: driver.driverId || driver.id }),
+        }
+      );
+      setAlert({
+        type: 'success',
+        message: res.message || `Driver '${driver.driverName}' assigned to vehicle.`,
+      });
+      setIsViewDriversModalOpen(false);
+      setSelectedVehicleForDrivers(null);
+      fetchVehicles();
+    } catch (err: any) {
+      throw new Error(err.message || 'Failed to assign driver.');
+    } finally {
+      setIsAssigningDriver(false);
+    }
   };
 
   // Submit Delete Vehicle
@@ -338,10 +380,34 @@ export default function VehicleRegisterPage() {
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        {v.driverName ? (
-                          <div className="flex items-center gap-1.5 text-slate-800">
-                            <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                            <span>{v.driverName}</span>
+                        {v.matchingDrivers && v.matchingDrivers.length > 1 ? (
+                          <div className="space-y-1.5">
+                            <span className="font-extrabold text-amber-900 text-xs bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-lg inline-block">
+                              {v.matchingDrivers.length} Drivers Found
+                            </span>
+                            <div>
+                              <button
+                                type="button"
+                                onClick={() => openDriversModal(v)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-bold rounded-lg shadow-2xs transition cursor-pointer"
+                                title="View all matching drivers within configured radius"
+                              >
+                                <Eye className="w-3 h-3 text-emerald-400" />
+                                <span>View Drivers</span>
+                              </button>
+                            </div>
+                          </div>
+                        ) : v.driverName ? (
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-1.5 text-slate-800 font-bold">
+                              <User className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>{v.driverName}</span>
+                            </div>
+                            {v.assignmentType === 'AUTO_GPS' && (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-800 border border-emerald-200 px-1.5 py-0.2 rounded">
+                                Auto GPS
+                              </span>
+                            )}
                           </div>
                         ) : (
                           <span className="text-slate-300 italic">—</span>
@@ -761,6 +827,25 @@ export default function VehicleRegisterPage() {
             </form>
           </div>
         </Modal>
+
+        {/* View Drivers Modal for multiple GPS matches */}
+        <NearestDriversModal
+          isOpen={isViewDriversModalOpen}
+          onClose={() => {
+            setIsViewDriversModalOpen(false);
+            setSelectedVehicleForDrivers(null);
+          }}
+          title={
+            selectedVehicleForDrivers
+              ? `Eligible Drivers Near ${selectedVehicleForDrivers.vehicleNumber}`
+              : 'Matching Drivers'
+          }
+          vehicleNumber={selectedVehicleForDrivers?.vehicleNumber}
+          vehicleId={selectedVehicleForDrivers?._id}
+          drivers={selectedVehicleForDrivers?.matchingDrivers || []}
+          onSelectDriver={handleAssignDriver}
+          isAssigning={isAssigningDriver}
+        />
       </div>
     </AppLayout>
   );

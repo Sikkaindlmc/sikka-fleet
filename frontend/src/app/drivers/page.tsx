@@ -38,6 +38,7 @@ export interface DriverItem {
   mobileNumber: string;
   countryCode: string;
   photo?: string | null;
+  radiusFromVehicleMeter?: number;
   status: 'Active' | 'Inactive';
   lastLoginAt?: string | null;
   currentStatus?: 'Inside' | 'Outside';
@@ -87,6 +88,7 @@ export default function DriverRegistryPage() {
   const [dob, setDob] = useState('');
   const [mobileNumber, setMobileNumber] = useState('');
   const [photo, setPhoto] = useState<string | null>(null);
+  const [radiusFromVehicleMeter, setRadiusFromVehicleMeter] = useState<number | string>(100);
   const [photoError, setPhotoError] = useState('');
   const [status, setStatus] = useState<'Active' | 'Inactive'>('Active');
 
@@ -131,6 +133,7 @@ export default function DriverRegistryPage() {
     setDob('');
     setMobileNumber('');
     setPhoto(null);
+    setRadiusFromVehicleMeter(100);
     setPhotoError('');
     setStatus('Active');
     setFormError('');
@@ -148,6 +151,7 @@ export default function DriverRegistryPage() {
     setDob(formattedDob);
     setMobileNumber(driver.mobileNumber);
     setPhoto(driver.photo || null);
+    setRadiusFromVehicleMeter(driver.radiusFromVehicleMeter ?? 100);
     setPhotoError('');
     setStatus(driver.status);
     setFormError('');
@@ -306,6 +310,17 @@ export default function DriverRegistryPage() {
       return;
     }
 
+    // Validate Radius from Vehicle Meter (Mandatory, 10 to 300 meters, whole numbers only)
+    if (radiusFromVehicleMeter === '' || radiusFromVehicleMeter === undefined || radiusFromVehicleMeter === null) {
+      setFormError('Radius from Vehicle Meter is mandatory.');
+      return;
+    }
+    const parsedRadius = Number(radiusFromVehicleMeter);
+    if (isNaN(parsedRadius) || !Number.isInteger(parsedRadius) || parsedRadius < 10 || parsedRadius > 300) {
+      setFormError('Radius from Vehicle Meter must be a whole number between 10 and 300 meters.');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const payload = {
@@ -314,6 +329,7 @@ export default function DriverRegistryPage() {
         dob,
         mobileNumber: cleanedMobile,
         photo: photo || null,
+        radiusFromVehicleMeter: parsedRadius,
         status,
       };
 
@@ -612,11 +628,16 @@ export default function DriverRegistryPage() {
                           </div>
                         </td>
 
-                        {/* DL Number */}
+                        {/* DL Number & Configured Radius */}
                         <td className="px-5 py-4">
-                          <div className="flex items-center gap-1.5 font-mono font-bold text-slate-900 bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80 w-fit">
-                            <CreditCard className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                            <span>{driver.dlNumber}</span>
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1.5 font-mono font-bold text-slate-900 bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/80 w-fit">
+                              <CreditCard className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                              <span>{driver.dlNumber}</span>
+                            </div>
+                            <div className="flex items-center gap-1 text-[10px] font-bold font-mono text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md w-fit" title="Configured Vehicle Matching Radius">
+                              <span>Radius: {driver.radiusFromVehicleMeter ?? 100} Meters</span>
+                            </div>
                           </div>
                         </td>
 
@@ -879,7 +900,43 @@ export default function DriverRegistryPage() {
               </span>
             </div>
 
-            {/* 5. Driver Photo (Max 500 KB) */}
+            {/* 5. Radius from Vehicle Meter (Mandatory, 10 to 300 meters) */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label
+                  htmlFor="radius-input"
+                  className="block text-xs font-bold text-slate-700 uppercase tracking-wider"
+                >
+                  Radius from Vehicle Meter <span className="text-rose-500">*</span>
+                </label>
+                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                  10 – 300 Meters
+                </span>
+              </div>
+              <div className="flex rounded-xl border border-slate-300 overflow-hidden focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500">
+                <input
+                  id="radius-input"
+                  type="number"
+                  min={10}
+                  max={300}
+                  step={1}
+                  value={radiusFromVehicleMeter}
+                  onChange={(e) => setRadiusFromVehicleMeter(e.target.value)}
+                  placeholder="Enter whole number between 10 and 300"
+                  className="w-full px-3.5 py-2.5 text-xs font-mono font-bold focus:outline-hidden"
+                  disabled={isSubmitting}
+                  required
+                />
+                <span className="inline-flex items-center px-3.5 bg-slate-100 border-l border-slate-300 text-slate-700 font-bold text-xs select-none">
+                  Meters
+                </span>
+              </div>
+              <span className="text-[10px] text-slate-400 mt-1 block">
+                Eligible for automatic GPS vehicle assignment when within this radius. Whole numbers only (10 to 300).
+              </span>
+            </div>
+
+            {/* 6. Driver Photo (Max 500 KB) */}
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">

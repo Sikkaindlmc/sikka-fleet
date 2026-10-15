@@ -32,6 +32,17 @@ const driverSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    radiusFromVehicleMeter: {
+      type: Number,
+      required: [true, 'Radius from Vehicle Meter is required'],
+      min: [10, 'Radius from Vehicle Meter must be at least 10 meters'],
+      max: [300, 'Radius from Vehicle Meter cannot exceed 300 meters'],
+      validate: {
+        validator: Number.isInteger,
+        message: 'Radius from Vehicle Meter must be a whole number between 10 and 300 meters',
+      },
+      default: 100,
+    },
     status: {
       type: String,
       enum: ['Active', 'Inactive'],

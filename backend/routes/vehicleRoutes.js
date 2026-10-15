@@ -228,4 +228,60 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// POST /api/vehicles/:id/assign-driver - Manually assign an eligible driver (Rule B & manual resolution)
+router.post('/:id/assign-driver', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { driverId } = req.body;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid vehicle ID format.' });
+    }
+    if (!driverId || !isValidObjectId(driverId)) {
+      return res.status(400).json({ error: 'Valid driver ID is required.' });
+    }
+
+    const { assignDriverManually } = require('../services/driverMatchingService');
+    const assignedByName = req.user.fullName || req.user.name || req.user.username || 'Authorized User';
+
+    const updatedVehicle = await assignDriverManually({
+      vehicleId: id,
+      driverId,
+      assignedByName,
+    });
+
+    res.json({
+      success: true,
+      message: `Driver '${updatedVehicle.driverName}' successfully assigned to vehicle '${updatedVehicle.vehicleNumber}'.`,
+      vehicle: updatedVehicle,
+    });
+  } catch (error) {
+    console.error('[Assign Driver Error]:', error);
+    res.status(400).json({ error: error.message || 'Failed to assign driver.' });
+  }
+});
+
+// POST /api/vehicles/:id/unassign-driver - Remove driver assignment from vehicle
+router.post('/:id/unassign-driver', async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid vehicle ID format.' });
+    }
+
+    const { unassignDriverFromVehicle } = require('../services/driverMatchingService');
+    const updatedVehicle = await unassignDriverFromVehicle({ vehicleId: id });
+
+    res.json({
+      success: true,
+      message: `Driver unassigned from vehicle '${updatedVehicle.vehicleNumber}'.`,
+      vehicle: updatedVehicle,
+    });
+  } catch (error) {
+    console.error('[Unassign Driver Error]:', error);
+    res.status(400).json({ error: error.message || 'Failed to unassign driver.' });
+  }
+});
+
 module.exports = router;
+

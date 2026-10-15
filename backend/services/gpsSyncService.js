@@ -12,6 +12,7 @@ const CronExecutionLog = require('../models/CronExecutionLog');
 const { calculateHaversineDistance } = require('./geofenceService');
 const { getReadableLocation } = require('./locationHelper');
 const { isSafeExternalUrl } = require('../utils/security');
+const { executeAutomatedDriverAssignment } = require('./driverMatchingService');
 
 const DEFAULT_WHEELSEYE_URL =
   process.env.WHEELSEYE_API_URL ||
@@ -524,10 +525,18 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
       }
     }
 
-    // 8. Next scheduled 30-minute slot in Asia/Kolkata (IST)
+    // 8. Automated Driver-to-Vehicle Assignment using GPS Proximity (Features 2, 3, 5)
+    let assignmentStats = null;
+    try {
+      assignmentStats = await executeAutomatedDriverAssignment();
+    } catch (assignmentErr) {
+      console.error('[GPS Sync Driver Assignment Error]:', assignmentErr.message);
+    }
+
+    // 9. Next scheduled 30-minute slot in Asia/Kolkata (IST)
     const nextSlot = getNextFixed30MinSlotIST(syncTime);
 
-    // 9. Update GpsSetting with official status
+    // 10. Update GpsSetting with official status
     if (!config) {
       config = await GpsSetting.create({
         provider: 'WheelsEye GPS',
@@ -562,7 +571,7 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
     const completedAt = new Date();
     const durationMs = completedAt.getTime() - startedAt.getTime();
 
-    // 10. Update Sync Logs (Requirement 11)
+    // 11. Update Sync Logs (Requirement 9 & 11)
     if (syncLogDoc) {
       syncLogDoc.status = 'SUCCESS';
       syncLogDoc.completedAt = completedAt;
@@ -575,6 +584,16 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
       syncLogDoc.executionTimeMs = durationMs;
       syncLogDoc.lastEvaluatedTimestamp = syncTime;
       syncLogDoc.nextScheduledSyncAt = nextSlot;
+      if (assignmentStats) {
+        syncLogDoc.driversChecked = assignmentStats.driversChecked || 0;
+        syncLogDoc.vehiclesChecked = assignmentStats.vehiclesChecked || 0;
+        syncLogDoc.eligibleMatches = assignmentStats.eligibleMatches || 0;
+        syncLogDoc.autoAssignmentsCompleted = assignmentStats.autoAssignmentsCompleted || 0;
+        syncLogDoc.vehiclesWithMultipleDrivers = assignmentStats.vehiclesWithMultipleDrivers || 0;
+        syncLogDoc.comparisonsSkipped = assignmentStats.comparisonsSkipped || 0;
+        syncLogDoc.skippedReasons = assignmentStats.skippedReasons || [];
+        syncLogDoc.assignmentConflicts = assignmentStats.assignmentConflicts || [];
+      }
       await syncLogDoc.save();
     }
 
@@ -591,7 +610,7 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
 
     const istTimeString = syncTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
     console.log(
-      `[GPS Sync SUCCESS] [${istTimeString}] Source: ${source}. Processed: ${processedCount}, Updated: ${updatedCount}, Duration: ${durationMs}ms.`
+      `[GPS Sync SUCCESS] [${istTimeString}] Source: ${source}. Processed: ${processedCount}, Updated: ${updatedCount}, Auto-assigned Drivers: ${assignmentStats?.autoAssignmentsCompleted ?? 0}, Multiple Driver Matches: ${assignmentStats?.vehiclesWithMultipleDrivers ?? 0}, Duration: ${durationMs}ms.`
     );
 
     return {
@@ -607,6 +626,7 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
       vehiclesUpdated: updatedCount,
       vehiclesFailed: failedCount,
       plantEntriesRecorded: plantEntriesCount,
+      driverAssignment: assignmentStats,
       last_evaluated_timestamp: syncTime,
       last_successful_sync_at: syncTime,
       next_scheduled_sync_at: nextSlot,

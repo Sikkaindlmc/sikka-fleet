@@ -76,6 +76,38 @@ const gpsSyncLogSchema = new mongoose.Schema(
       type: String,
       default: 'WheelsEye GPS',
     },
+    driversChecked: {
+      type: Number,
+      default: 0,
+    },
+    vehiclesChecked: {
+      type: Number,
+      default: 0,
+    },
+    eligibleMatches: {
+      type: Number,
+      default: 0,
+    },
+    autoAssignmentsCompleted: {
+      type: Number,
+      default: 0,
+    },
+    vehiclesWithMultipleDrivers: {
+      type: Number,
+      default: 0,
+    },
+    comparisonsSkipped: {
+      type: Number,
+      default: 0,
+    },
+    skippedReasons: {
+      type: [String],
+      default: [],
+    },
+    assignmentConflicts: {
+      type: [String],
+      default: [],
+    },
   },
   {
     collection: 'gps_sync_logs',

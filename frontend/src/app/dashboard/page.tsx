@@ -122,6 +122,7 @@ interface PlantVehicle {
   multipleDrivers?: boolean;
   noDriver?: boolean;
   nearestDrivers?: NearestDriverItem[];
+  locationStale?: boolean;
   fleetType: string;
   ownerName?: string;
   entryDateTime: string;
@@ -238,7 +239,10 @@ export default function DashboardPage() {
   // Nearest Drivers Modal State (Requirement 23.3 & 23.4)
   const [isDriversModalOpen, setIsDriversModalOpen] = useState(false);
   const [selectedNearestDrivers, setSelectedNearestDrivers] = useState<NearestDriverItem[]>([]);
-  const [driversModalTitle, setDriversModalTitle] = useState('Available Drivers (Within 100m)');
+  const [driversModalTitle, setDriversModalTitle] = useState('Available Drivers');
+  const [selectedVehicleIdForDrivers, setSelectedVehicleIdForDrivers] = useState<string | null>(null);
+  const [selectedVehicleNumberForDrivers, setSelectedVehicleNumberForDrivers] = useState<string | null>(null);
+  const [isAssigningDriver, setIsAssigningDriver] = useState(false);
 
   // Plan Management Modal State
   const { user } = useAuth();
@@ -436,6 +440,51 @@ export default function DashboardPage() {
       setPlanError(err.message || 'Failed to save dispatch plan.');
     } finally {
       setIsSavingPlan(false);
+    }
+  };
+
+  // Helper to refresh current modal vehicle data
+  const refreshCurrentModalVehicles = async () => {
+    try {
+      if (activeModal === 'plant' && selectedPlant) {
+        const data = await apiRequest<{
+          plant: { id: string; name: string; location: string; radiusMeter: number; availableDrivers?: NearestDriverItem[] };
+          vehicles: PlantVehicle[];
+        }>(`/dashboard/plants/${selectedPlant.id}/vehicles`);
+        setPlantVehicles(data.vehicles || []);
+      } else if (activeModal === 'outside') {
+        const data = await apiRequest<{
+          title: string;
+          vehicles: OutsideVehicle[];
+        }>('/dashboard/outside/vehicles');
+        setOutsideVehicles(data.vehicles || []);
+      }
+    } catch (_) {}
+  };
+
+  // Handle Manual Driver Selection & Assignment from View Drivers Modal (Rule B)
+  const handleSelectDriverForVehicle = async (driver: NearestDriverItem) => {
+    if (!selectedVehicleIdForDrivers) return;
+    setIsAssigningDriver(true);
+    try {
+      const res = await apiRequest<{ success: boolean; message: string }>(
+        `/vehicles/${selectedVehicleIdForDrivers}/assign-driver`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ driverId: driver.driverId || driver.id }),
+        }
+      );
+      setAlert({
+        type: 'success',
+        message: res.message || `Driver ${driver.driverName} assigned successfully.`,
+      });
+      setIsDriversModalOpen(false);
+      await refreshCurrentModalVehicles();
+      await fetchSummary(false);
+    } catch (err: any) {
+      throw new Error(err.message || 'Failed to assign driver.');
+    } finally {
+      setIsAssigningDriver(false);
     }
   };
 
@@ -1169,6 +1218,7 @@ export default function DashboardPage() {
                     <th className="px-5 py-3">Sync GPS Date Time</th>
                     <th className="px-5 py-3">Stay Hours</th>
                     <th className="px-5 py-3">Location</th>
+                    <th className="px-5 py-3">Driver Name-Mobile</th>
                     <th className="px-5 py-3 min-w-[260px]">Plan</th>
                     <th className="px-5 py-3 text-right">Action</th>
                   </tr>
@@ -1263,6 +1313,26 @@ export default function DashboardPage() {
                               <span>Track Now</span>
                             </button>
                           </div>
+                        </td>
+
+                        {/* Driver Name-Mobile & Matching Cell */}
+                        <td className="px-5 py-3.5">
+                          <NearestDriverCell
+                            driverName={v.driverName}
+                            mobile={v.mobile}
+                            driverDistance={v.driverDistance}
+                            multipleDrivers={v.multipleDrivers}
+                            nearestDrivers={v.nearestDrivers}
+                            locationStale={v.locationStale}
+                            vehicleNumber={v.vehicleNumber}
+                            onViewMultiple={(drivers) => {
+                              setSelectedNearestDrivers(drivers);
+                              setSelectedVehicleNumberForDrivers(v.vehicleNumber);
+                              setSelectedVehicleIdForDrivers(v.id);
+                              setDriversModalTitle(`Matching Drivers for ${v.vehicleNumber}`);
+                              setIsDriversModalOpen(true);
+                            }}
+                          />
                         </td>
 
                         {/* Plan Column */}
@@ -1479,9 +1549,12 @@ export default function DashboardPage() {
                             multipleDrivers={v.multipleDrivers}
                             nearestDrivers={v.nearestDrivers}
                             locationStale={v.locationStale}
+                            vehicleNumber={v.vehicleNumber}
                             onViewMultiple={(drivers) => {
                               setSelectedNearestDrivers(drivers);
-                              setDriversModalTitle(`Available Drivers Near ${v.vehicleNumber} (Within 100m)`);
+                              setSelectedVehicleNumberForDrivers(v.vehicleNumber);
+                              setSelectedVehicleIdForDrivers(v.id);
+                              setDriversModalTitle(`Matching Drivers for ${v.vehicleNumber}`);
                               setIsDriversModalOpen(true);
                             }}
                           />
@@ -2068,12 +2141,16 @@ export default function DashboardPage() {
           </div>
         </Modal>
 
-        {/* Modal: Nearest Drivers Popup (Requirement 23.3 & 23.10) */}
+        {/* Modal: Nearest Drivers Popup (Section 4 & 5) */}
         <NearestDriversModal
           isOpen={isDriversModalOpen}
           onClose={() => setIsDriversModalOpen(false)}
           title={driversModalTitle}
+          vehicleNumber={selectedVehicleNumberForDrivers || undefined}
+          vehicleId={selectedVehicleIdForDrivers || undefined}
           drivers={selectedNearestDrivers}
+          onSelectDriver={handleSelectDriverForVehicle}
+          isAssigning={isAssigningDriver}
         />
       </div>
     </AppLayout>

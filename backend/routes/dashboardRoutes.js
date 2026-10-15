@@ -256,6 +256,7 @@ router.get('/plants/:plantId/vehicles', async (req, res) => {
 
         return {
           id: item.vehicleId._id,
+          vehicleId: item.vehicleId._id,
           vehicleNumber: item.vehicleId.vehicleNumber,
           driverName: item.vehicleId.driverName,
           mobile: item.vehicleId.mobile,
@@ -838,6 +839,7 @@ router.get('/outside/vehicles', async (req, res) => {
 
         return {
           id: item.vehicleId._id,
+          vehicleId: item.vehicleId._id,
           vehicleNumber: item.vehicleId.vehicleNumber,
           lastOutPlantName: lastOutPlant,
           plantOutDateTime: plantOutTime,

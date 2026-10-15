@@ -111,6 +111,32 @@ const vehicleCurrentStatusSchema = new mongoose.Schema(
         expiresAt: { type: Date, default: null, index: true },
       },
     ],
+    matchingDrivers: [
+      {
+        id: String,
+        driverId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver' },
+        driverName: String,
+        dlNumber: String,
+        mobileNumber: String,
+        photo: { type: String, default: null },
+        distanceMeters: Number,
+        radiusFromVehicleMeter: Number,
+        lastLocationAt: { type: Date, default: null },
+      },
+    ],
+    matchingDriversCount: {
+      type: Number,
+      default: 0,
+    },
+    driverDistance: {
+      type: Number,
+      default: null,
+    },
+    assignmentType: {
+      type: String,
+      enum: ['MANUAL', 'AUTO_GPS', 'NONE'],
+      default: 'NONE',
+    },
   },
   {
     timestamps: true,

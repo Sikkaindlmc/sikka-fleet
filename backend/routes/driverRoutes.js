@@ -203,7 +203,7 @@ router.get('/:id/locations', async (req, res) => {
 // POST /api/drivers - Register a new driver
 router.post('/', async (req, res) => {
   try {
-    const { driverName, dlNumber, dob, mobileNumber, status, photo } = req.body;
+    const { driverName, dlNumber, dob, mobileNumber, status, photo, radiusFromVehicleMeter } = req.body;
 
     if (!driverName || !driverName.trim()) {
       return res.status(400).json({ error: 'Driver Name is required.' });
@@ -219,6 +219,17 @@ router.post('/', async (req, res) => {
 
     if (!mobileNumber || !mobileNumber.trim()) {
       return res.status(400).json({ error: 'Mobile Number is required.' });
+    }
+
+    // Validate radiusFromVehicleMeter (Mandatory, whole number between 10 and 300 meters)
+    if (radiusFromVehicleMeter === undefined || radiusFromVehicleMeter === null || radiusFromVehicleMeter === '') {
+      return res.status(400).json({ error: 'Radius from Vehicle Meter is mandatory.' });
+    }
+    const parsedRadius = Number(radiusFromVehicleMeter);
+    if (isNaN(parsedRadius) || !Number.isInteger(parsedRadius) || parsedRadius < 10 || parsedRadius > 300) {
+      return res.status(400).json({
+        error: 'Radius from Vehicle Meter must be a whole number between 10 and 300 meters.',
+      });
     }
 
     // Validate photo size under 500 KB (Base64 string max ~700KB)
@@ -255,6 +266,7 @@ router.post('/', async (req, res) => {
       dob: new Date(dob),
       mobileNumber: cleanedMobile,
       photo: photo || null,
+      radiusFromVehicleMeter: parsedRadius,
       countryCode: '+91',
       status: status === 'Inactive' ? 'Inactive' : 'Active',
     });
@@ -285,7 +297,7 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ error: 'Invalid driver ID format.' });
     }
 
-    const { driverName, dlNumber, dob, mobileNumber, status, photo } = req.body;
+    const { driverName, dlNumber, dob, mobileNumber, status, photo, radiusFromVehicleMeter } = req.body;
 
     const driver = await Driver.findById(id);
     if (!driver) {
@@ -306,6 +318,17 @@ router.put('/:id', async (req, res) => {
 
     if (!mobileNumber || !mobileNumber.trim()) {
       return res.status(400).json({ error: 'Mobile Number is required.' });
+    }
+
+    // Validate radiusFromVehicleMeter (Mandatory, whole number between 10 and 300 meters)
+    if (radiusFromVehicleMeter === undefined || radiusFromVehicleMeter === null || radiusFromVehicleMeter === '') {
+      return res.status(400).json({ error: 'Radius from Vehicle Meter is mandatory.' });
+    }
+    const parsedRadius = Number(radiusFromVehicleMeter);
+    if (isNaN(parsedRadius) || !Number.isInteger(parsedRadius) || parsedRadius < 10 || parsedRadius > 300) {
+      return res.status(400).json({
+        error: 'Radius from Vehicle Meter must be a whole number between 10 and 300 meters.',
+      });
     }
 
     // Validate photo size under 500 KB
@@ -344,6 +367,7 @@ router.put('/:id', async (req, res) => {
     driver.dlNumber = cleanedDl;
     driver.dob = new Date(dob);
     driver.mobileNumber = cleanedMobile;
+    driver.radiusFromVehicleMeter = parsedRadius;
     if (photo !== undefined) {
       driver.photo = photo || null;
     }

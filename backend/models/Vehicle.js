@@ -39,6 +39,33 @@ const vehicleSchema = new mongoose.Schema(
       enum: ['Active', 'Inactive'],
       default: 'Active',
     },
+    assignedDriverId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Driver',
+      default: null,
+    },
+    assignmentType: {
+      type: String,
+      enum: ['MANUAL', 'AUTO_GPS', 'NONE'],
+      default: 'NONE',
+    },
+    assignedAt: {
+      type: Date,
+      default: null,
+    },
+    matchingDrivers: [
+      {
+        id: String,
+        driverId: { type: mongoose.Schema.Types.ObjectId, ref: 'Driver' },
+        driverName: String,
+        dlNumber: String,
+        mobileNumber: String,
+        photo: { type: String, default: null },
+        distanceMeters: Number,
+        radiusFromVehicleMeter: Number,
+        lastLocationAt: { type: Date, default: null },
+      },
+    ],
   },
   {
     timestamps: true,
