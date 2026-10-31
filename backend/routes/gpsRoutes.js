@@ -28,38 +28,63 @@ router.use(verifyToken, checkPageAccess('GPS'));
 // GET /api/gps - Retrieve current GPS configuration
 router.get('/', async (req, res) => {
   try {
-    let setting = await GpsSetting.findOne().sort({ updatedAt: -1 });
+    let settings = await GpsSetting.find();
 
-    if (!setting) {
-      setting = await GpsSetting.create({
+    if (settings.length === 0) {
+      const defaultWe = await GpsSetting.create({
         provider: 'WheelsEye GPS',
-        apiUrl: process.env.WHEELSEYE_API_URL || 'https://api.wheelseye.com/currentLoc',
-        encryptedApiKey: '',
+        apiUrl: process.env.WHEELSEYE_API_URL || 'https://api.wheelseye.com/currentLoc?accessToken=53afc208-0981-48c7-b134-d85d2f33dc0c',
+        encryptedApiKey: '53afc208-0981-48c7-b134-d85d2f33dc0c',
         status: 'Active',
         connectionStatus: 'Connected',
         lastSync: new Date(),
         pollIntervalSeconds: 1800,
       });
+      const defaultFx = await GpsSetting.create({
+        provider: 'Fleetx',
+        apiUrl: process.env.FLEETX_API_URL || 'https://api.fleetx.io/api/v1/analytics/live',
+        encryptedApiKey: process.env.FLEETX_API_KEY || '75683dcb-9df0-429c-b3a2-646542ac50e5',
+        status: 'Active',
+        connectionStatus: 'Connected',
+        lastSync: new Date(),
+        pollIntervalSeconds: 1800,
+      });
+      settings = [defaultWe, defaultFx];
     }
 
-    const maskedSetting = {
-      _id: setting._id,
-      provider: setting.provider,
-      apiUrl: maskUrlSecret(setting.apiUrl),
-      status: setting.status,
-      connectionStatus: setting.connectionStatus || 'Connected',
-      lastSync: setting.lastSync,
-      lastError: setting.lastError,
-      pollIntervalSeconds: setting.pollIntervalSeconds,
-      hasApiKey: Boolean(setting.encryptedApiKey),
-      maskedApiKey: setting.encryptedApiKey
-        ? `••••••••••••${setting.encryptedApiKey.slice(-4)}`
+    // Selected or active provider setting
+    const requestedProvider = req.query.provider ? req.query.provider.toLowerCase() : null;
+    let selectedSetting = null;
+    if (requestedProvider) {
+      selectedSetting = settings.find((s) => s.provider && s.provider.toLowerCase().includes(requestedProvider));
+    }
+    if (!selectedSetting) {
+      selectedSetting = settings.find((s) => s.status === 'Active') || settings[0];
+    }
+
+    const mapSetting = (s) => ({
+      _id: s._id,
+      provider: s.provider,
+      apiUrl: maskUrlSecret(s.apiUrl),
+      status: s.status,
+      connectionStatus: s.connectionStatus || 'Connected',
+      lastSync: s.lastSync,
+      lastError: s.lastError,
+      pollIntervalSeconds: s.pollIntervalSeconds,
+      hasApiKey: Boolean(s.encryptedApiKey),
+      maskedApiKey: s.encryptedApiKey
+        ? `••••••••••••${s.encryptedApiKey.slice(-4)}`
         : '',
-      hasApiSecret: Boolean(setting.apiSecret),
-      vehicleIcon: setting.vehicleIcon || '',
-      vehicleIconUpdatedAt: setting.vehicleIconUpdatedAt || null,
-      createdAt: setting.createdAt,
-      updatedAt: setting.updatedAt,
+      hasApiSecret: Boolean(s.apiSecret),
+      vehicleIcon: s.vehicleIcon || '',
+      vehicleIconUpdatedAt: s.vehicleIconUpdatedAt || null,
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+    });
+
+    const maskedSetting = {
+      ...mapSetting(selectedSetting),
+      providers: settings.map(mapSetting),
     };
 
     res.json(maskedSetting);
@@ -144,10 +169,16 @@ router.post('/', async (req, res) => {
       }
     }
 
-    let setting = await GpsSetting.findOne().sort({ updatedAt: -1 });
+    const providerClean = provider.trim();
+    const isFleetx = providerClean.toLowerCase().includes('fleetx') || (apiUrl && apiUrl.includes('fleetx'));
+    const query = isFleetx
+      ? { $or: [{ provider: /fleetx/i }, { apiUrl: /fleetx/i }] }
+      : { $or: [{ provider: /wheels/i }, { apiUrl: /wheelseye/i }] };
+
+    let setting = await GpsSetting.findOne(query);
 
     const updateData = {
-      provider: provider.trim(),
+      provider: providerClean,
       apiUrl: apiUrl ? apiUrl.trim() : '',
       status: status === 'Inactive' ? 'Inactive' : 'Active',
       pollIntervalSeconds: Number(pollIntervalSeconds) || 1800, // 30 Min mandatory
@@ -168,7 +199,7 @@ router.post('/', async (req, res) => {
     }
 
     res.json({
-      message: 'GPS configuration saved successfully.',
+      message: `${providerClean} configuration saved successfully.`,
       setting: {
         _id: setting._id,
         provider: setting.provider,
@@ -193,7 +224,8 @@ router.post('/', async (req, res) => {
 // POST /api/gps/test-connection - Test provider connection
 router.post('/test-connection', gpsSyncLimiter, async (req, res) => {
   try {
-    const result = await testGpsConnection();
+    const { provider } = req.body || {};
+    const result = await testGpsConnection(provider);
     res.json(result);
   } catch (error) {
     console.error('[Test GPS Connection Error]:', error);
@@ -296,7 +328,8 @@ router.get('/live-vehicles', async (req, res) => {
         driverName: matchedVeh ? matchedVeh.driverName : 'Fleet Driver',
         mobile: matchedVeh ? matchedVeh.mobile : '+91 9876543210',
         deviceNumber: pt.deviceNumber || 'N/A',
-        vendorName: pt.vendorName || 'Vaibhav Sikka',
+        vendorName: pt.vendorName || (pt.provider === 'Fleetx' ? 'Fleetx' : 'Vaibhav Sikka'),
+        provider: pt.provider || (pt.vendorName === 'Fleetx' ? 'Fleetx' : 'WheelsEye GPS'),
         vehicleType: pt.vehicleType || 'Commercial',
         latitude: pt.latitude,
         longitude: pt.longitude,

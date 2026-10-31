@@ -62,6 +62,7 @@ interface LiveVehicleItem {
   mobile: string;
   deviceNumber: string;
   vendorName: string;
+  provider?: string;
   vehicleType: string;
   latitude: number;
   longitude: number;
@@ -103,6 +104,7 @@ interface GpsSettingData {
   maskedApiKey: string;
   hasApiSecret: boolean;
   updatedAt?: string;
+  providers?: GpsSettingData[];
 }
 
 function GpsPageContent() {
@@ -117,6 +119,8 @@ function GpsPageContent() {
 
   // Settings state
   const [setting, setSetting] = useState<GpsSettingData | null>(null);
+  const [selectedProviderTab, setSelectedProviderTab] = useState<'WheelsEye GPS' | 'Fleetx'>('WheelsEye GPS');
+  const [providersList, setProvidersList] = useState<GpsSettingData[]>([]);
   const [formData, setFormData] = useState({
     provider: 'WheelsEye GPS',
     apiUrl: '',
@@ -278,13 +282,22 @@ function GpsPageContent() {
       setIsLoading(true);
       const data = await apiRequest<GpsSettingData>('/gps');
       setSetting(data);
+      if (Array.isArray(data.providers) && data.providers.length > 0) {
+        setProvidersList(data.providers);
+      }
+
+      // Populate form data based on currently active tab
+      const current = data.providers?.find(
+        (p) => p.provider && p.provider.toLowerCase().includes(selectedProviderTab.toLowerCase().includes('fleetx') ? 'fleetx' : 'wheels')
+      ) || data;
+
       setFormData({
-        provider: data.provider || 'WheelsEye GPS',
-        apiUrl: data.apiUrl || '',
-        apiKey: data.maskedApiKey || '',
-        apiSecret: data.hasApiSecret ? '••••••••••••' : '',
-        status: data.status || 'Active',
-        pollIntervalSeconds: data.pollIntervalSeconds || 15,
+        provider: current.provider || selectedProviderTab,
+        apiUrl: current.apiUrl || (selectedProviderTab === 'Fleetx' ? 'https://api.fleetx.io/api/v1/analytics/live' : 'https://api.wheelseye.com/currentLoc?accessToken=53afc208-0981-48c7-b134-d85d2f33dc0c'),
+        apiKey: current.maskedApiKey || (selectedProviderTab === 'Fleetx' ? '75683dcb-9df0-429c-b3a2-646542ac50e5' : '53afc208-0981-48c7-b134-d85d2f33dc0c'),
+        apiSecret: current.hasApiSecret ? '••••••••••••' : '',
+        status: current.status || 'Active',
+        pollIntervalSeconds: current.pollIntervalSeconds || 1800,
       });
     } catch (err: any) {
       if (err.status === 401) return;
@@ -295,7 +308,45 @@ function GpsPageContent() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [selectedProviderTab]);
+
+  // Switch between WheelsEye and Fleetx settings
+  const handleSelectProvider = (prov: 'WheelsEye GPS' | 'Fleetx') => {
+    setSelectedProviderTab(prov);
+    const found = providersList.find((p) =>
+      p.provider && p.provider.toLowerCase().includes(prov.toLowerCase().includes('fleetx') ? 'fleetx' : 'wheels')
+    );
+    if (found) {
+      setFormData({
+        provider: found.provider,
+        apiUrl: found.apiUrl,
+        apiKey: found.maskedApiKey || '',
+        apiSecret: found.hasApiSecret ? '••••••••••••' : '',
+        status: found.status || 'Active',
+        pollIntervalSeconds: found.pollIntervalSeconds || 1800,
+      });
+    } else {
+      if (prov === 'Fleetx') {
+        setFormData({
+          provider: 'Fleetx',
+          apiUrl: 'https://api.fleetx.io/api/v1/analytics/live',
+          apiKey: '75683dcb-9df0-429c-b3a2-646542ac50e5',
+          apiSecret: '',
+          status: 'Active',
+          pollIntervalSeconds: 1800,
+        });
+      } else {
+        setFormData({
+          provider: 'WheelsEye GPS',
+          apiUrl: 'https://api.wheelseye.com/currentLoc?accessToken=53afc208-0981-48c7-b134-d85d2f33dc0c',
+          apiKey: '53afc208-0981-48c7-b134-d85d2f33dc0c',
+          apiSecret: '',
+          status: 'Active',
+          pollIntervalSeconds: 1800,
+        });
+      }
+    }
+  };
 
   useEffect(() => {
     fetchGpsSetting();
@@ -329,15 +380,15 @@ function GpsPageContent() {
           apiKey: formData.apiKey,
           apiSecret: formData.apiSecret,
           status: formData.status,
-          pollIntervalSeconds: Number(formData.pollIntervalSeconds) || 15,
+          pollIntervalSeconds: Number(formData.pollIntervalSeconds) || 1800,
         }),
       });
 
       setAlert({
         type: 'success',
-        message: 'GPS configuration saved successfully.',
+        message: `${formData.provider} configuration saved successfully.`,
       });
-      setSetting(res.setting);
+      fetchGpsSetting();
       fetchLiveVehicles(false);
     } catch (err: any) {
       setAlert({
@@ -360,6 +411,7 @@ function GpsPageContent() {
         lastSync?: string;
       }>('/gps/test-connection', {
         method: 'POST',
+        body: JSON.stringify({ provider: selectedProviderTab }),
       });
       if (res.status === 'Connected') {
         setAlert({
@@ -659,17 +711,40 @@ function GpsPageContent() {
               </div>
             </div>
 
-            {/* 2. WHEELSEYE API CONFIGURATION SECTION */}
+            {/* 2. GPS TELEMATICS PROVIDER CONFIGURATION SECTION */}
             <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-                <div>
-                  <h2 className="text-base font-bold text-slate-900">
-                    WheelsEye GPS Telematics API Configuration
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Configure endpoint polling URL and access tokens for real-time fleet positions.
-                  </p>
+              {/* Provider Selection Tabs */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-4 border-b border-slate-100">
+                <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-xl border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => handleSelectProvider('WheelsEye GPS')}
+                    className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      selectedProviderTab === 'WheelsEye GPS'
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Globe className="w-3.5 h-3.5 text-blue-600" />
+                    <span>WheelsEye GPS</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSelectProvider('Fleetx')}
+                    className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      selectedProviderTab === 'Fleetx'
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Zap className="w-3.5 h-3.5 text-purple-600" />
+                    <span>Fleetx GPS</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  </button>
                 </div>
+
                 <button
                   type="button"
                   onClick={handleTestConnection}
@@ -677,8 +752,19 @@ function GpsPageContent() {
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold transition cursor-pointer"
                 >
                   <PlayCircle className={`w-3.5 h-3.5 ${isTesting ? 'animate-spin' : ''}`} />
-                  <span>{isTesting ? 'Testing...' : 'Test Connection'}</span>
+                  <span>{isTesting ? 'Testing Connection...' : `Test ${selectedProviderTab}`}</span>
                 </button>
+              </div>
+
+              <div className="mb-4">
+                <h2 className="text-base font-bold text-slate-900">
+                  {selectedProviderTab === 'Fleetx' ? 'Fleetx GPS Telematics API Configuration' : 'WheelsEye GPS Telematics API Configuration'}
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {selectedProviderTab === 'Fleetx'
+                    ? 'Configure Fleetx REST API endpoint and Bearer authorization token for real-time fleet telematics.'
+                    : 'Configure WheelsEye endpoint polling URL and access tokens for real-time fleet positions.'}
+                </p>
               </div>
 
               <form onSubmit={handleSaveConfig} className="space-y-4">
@@ -704,7 +790,11 @@ function GpsPageContent() {
                       type="url"
                       value={formData.apiUrl}
                       onChange={(e) => setFormData({ ...formData, apiUrl: e.target.value })}
-                      placeholder="https://api.wheelseye.com/currentLoc?accessToken=..."
+                      placeholder={
+                        selectedProviderTab === 'Fleetx'
+                          ? 'https://api.fleetx.io/api/v1/analytics/live'
+                          : 'https://api.wheelseye.com/currentLoc?accessToken=...'
+                      }
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-mono focus:border-emerald-500 focus:outline-hidden"
                       required
                     />
@@ -712,13 +802,17 @@ function GpsPageContent() {
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                      API Key / Access Token
+                      API Key / Bearer Token
                     </label>
                     <input
                       type="text"
                       value={formData.apiKey}
                       onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
-                      placeholder="53afc208-0981-48c7-b134-d85d2f33dc0c"
+                      placeholder={
+                        selectedProviderTab === 'Fleetx'
+                          ? '75683dcb-9df0-429c-b3a2-646542ac50e5'
+                          : '53afc208-0981-48c7-b134-d85d2f33dc0c'
+                      }
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-mono focus:border-emerald-500 focus:outline-hidden"
                     />
                   </div>
@@ -730,7 +824,7 @@ function GpsPageContent() {
                     disabled={isSaving}
                     className="px-5 py-2.5 text-xs font-bold text-slate-950 bg-emerald-500 hover:bg-emerald-600 rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
                   >
-                    {isSaving ? 'Saving...' : 'Save API Settings'}
+                    {isSaving ? 'Saving...' : `Save ${selectedProviderTab} Settings`}
                   </button>
                 </div>
               </form>
@@ -745,7 +839,7 @@ function GpsPageContent() {
             <div className="flex items-center justify-between gap-3 pb-2 border-b border-slate-200">
               <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
                 <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
-                <span>Live WheelsEye GPS • Auto-sync every 20 minutes</span>
+                <span>Live GPS Telematics (WheelsEye &amp; Fleetx) • Auto-sync every 30 minutes</span>
               </div>
 
               <div className="flex items-center gap-2.5">
@@ -774,10 +868,10 @@ function GpsPageContent() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
                 <span className="text-[10px] font-bold uppercase text-slate-400 block">
-                  API Provider
+                  API Providers
                 </span>
                 <span className="text-sm font-extrabold text-slate-900 mt-0.5 block truncate">
-                  {setting?.provider || 'WheelsEye GPS'}
+                  WheelsEye &amp; Fleetx
                 </span>
               </div>
 
@@ -909,6 +1003,16 @@ function GpsPageContent() {
                           <span className="font-extrabold text-sm text-slate-900 tracking-wide">
                             {v.vehicleNumber}
                           </span>
+                          {/* Provider Badge */}
+                          <span
+                            className={`px-1.5 py-0.5 rounded-md text-[9px] font-bold ${
+                              v.vendorName === 'Fleetx' || v.provider === 'Fleetx'
+                                ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                                : 'bg-blue-100 text-blue-800 border border-blue-200'
+                            }`}
+                          >
+                            {v.vendorName === 'Fleetx' || v.provider === 'Fleetx' ? 'Fleetx' : 'WheelsEye'}
+                          </span>
                           {/* Ignition Pill */}
                           <span
                             className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
@@ -1017,7 +1121,7 @@ function GpsPageContent() {
                         </span>
                       </div>
                       <p className="text-xs text-slate-500 mt-0.5">
-                        Vendor: <strong className="text-slate-800">{selectedVehicle.vendorName}</strong> • Type: <strong className="text-slate-800">{selectedVehicle.vehicleType}</strong>
+                        Provider: <strong className="text-slate-800">{selectedVehicle.provider || selectedVehicle.vendorName}</strong> • Vendor: <strong className="text-slate-800">{selectedVehicle.vendorName}</strong> • Type: <strong className="text-slate-800">{selectedVehicle.vehicleType}</strong>
                       </p>
                     </div>
                   </div>

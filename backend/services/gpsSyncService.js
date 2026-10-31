@@ -18,6 +18,15 @@ const DEFAULT_WHEELSEYE_URL =
   process.env.WHEELSEYE_API_URL ||
   'https://api.wheelseye.com/currentLoc?accessToken=53afc208-0981-48c7-b134-d85d2f33dc0c';
 
+const DEFAULT_FLEETX_URL =
+  process.env.FLEETX_API_URL ||
+  'https://api.fleetx.io/api/v1/analytics/live';
+
+const DEFAULT_FLEETX_TOKEN =
+  process.env.FLEETX_API_KEY ||
+  process.env.FLEETX_BEARER_TOKEN ||
+  '75683dcb-9df0-429c-b3a2-646542ac50e5';
+
 const LOCK_ID = 'gps_sync_lock';
 const LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes safety timeout
 const STALE_THRESHOLD_MS = 60 * 60 * 1000; // 60 minutes = GPS Stale
@@ -80,9 +89,34 @@ function getNextFixed30MinSlotIST(refDate = new Date()) {
 }
 
 /**
- * Parses Wheelseye timestamp from epoch seconds, milliseconds, or date string.
+ * Parses GPS telemetry timestamps supporting epoch seconds, milliseconds, ISO strings,
+ * or provider-specific time fields from WheelsEye and Fleetx.
  */
-function parseWheelseyeTimestamp(item) {
+function parseTelematicsTimestamp(item) {
+  if (item.lastUpdatedAt !== undefined && item.lastUpdatedAt !== null) {
+    const num = Number(item.lastUpdatedAt);
+    if (!isNaN(num) && num > 0) {
+      const ms = num > 1e11 ? num : num * 1000;
+      const d = new Date(ms);
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
+  if (item.lastStatusTime !== undefined && item.lastStatusTime !== null) {
+    const num = Number(item.lastStatusTime);
+    if (!isNaN(num) && num > 0) {
+      const ms = num > 1e11 ? num : num * 1000;
+      const d = new Date(ms);
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
+  if (item.otherAttributes?.serverTime) {
+    const num = Number(item.otherAttributes.serverTime);
+    if (!isNaN(num) && num > 0) {
+      const ms = num > 1e11 ? num : num * 1000;
+      const d = new Date(ms);
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
   if (item.createdDate !== undefined && item.createdDate !== null) {
     const num = Number(item.createdDate);
     if (!isNaN(num) && num > 0) {
@@ -113,6 +147,8 @@ function parseWheelseyeTimestamp(item) {
   }
   return new Date();
 }
+
+const parseWheelseyeTimestamp = parseTelematicsTimestamp;
 
 /**
  * Acquires distributed database lock.
@@ -216,6 +252,231 @@ async function fetchWheelseyeTelemetryWithRetries(apiUrl, maxAttempts = 3) {
 }
 
 /**
+ * Calls Fleetx GPS Analytics / Live Telematics endpoint with 3 retry attempts.
+ */
+async function fetchFleetxTelemetryWithRetries(apiUrl, token, maxAttempts = 3) {
+  if (!apiUrl || !isSafeExternalUrl(apiUrl)) {
+    throw new Error('Refusing to query unsafe or invalid Fleetx GPS API URL.');
+  }
+
+  let lastErr = null;
+  const backoffDelays = [0, 2000, 4000];
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const delay = backoffDelays[attempt - 1] || 2000;
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+
+    try {
+      console.log(`[Fleetx API] Attempt ${attempt}/${maxAttempts} requesting ${apiUrl}...`);
+      const headers = {
+        Accept: 'application/json',
+        'User-Agent': 'SikkaFleet-GpsSync/2.0',
+      };
+      if (token) {
+        headers['Authorization'] = token.startsWith('Bearer ') ? token : `Bearer ${token}`;
+      }
+
+      const response = await axios.get(apiUrl, {
+        timeout: 15000,
+        headers,
+      });
+
+      if (response.data && Array.isArray(response.data.vehicles)) {
+        return { list: response.data.vehicles, status: `${response.status} OK` };
+      }
+      if (response.data && response.data.data && Array.isArray(response.data.data.vehicles)) {
+        return { list: response.data.data.vehicles, status: `${response.status} OK` };
+      }
+      if (Array.isArray(response.data)) {
+        return { list: response.data, status: `${response.status} OK` };
+      }
+
+      throw new Error(`Unexpected payload structure from Fleetx API (status: ${response.status})`);
+    } catch (err) {
+      lastErr = err;
+      console.warn(`[Fleetx API Attempt ${attempt} Failed]: ${err.message}`);
+    }
+  }
+
+  throw lastErr;
+}
+
+/**
+ * Normalizes WheelsEye vehicle telemetry item into unified format.
+ */
+function normalizeWheelseyeItem(item) {
+  const lat = typeof item.latitude === 'number' ? item.latitude : parseFloat(item.latitude);
+  const lon = typeof item.longitude === 'number' ? item.longitude : parseFloat(item.longitude);
+  const speed = Number(item.speed) || 0;
+  const isIgnitionOn = Boolean(item.ignition);
+
+  return {
+    vehicleNumber: item.vehicleNumber?.trim().toUpperCase(),
+    driverName: item.driverName || '',
+    latitude: lat,
+    longitude: lon,
+    speed,
+    ignition: isIgnitionOn,
+    deviceNumber: item.deviceNumber || '',
+    vendorName: item.venndorName || item.vendorName || 'Vaibhav Sikka',
+    vehicleType: item.vehicleType || 'Commercial',
+    angle: item.angle || 0,
+    chargeOn: Boolean(item.chargeOn),
+    timestamp: parseTelematicsTimestamp(item),
+    address: '',
+    provider: 'WheelsEye GPS',
+    rawEventId: String(item.dttimeInEpoch || item.createdDate || ''),
+  };
+}
+
+/**
+ * Normalizes Fleetx vehicle telemetry item into unified format.
+ */
+function normalizeFleetxItem(item) {
+  const lat = typeof item.latitude === 'number' ? item.latitude : parseFloat(item.latitude);
+  const lon = typeof item.longitude === 'number' ? item.longitude : parseFloat(item.longitude);
+  const speed = Number(item.speed) || 0;
+  const isIgnitionOn =
+    item.otherAttributes?.ignition === 'true' ||
+    item.status === 'Ignition On' ||
+    item.otherAttributes?.actualStatus === 'Ignition On' ||
+    item.currentStatus === 'RUNNING';
+
+  return {
+    vehicleNumber: item.vehicleNumber?.trim().toUpperCase(),
+    driverName: item.driverName ? item.driverName.trim() : '',
+    latitude: lat,
+    longitude: lon,
+    speed,
+    ignition: isIgnitionOn,
+    deviceNumber: item.deviceId || item.otherAttributes?.imei || '',
+    vendorName: 'Fleetx',
+    vehicleType: item.vehicleTypeValue || item.vehicleMake || 'Truck',
+    angle: parseFloat(item.otherAttributes?.course) || 0,
+    chargeOn: item.otherAttributes?.power === 'true',
+    timestamp: parseTelematicsTimestamp(item),
+    address: item.address || '',
+    provider: 'Fleetx',
+    rawEventId: String(item.lastUpdatedAt || item.lastStatusTime || item.otherAttributes?.serverTime || ''),
+  };
+}
+
+/**
+ * Fetches and merges telemetry from all active GPS providers (WheelsEye and Fleetx).
+ */
+async function fetchAllGpsTelemetry(gpsSettings = []) {
+  const weConfig = gpsSettings.find(
+    (s) => s.provider && (s.provider.toLowerCase().includes('wheels') || (s.apiUrl && s.apiUrl.includes('wheelseye')))
+  );
+  const fxConfig = gpsSettings.find(
+    (s) => s.provider && (s.provider.toLowerCase().includes('fleetx') || (s.apiUrl && s.apiUrl.includes('fleetx')))
+  );
+
+  const weUrl = weConfig?.apiUrl || DEFAULT_WHEELSEYE_URL;
+  const weActive = weConfig ? weConfig.status === 'Active' : true;
+
+  const fxUrl = fxConfig?.apiUrl || DEFAULT_FLEETX_URL;
+  const fxToken = fxConfig?.encryptedApiKey || DEFAULT_FLEETX_TOKEN;
+  const fxActive = fxConfig ? fxConfig.status === 'Active' : true;
+
+  const fetchPromises = [];
+
+  if (weActive && weUrl) {
+    fetchPromises.push(
+      fetchWheelseyeTelemetryWithRetries(weUrl, 3)
+        .then((res) => ({
+          provider: 'WheelsEye GPS',
+          status: res.status,
+          items: res.list.map(normalizeWheelseyeItem),
+          error: null,
+          apiUrl: weUrl,
+        }))
+        .catch((err) => ({
+          provider: 'WheelsEye GPS',
+          status: `ERROR: ${err.message}`,
+          items: [],
+          error: err,
+          apiUrl: weUrl,
+        }))
+    );
+  }
+
+  if (fxActive && fxUrl) {
+    fetchPromises.push(
+      fetchFleetxTelemetryWithRetries(fxUrl, fxToken, 3)
+        .then((res) => ({
+          provider: 'Fleetx',
+          status: res.status,
+          items: res.list.map(normalizeFleetxItem),
+          error: null,
+          apiUrl: fxUrl,
+          token: fxToken,
+        }))
+        .catch((err) => ({
+          provider: 'Fleetx',
+          status: `ERROR: ${err.message}`,
+          items: [],
+          error: err,
+          apiUrl: fxUrl,
+          token: fxToken,
+        }))
+    );
+  }
+
+  const results = await Promise.all(fetchPromises);
+
+  const providerStatuses = {};
+  const vehicleMap = new Map();
+  let anySuccess = false;
+  let totalRawCount = 0;
+
+  for (const r of results) {
+    providerStatuses[r.provider] = {
+      status: r.status,
+      error: r.error ? r.error.message : null,
+      count: r.items.length,
+      apiUrl: r.apiUrl,
+      token: r.token,
+    };
+
+    if (!r.error) {
+      anySuccess = true;
+      totalRawCount += r.items.length;
+    }
+
+    for (const item of r.items) {
+      if (!item.vehicleNumber) continue;
+      const cleanNum = item.vehicleNumber.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const existing = vehicleMap.get(cleanNum);
+
+      if (!existing) {
+        vehicleMap.set(cleanNum, item);
+      } else {
+        // If vehicle reported by multiple providers, prioritize the one with more recent timestamp
+        const prevTime = existing.timestamp ? existing.timestamp.getTime() : 0;
+        const curTime = item.timestamp ? item.timestamp.getTime() : 0;
+        if (curTime > prevTime) {
+          vehicleMap.set(cleanNum, item);
+        }
+      }
+    }
+  }
+
+  if (!anySuccess && results.length > 0) {
+    const allErrors = results.map((r) => `${r.provider}: ${r.error?.message}`).join('; ');
+    throw new Error(`All GPS providers failed: ${allErrors}`);
+  }
+
+  return {
+    vehicles: Array.from(vehicleMap.values()),
+    providerStatuses,
+    totalRawCount,
+  };
+}
+
+/**
  * MAIN GPS SYNC PROCESSING SERVICE (Requirement 2)
  * Used by BOTH Automatic 30-min Background Scheduler and Manual "Sync GPS Now" button.
  *
@@ -270,13 +531,11 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
   }
 
   try {
-    // 2. Resolve GPS API configuration
-    let config = await GpsSetting.findOne().sort({ updatedAt: -1 });
-    const apiUrl =
-      config?.apiUrl && config.apiUrl.includes('wheelseye') ? config.apiUrl : DEFAULT_WHEELSEYE_URL;
+    // 2. Resolve GPS API configurations
+    const allSettings = await GpsSetting.find();
 
     // 3. Load Active Vehicles and Plants from database (Requirement 1)
-    const activeVehicles = await Vehicle.find({ status: 'Active' });
+    let activeVehicles = await Vehicle.find({ status: 'Active' });
     const activePlants = await Plant.find({ status: 'Active' });
 
     const vehicleByNumber = new Map();
@@ -285,15 +544,19 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
       vehicleByNumber.set(clean, v);
     }
 
-    // 4. Call Wheelseye GPS API with retry logic (Requirement 4)
+    // 4. Call GPS APIs (WheelsEye & Fleetx) with retry logic
     let rawVehicles = [];
     let apiStatus = '200 OK';
     let fetchError = null;
+    let providerStatuses = {};
 
     try {
-      const fetchResult = await fetchWheelseyeTelemetryWithRetries(apiUrl, 3);
-      rawVehicles = fetchResult.list;
-      apiStatus = fetchResult.status;
+      const fetchResult = await fetchAllGpsTelemetry(allSettings);
+      rawVehicles = fetchResult.vehicles;
+      providerStatuses = fetchResult.providerStatuses;
+      apiStatus = Object.entries(providerStatuses)
+        .map(([p, s]) => `${p}: ${s.status}`)
+        .join(' | ');
     } catch (err) {
       fetchError = err;
       apiStatus = `ERROR: ${err.message}`;
@@ -316,12 +579,16 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
         }
       }
 
-      if (config) {
-        config.connectionStatus = 'Connection Failed';
-        config.last_sync_status = 'FAILED';
-        config.lastError = fetchError.message;
-        await config.save();
-      }
+      await GpsSetting.updateMany(
+        {},
+        {
+          $set: {
+            connectionStatus: 'Connection Failed',
+            last_sync_status: 'FAILED',
+            lastError: fetchError.message,
+          },
+        }
+      );
 
       const completedAt = new Date();
       const durationMs = completedAt.getTime() - startedAt.getTime();
@@ -344,7 +611,7 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
         await cronLogDoc.save();
       }
 
-      throw new Error(`Wheelseye GPS API request failed: ${fetchError.message}`);
+      throw new Error(`GPS API request failed: ${fetchError.message}`);
     }
 
     // 6. Process Received Telemetry for Each Active Vehicle
@@ -357,9 +624,40 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
     for (const item of rawVehicles) {
       if (!item.vehicleNumber) continue;
       const cleanNum = item.vehicleNumber.toUpperCase().replace(/[^A-Z0-9]/g, '');
-      const vehicle = vehicleByNumber.get(cleanNum);
+      let vehicle = vehicleByNumber.get(cleanNum);
 
-      if (!vehicle) continue; // Skip vehicles not registered in active fleet
+      // Check if vehicle exists in database (even if Inactive) or create new one
+      if (!vehicle) {
+        vehicle = await Vehicle.findOne({ vehicleNumber: item.vehicleNumber.trim().toUpperCase() });
+        if (vehicle) {
+          vehicleByNumber.set(cleanNum, vehicle);
+        } else {
+          // Truly new vehicle from authorized telemetry provider (e.g. Fleetx or WheelsEye)
+          try {
+            vehicle = await Vehicle.create({
+              vehicleNumber: item.vehicleNumber.trim().toUpperCase(),
+              driverName: item.driverName ? item.driverName.trim() : '',
+              mobile: '',
+              fleetType: 'Own Fleet',
+              ownerName: '',
+              gpsDeviceId: item.deviceNumber || item.vehicleNumber.trim().toUpperCase(),
+              status: 'Active',
+            });
+            vehicleByNumber.set(cleanNum, vehicle);
+            activeVehicles.push(vehicle);
+            console.log(`[GPS Sync] Auto-registered new fleet vehicle from ${item.provider}: ${vehicle.vehicleNumber}`);
+          } catch (vehCreateErr) {
+            console.warn(`[GPS Sync Auto-Register Warning] Could not register ${item.vehicleNumber}: ${vehCreateErr.message}`);
+            continue;
+          }
+        }
+      }
+
+      // If vehicle is marked Inactive by administrator, skip location tracking
+      if (vehicle.status === 'Inactive') {
+        continue;
+      }
+
       seenVehicleIds.add(vehicle._id.toString());
       processedCount++;
 
@@ -371,10 +669,10 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
         continue;
       }
 
-      const deviceTimestamp = parseWheelseyeTimestamp(item);
+      const deviceTimestamp = item.timestamp || syncTime;
       const speed = Number(item.speed) || 0;
       const ignition = Boolean(item.ignition);
-      const address = getReadableLocation(lat, lon, activePlants);
+      const address = item.address || getReadableLocation(lat, lon, activePlants);
 
       // Geofence Calculation (Requirement 6)
       // Check DASNA Plant, Salt Plant, Tea Plant, etc.
@@ -421,8 +719,8 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
           plant_id: plantId,
           plantName,
           sync_source: isAuto ? 'AUTO' : 'MANUAL',
-          rawEventId: String(item.dttimeInEpoch || item.createdDate || ''),
-          source: 'WheelsEye GPS',
+          rawEventId: String(item.rawEventId || ''),
+          source: item.provider || 'WheelsEye GPS',
         });
       }
 
@@ -512,8 +810,7 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
       updatedCount++;
     }
 
-    // 7. Active vehicles not returned by Wheelseye (Requirement 19)
-    // Mark as GPS DATA UNAVAILABLE or GPS STALE without moving to Outside
+    // 7. Active vehicles not returned by any active GPS provider (Requirement 19)
     for (const v of activeVehicles) {
       if (!seenVehicleIds.has(v._id.toString())) {
         const curStatus = await VehicleCurrentStatus.findOne({ vehicleId: v._id });
@@ -525,7 +822,7 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
       }
     }
 
-    // 8. Automated Driver-to-Vehicle Assignment using GPS Proximity (Features 2, 3, 5)
+    // 8. Automated Driver-to-Vehicle Assignment using GPS Proximity
     let assignmentStats = null;
     try {
       assignmentStats = await executeAutomatedDriverAssignment();
@@ -536,37 +833,54 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
     // 9. Next scheduled 30-minute slot in Asia/Kolkata (IST)
     const nextSlot = getNextFixed30MinSlotIST(syncTime);
 
-    // 10. Update GpsSetting with official status
-    if (!config) {
-      config = await GpsSetting.create({
-        provider: 'WheelsEye GPS',
-        apiUrl,
-        status: 'Active',
-        connectionStatus: 'Connected',
-        lastSync: syncTime,
-        last_evaluated_timestamp: syncTime,
-        last_sync_status: 'SUCCESS',
-        next_scheduled_sync_at: nextSlot,
-        last_sync_source: isAuto ? 'AUTO' : 'MANUAL',
-        vehicles_processed: processedCount,
-        vehicles_updated: updatedCount,
-        vehicles_failed: failedCount,
-        pollIntervalSeconds: 1800,
-      });
-    } else {
-      config.lastSync = syncTime;
-      config.last_evaluated_timestamp = syncTime;
-      config.last_sync_status = 'SUCCESS';
-      config.next_scheduled_sync_at = nextSlot;
-      config.last_sync_source = isAuto ? 'AUTO' : 'MANUAL';
-      config.vehicles_processed = processedCount;
-      config.vehicles_updated = updatedCount;
-      config.vehicles_failed = failedCount;
-      config.connectionStatus = 'Connected';
-      config.lastError = '';
-      config.pollIntervalSeconds = 1800;
-      await config.save();
-    }
+    // 10. Update GpsSetting documents for both WheelsEye and Fleetx
+    const weStatus = providerStatuses['WheelsEye GPS'];
+    const fxStatus = providerStatuses['Fleetx'];
+
+    await GpsSetting.findOneAndUpdate(
+      { $or: [{ provider: /wheels/i }, { apiUrl: /wheelseye/i }] },
+      {
+        $set: {
+          provider: 'WheelsEye GPS',
+          apiUrl: weStatus?.apiUrl || DEFAULT_WHEELSEYE_URL,
+          status: 'Active',
+          connectionStatus: weStatus?.error ? 'Connection Failed' : 'Connected',
+          lastSync: syncTime,
+          last_evaluated_timestamp: syncTime,
+          last_sync_status: weStatus?.error ? 'FAILED' : 'SUCCESS',
+          lastError: weStatus?.error || '',
+          next_scheduled_sync_at: nextSlot,
+          last_sync_source: isAuto ? 'AUTO' : 'MANUAL',
+          vehicles_processed: weStatus?.count || 0,
+          vehicles_updated: weStatus?.count || 0,
+          pollIntervalSeconds: 1800,
+        },
+      },
+      { upsert: true }
+    );
+
+    await GpsSetting.findOneAndUpdate(
+      { $or: [{ provider: /fleetx/i }, { apiUrl: /fleetx/i }] },
+      {
+        $set: {
+          provider: 'Fleetx',
+          apiUrl: fxStatus?.apiUrl || DEFAULT_FLEETX_URL,
+          encryptedApiKey: fxStatus?.token || DEFAULT_FLEETX_TOKEN,
+          status: 'Active',
+          connectionStatus: fxStatus?.error ? 'Connection Failed' : 'Connected',
+          lastSync: syncTime,
+          last_evaluated_timestamp: syncTime,
+          last_sync_status: fxStatus?.error ? 'FAILED' : 'SUCCESS',
+          lastError: fxStatus?.error || '',
+          next_scheduled_sync_at: nextSlot,
+          last_sync_source: isAuto ? 'AUTO' : 'MANUAL',
+          vehicles_processed: fxStatus?.count || 0,
+          vehicles_updated: fxStatus?.count || 0,
+          pollIntervalSeconds: 1800,
+        },
+      },
+      { upsert: true }
+    );
 
     const completedAt = new Date();
     const durationMs = completedAt.getTime() - startedAt.getTime();
@@ -641,7 +955,8 @@ async function executeGpsSync({ source = 'AUTO', triggerType = 'GPS_AUTO_SYNC_30
  * Retrieves the comprehensive auto-sync state for dashboard and health inspection (Requirement 10).
  */
 async function getAutoSyncStatus() {
-  const setting = await GpsSetting.findOne().sort({ updatedAt: -1 });
+  const settings = await GpsSetting.find();
+  const setting = settings.find((s) => s.status === 'Active') || settings[0];
   const recentLog = await GpsSyncLog.findOne().sort({ startedAt: -1 });
   const lock = await GpsSyncLock.findById(LOCK_ID);
 
@@ -649,9 +964,11 @@ async function getAutoSyncStatus() {
   const nextScheduled = setting?.next_scheduled_sync_at || getNextFixed30MinSlotIST(now);
 
   const isLockActive = Boolean(lock && lock.isLocked && lock.expiresAt && lock.expiresAt > now);
+  const activeProviders = settings.filter((s) => s.status === 'Active').map((s) => s.provider);
+  const providerNames = activeProviders.length > 0 ? activeProviders.join(' & ') : (setting?.provider || 'WheelsEye GPS & Fleetx');
 
   return {
-    auto_sync_enabled: setting ? setting.status === 'Active' : true,
+    auto_sync_enabled: settings.some((s) => s.status === 'Active'),
     interval_minutes: 30,
     timezone: 'Asia/Kolkata',
     last_sync_started_at: recentLog?.startedAt || setting?.lastSync || null,
@@ -664,9 +981,9 @@ async function getAutoSyncStatus() {
     vehicles_updated: setting?.vehicles_updated ?? recentLog?.vehiclesUpdated ?? 0,
     vehicles_failed: setting?.vehicles_failed ?? recentLog?.vehiclesFailed ?? 0,
     is_syncing: isLockActive,
-    provider: setting?.provider || 'WheelsEye GPS',
-    connection_status: setting?.connectionStatus || 'Connected',
-    last_error: setting?.lastError || '',
+    provider: providerNames,
+    connection_status: settings.some((s) => s.connectionStatus === 'Connected') ? 'Connected' : (setting?.connectionStatus || 'Connected'),
+    last_error: settings.find((s) => s.lastError)?.lastError || '',
   };
 }
 
@@ -677,4 +994,10 @@ module.exports = {
   acquireDistributedLock,
   releaseDistributedLock,
   DEFAULT_WHEELSEYE_URL,
+  DEFAULT_FLEETX_URL,
+  DEFAULT_FLEETX_TOKEN,
+  fetchAllGpsTelemetry,
+  fetchWheelseyeTelemetryWithRetries,
+  fetchFleetxTelemetryWithRetries,
+  parseTelematicsTimestamp,
 };

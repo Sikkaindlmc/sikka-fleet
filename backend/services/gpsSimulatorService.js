@@ -85,98 +85,42 @@ async function generateSimulatedLocations() {
 }
 
 /**
- * Fetch vehicle coordinates from configured GPS provider.
- * If provider is external, calls the third-party endpoint; otherwise falls back to simulator.
+ * Fetch vehicle coordinates from configured GPS providers (WheelsEye and Fleetx).
+ * Merges real-time telemetry from all active providers; falls back to simulator on failure.
  */
 async function fetchGpsLocations(gpsConfig) {
-  if (gpsConfig && gpsConfig.status === 'Active' && gpsConfig.apiUrl && !gpsConfig.apiUrl.includes('.local')) {
-    try {
-      const headers = {};
-      if (gpsConfig.encryptedApiKey && !gpsConfig.apiUrl.includes('accessToken=')) {
-        headers['Authorization'] = `Bearer ${gpsConfig.encryptedApiKey}`;
-      }
-      if (gpsConfig.apiSecret) {
-        headers['X-Api-Secret'] = gpsConfig.apiSecret;
-      }
+  try {
+    const GpsSetting = require('../models/GpsSetting');
+    const { fetchAllGpsTelemetry } = require('./gpsSyncService');
 
-      const response = await axios.get(gpsConfig.apiUrl, {
-        headers,
-        timeout: 10000,
-      });
-
-      // Parse WheelsEye telemetry timestamp with millisecond/second support
-      const parseTelematicsTimestamp = (item) => {
-        if (item.createdDate !== undefined && item.createdDate !== null) {
-          const num = Number(item.createdDate);
-          if (!isNaN(num) && num > 0) {
-            const ms = num > 1e11 ? num : num * 1000;
-            const d = new Date(ms);
-            if (!isNaN(d.getTime())) return d;
-          }
-        }
-        if (item.timestamp) {
-          const d = new Date(item.timestamp);
-          if (!isNaN(d.getTime())) return d;
-        }
-        if (item.dttime) {
-          const d = new Date(item.dttime);
-          if (!isNaN(d.getTime())) return d;
-        }
-        if (item.createdDateReadable) {
-          const d = new Date(item.createdDateReadable);
-          if (!isNaN(d.getTime())) return d;
-        }
-        return new Date();
-      };
-
-      // 1. WheelsEye format: { success: true, data: { totalCount: 21, list: [ ... ] } }
-      if (response.data && response.data.data && Array.isArray(response.data.data.list)) {
-        return response.data.data.list.map((item) => ({
-          vehicleNumber: item.vehicleNumber?.trim().toUpperCase(),
-          latitude: Number(item.latitude),
-          longitude: Number(item.longitude),
-          speed: item.speed || 0,
-          ignition: Boolean(item.ignition),
-          deviceNumber: item.deviceNumber,
-          vendorName: item.venndorName || item.vendorName || 'Vaibhav Sikka',
-          vehicleType: item.vehicleType || 'Commercial',
-          angle: item.angle || 0,
-          chargeOn: Boolean(item.chargeOn),
-          timestamp: parseTelematicsTimestamp(item),
-          readableTime: item.createdDateReadable || item.dttime,
-        }));
-      }
-
-      // 2. Standard list format
-      if (response.data && Array.isArray(response.data.list)) {
-        return response.data.list.map((item) => ({
-          vehicleNumber: item.vehicleNumber?.trim().toUpperCase(),
-          latitude: Number(item.latitude),
-          longitude: Number(item.longitude),
-          speed: item.speed || 0,
-          ignition: Boolean(item.ignition),
-          deviceNumber: item.deviceNumber,
-          vendorName: item.venndorName || item.vendorName,
-          timestamp: parseTelematicsTimestamp(item),
-        }));
-      }
-
-      // 3. Direct array of vehicles
-      if (Array.isArray(response.data)) {
-        return response.data.map((item) => ({
-          ...item,
-          timestamp: parseTelematicsTimestamp(item),
-        }));
-      }
-      if (response.data && Array.isArray(response.data.vehicles)) {
-        return response.data.vehicles.map((item) => ({
-          ...item,
-          timestamp: parseTelematicsTimestamp(item),
-        }));
-      }
-    } catch (error) {
-      console.warn(`[GPS External API Warning] External GPS request failed (${error.message}). Falling back to simulation.`);
+    let settings = [];
+    if (gpsConfig && gpsConfig.apiUrl && !gpsConfig.apiUrl.includes('.local')) {
+      settings = [gpsConfig];
+    } else {
+      settings = await GpsSetting.find({ status: 'Active' });
     }
+
+    const telemetry = await fetchAllGpsTelemetry(settings);
+    if (telemetry && telemetry.vehicles && telemetry.vehicles.length > 0) {
+      return telemetry.vehicles.map((v) => ({
+        vehicleNumber: v.vehicleNumber,
+        latitude: v.latitude,
+        longitude: v.longitude,
+        speed: v.speed || 0,
+        ignition: Boolean(v.ignition),
+        deviceNumber: v.deviceNumber || 'N/A',
+        vendorName: v.vendorName || (v.provider === 'Fleetx' ? 'Fleetx' : 'Vaibhav Sikka'),
+        vehicleType: v.vehicleType || 'Commercial',
+        angle: v.angle || 0,
+        chargeOn: Boolean(v.chargeOn),
+        timestamp: v.timestamp || new Date(),
+        readableTime: v.timestamp ? v.timestamp.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '',
+        address: v.address || '',
+        provider: v.provider,
+      }));
+    }
+  } catch (error) {
+    console.warn(`[GPS External API Warning] External GPS request failed (${error.message}). Falling back to simulation.`);
   }
 
   // Fallback / Built-in Telematics simulator
