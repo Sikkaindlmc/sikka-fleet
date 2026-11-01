@@ -2,6 +2,7 @@ const express = require('express');
 const GpsSetting = require('../models/GpsSetting');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
 const { syncGpsPositions, testGpsConnection } = require('../services/gpsPollerService');
+const { generateFleetReport } = require('../services/reportCalculationService');
 const { filterActivePlans } = require('../utils/planHelper');
 
 const router = express.Router();
@@ -442,6 +443,24 @@ router.get('/live-vehicles', async (req, res) => {
   } catch (error) {
     console.error('[Live Vehicles Error]:', error);
     res.status(500).json({ error: 'Failed to retrieve live telemetry vehicles.' });
+  }
+});
+
+router.get('/daily-report', async (req, res) => {
+  try {
+    const { from, to, vehicleNumber } = req.query;
+    if (!from || !to) {
+      return res.status(400).json({ error: 'Query parameters "from" and "to" (YYYY-MM-DD) are required.' });
+    }
+    const report = await generateFleetReport({
+      fromDate: from,
+      toDate: to,
+      vehicleNumber: vehicleNumber && vehicleNumber.trim() !== '' ? vehicleNumber : 'ALL',
+    });
+    res.json(report);
+  } catch (error) {
+    console.error('[Daily Report Error]:', error);
+    res.status(500).json({ error: error.message || 'Failed to generate daily report.' });
   }
 });
 

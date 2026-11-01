@@ -141,6 +141,39 @@ function computeDailyDurations(normalizedSegments, dayStart, dayEnd) {
     'Salt Plant': 0,
     'Tea Plant': 0,
     'Dasna Plant': 0,
+    // We'll compute Outside later to ensure 24h total
+  };
+
+  for (const seg of normalizedSegments) {
+    const oStart = Math.max(seg.start, dStart);
+    const oEnd = Math.min(seg.end, dEnd);
+    if (oEnd > oStart) {
+      const durationMs = oEnd - oStart;
+      if (totals[seg.state] !== undefined) {
+        totals[seg.state] += durationMs;
+      }
+    }
+  }
+
+  // Calculate outside as remainder of 24h day
+  const dayMs = 24 * 60 * 60 * 1000;
+  const plantMs = (totals['Salt Plant'] || 0) + (totals['Tea Plant'] || 0) + (totals['Dasna Plant'] || 0);
+  const outsideMs = Math.max(dayMs - plantMs, 0);
+
+  return {
+    saltStay: msToHHMM(totals['Salt Plant'] || 0),
+    teaStay: msToHHMM(totals['Tea Plant'] || 0),
+    dasnaStay: msToHHMM(totals['Dasna Plant'] || 0),
+    outsideTotal: msToHHMM(outsideMs),
+  };
+}
+  const dStart = dayStart.getTime();
+  const dEnd = dayEnd.getTime();
+
+  const totals = {
+    'Salt Plant': 0,
+    'Tea Plant': 0,
+    'Dasna Plant': 0,
     Outside: 0,
   };
 
