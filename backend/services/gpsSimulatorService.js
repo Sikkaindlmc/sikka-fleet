@@ -1,100 +1,20 @@
-const axios = require('axios');
 const Vehicle = require('../models/Vehicle');
 const Plant = require('../models/Plant');
-
-/**
- * Built-in fleet simulation logic.
- * Generates realistic coordinates around plant locations and highways in Delhi NCR/UP.
- */
-
-// Coordinate presets matching our seed plants
-// Tea Plant (Noida Sector 62): 28.6280, 77.3670
-// Salt Plant (Ghaziabad Meerut Road): 28.6820, 77.4420
-// Ghaziabad Plant (Sahibabad Industrial Area): 28.6650, 77.3450
-
-// Vehicle movements state in-memory to simulate smooth driving
-const vehicleSimStates = new Map();
-
-function getRandomOffset(radiusInMeters) {
-  // ~111,320 meters per degree latitude
-  const radiusInDegrees = radiusInMeters / 111320;
-  const u = Math.random();
-  const v = Math.random();
-  const w = radiusInDegrees * Math.sqrt(u);
-  const t = 2 * Math.PI * v;
-  const dLat = w * Math.cos(t);
-  const dLon = (w * Math.sin(t)) / Math.cos(28.6 * (Math.PI / 180));
-  return { dLat, dLon };
-}
-
-/**
- * Generates simulated GPS locations for all active vehicles.
- * Distributes some inside Tea Plant, some inside Salt Plant, some in Ghaziabad, and some Outside.
- */
-async function generateSimulatedLocations() {
-  const vehicles = await Vehicle.find({ status: 'Active' });
-  const plants = await Plant.find({ status: 'Active' });
-
-  const locations = [];
-
-  for (let i = 0; i < vehicles.length; i++) {
-    const v = vehicles[i];
-    let simState = vehicleSimStates.get(v._id.toString());
-
-    if (!simState) {
-      // Determine initial zone for this vehicle based on index
-      // e.g. 0 & 1 -> Tea Plant, 2 -> Salt Plant, 3 -> Ghaziabad Plant, 4 & 5 -> Outside
-      const targetPlantIndex = i % (plants.length + 2); // +2 for Outside cases
-      if (targetPlantIndex < plants.length) {
-        const plant = plants[targetPlantIndex];
-        // Generate within plant radius * 0.7 to guarantee inside
-        const offset = getRandomOffset(plant.radiusMeter * 0.5);
-        simState = {
-          lat: plant.latitude + offset.dLat,
-          lon: plant.longitude + offset.dLon,
-          targetType: 'plant',
-          plantId: plant._id,
-        };
-      } else {
-        // Outside plant: e.g. on Delhi-Meerut Expressway or NH9 (outside any plant)
-        simState = {
-          lat: 28.5900 + (i * 0.015),
-          lon: 77.3100 + (i * 0.012),
-          targetType: 'outside',
-        };
-      }
-      vehicleSimStates.set(v._id.toString(), simState);
-    } else {
-      // Small jitter/movement (5-15 meters)
-      const jitter = getRandomOffset(15);
-      simState.lat += jitter.dLat;
-      simState.lon += jitter.dLon;
-    }
-
-    locations.push({
-      vehicleId: v._id,
-      vehicleNumber: v.vehicleNumber,
-      latitude: parseFloat(simState.lat.toFixed(6)),
-      longitude: parseFloat(simState.lon.toFixed(6)),
-      speed: Math.floor(Math.random() * 45) + 15,
-      timestamp: new Date(),
-    });
-  }
-
-  return locations;
-}
+const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
+const GpsSetting = require('../models/GpsSetting');
+const { fetchAllGpsTelemetry } = require('./gpsSyncService');
 
 /**
  * Fetch vehicle coordinates from configured GPS providers (WheelsEye and Fleetx).
- * Merges real-time telemetry from all active providers; falls back to simulator on failure.
+ * Reads real-time telemetry from providers.
+ * NEVER generates fake or simulated random coordinates.
+ * If external GPS fails or is unavailable, falls back to the last known verified
+ * database status in VehicleCurrentStatus; fallback values remain explicitly stale.
  */
 async function fetchGpsLocations(gpsConfig) {
   try {
-    const GpsSetting = require('../models/GpsSetting');
-    const { fetchAllGpsTelemetry } = require('./gpsSyncService');
-
     let settings = [];
-    if (gpsConfig && gpsConfig.apiUrl && !gpsConfig.apiUrl.includes('.local')) {
+    if (gpsConfig && gpsConfig.apiUrl && !gpsConfig.apiUrl.includes('••••')) {
       settings = [gpsConfig];
     } else {
       settings = await GpsSetting.find({ status: 'Active' });
@@ -106,29 +26,53 @@ async function fetchGpsLocations(gpsConfig) {
         vehicleNumber: v.vehicleNumber,
         latitude: v.latitude,
         longitude: v.longitude,
-        speed: v.speed || 0,
-        ignition: Boolean(v.ignition),
+        speed: v.speed,
+        ignition: v.ignition,
         deviceNumber: v.deviceNumber || 'N/A',
-        vendorName: v.vendorName || (v.provider === 'Fleetx' ? 'Fleetx' : 'Vaibhav Sikka'),
+        vendorName: v.vendorName || (v.provider === 'Fleetx' ? 'Fleetx' : 'WheelsEye GPS'),
         vehicleType: v.vehicleType || 'Commercial',
         angle: v.angle || 0,
-        chargeOn: Boolean(v.chargeOn),
-        timestamp: v.timestamp || new Date(),
-        readableTime: v.timestamp ? v.timestamp.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '',
+        chargeOn: v.chargeOn,
+        timestamp: v.timestamp || null,
+        readableTime: v.timestamp ? new Date(v.timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '',
         address: v.address || '',
-        provider: v.provider,
+        provider: v.provider || 'WheelsEye GPS',
+        gps_status: v.timestamp && Date.now() - new Date(v.timestamp).getTime() <= 60 * 60 * 1000
+          ? 'LIVE'
+          : 'GPS STALE',
       }));
     }
   } catch (error) {
-    console.warn(`[GPS External API Warning] External GPS request failed (${error.message}). Falling back to simulation.`);
+    console.warn(`[GPS External API Warning] External GPS request failed (${error.message}). Loading last known GPS status.`);
   }
 
-  // Fallback / Built-in Telematics simulator
-  return generateSimulatedLocations();
+  // Fallback to real last known positions from VehicleCurrentStatus (never fake data)
+  const fallbackStatuses = await VehicleCurrentStatus.find()
+    .populate('vehicleId', 'vehicleNumber driverName mobile fleetType status');
+
+  return fallbackStatuses
+    .filter((st) => st.vehicleId && st.vehicleId.status === 'Active' && typeof st.latitude === 'number' && typeof st.longitude === 'number')
+    .map((st) => ({
+      vehicleNumber: st.vehicleId.vehicleNumber,
+      latitude: st.latitude,
+      longitude: st.longitude,
+      speed: st.rawTelemetry ? st.speed : null,
+      ignition: st.rawTelemetry ? st.ignition : null,
+      deviceNumber: 'GPS-STORED',
+      vendorName: 'WheelsEye GPS',
+      vehicleType: st.vehicleId.fleetType || 'Commercial',
+      angle: 0,
+      chargeOn: null,
+      timestamp: st.latest_gps_timestamp || null,
+      readableTime: st.latest_gps_timestamp
+        ? new Date(st.latest_gps_timestamp).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+        : '',
+      address: st.address || '',
+      provider: st.provider || null,
+      gps_status: 'GPS STALE',
+    }));
 }
 
 module.exports = {
   fetchGpsLocations,
-  generateSimulatedLocations,
-  vehicleSimStates,
 };

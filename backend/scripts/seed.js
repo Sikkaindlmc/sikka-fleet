@@ -6,61 +6,46 @@ const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const Plant = require('../models/Plant');
 const Vehicle = require('../models/Vehicle');
-const GpsSetting = require('../models/GpsSetting');
 const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
 const PlantEntry = require('../models/PlantEntry');
 const VehicleLocation = require('../models/VehicleLocation');
-const { processVehicleLocation } = require('../services/geofenceService');
 
 const connectDB = require('../config/db');
 
 async function seedDatabase() {
+  if (process.env.NODE_ENV === 'production' || !process.argv.includes('--allow-seed')) {
+    console.error('Refusing to overwrite fleet data. Use --allow-seed outside production only.');
+    process.exitCode = 1;
+    return;
+  }
+
   try {
     await connectDB();
     console.log('[Seed] Connected to MongoDB Atlas successfully.');
 
+    const plants = await Plant.find({ status: 'Active' });
+    const dasnaPlant = plants.find((plant) => plant.plantName.toLowerCase().includes('dasna'));
+    const saltPlant = plants.find((plant) => plant.plantName.toLowerCase().includes('salt'));
+    const teaPlant = plants.find((plant) => plant.plantName.toLowerCase().includes('tea'));
+    const requiredPlants = [dasnaPlant, saltPlant, teaPlant];
+    if (requiredPlants.some((plant) => (
+      !plant ||
+      !Number.isFinite(plant.latitude) ||
+      !Number.isFinite(plant.longitude) ||
+      (plant.latitude === 0 && plant.longitude === 0) ||
+      !Number.isFinite(plant.radiusMeters ?? plant.radiusMeter) ||
+      (plant.radiusMeters ?? plant.radiusMeter) <= 0
+    ))) {
+      throw new Error('Create and verify the DASNA, Salt, and Tea Plant records in Plant Management before seeding users or vehicles.');
+    }
+
     // Clear existing collections
     await User.deleteMany({});
-    await Plant.deleteMany({});
     await Vehicle.deleteMany({});
-    await GpsSetting.deleteMany({});
     await VehicleCurrentStatus.deleteMany({});
     await PlantEntry.deleteMany({});
     await VehicleLocation.deleteMany({});
     console.log('[Seed] Cleared existing data.');
-
-    // 1. Seed Plants
-    const plants = await Plant.create([
-      {
-        plantName: 'Tea Plant',
-        location: 'Sector 62, Noida, UP',
-        radiusMeters: 500,
-        latitude: 28.6280,
-        longitude: 77.3670,
-        status: 'Active',
-      },
-      {
-        plantName: 'Salt Plant',
-        location: 'Meerut Road Industrial Area, Ghaziabad, UP',
-        radiusMeters: 600,
-        latitude: 28.6820,
-        longitude: 77.4420,
-        status: 'Active',
-      },
-      {
-        plantName: 'Ghaziabad Plant',
-        location: 'Site IV Industrial Area, Sahibabad, Ghaziabad',
-        radiusMeters: 750,
-        latitude: 28.6650,
-        longitude: 77.3450,
-        status: 'Active',
-      },
-    ]);
-    console.log(`[Seed] Created ${plants.length} plants.`);
-
-    const teaPlant = plants.find((p) => p.plantName === 'Tea Plant');
-    const saltPlant = plants.find((p) => p.plantName === 'Salt Plant');
-    const gzPlant = plants.find((p) => p.plantName === 'Ghaziabad Plant');
 
     // 2. Seed Default Administrator & Operator
     // Full Name: Ajay Somra | Username: ajaysomra | Password: Somra@2012
@@ -74,7 +59,7 @@ async function seedDatabase() {
         passwordHash: adminPasswordHash,
         role: 'Admin',
         accessPages: ['Dashboard', 'Plant', 'Vehicle Register', 'GPS', 'User Management'],
-        accessPlants: [teaPlant._id, saltPlant._id, gzPlant._id],
+        accessPlants: [dasnaPlant._id, saltPlant._id, teaPlant._id],
         status: 'Active',
       },
       {
@@ -111,41 +96,7 @@ async function seedDatabase() {
     );
     console.log(`[Seed] Created ${vehicles.length} vehicles from WheelsEye API with blank driver names.`);
 
-    // 4. Seed GPS Settings (WheelsEye API)
-    await GpsSetting.create({
-      provider: 'WheelsEye GPS',
-      apiUrl: 'https://api.wheelseye.com/currentLoc?accessToken=53afc208-0981-48c7-b134-d85d2f33dc0c',
-      encryptedApiKey: '53afc208-0981-48c7-b134-d85d2f33dc0c',
-      apiSecret: '',
-      status: 'Active',
-      connectionStatus: 'Connected',
-      lastSync: new Date(),
-      pollIntervalSeconds: 15,
-    });
-    console.log('[Seed] Created WheelsEye GPS settings.');
-
-    // 5. Initial Geofenced Location distribution
-    const baseDate = new Date('2026-09-21T10:15:00+05:30');
-
-    // UP14AB1234 inside Tea Plant (~85m)
-    await processVehicleLocation(vehicles[0], 28.6284, 77.3675, new Date(baseDate.getTime()), 'Initial Setup');
-
-    // UP14CD5678 inside Tea Plant (~140m)
-    await processVehicleLocation(vehicles[1], 28.6272, 77.3662, new Date(baseDate.getTime() + 27 * 60000), 'Initial Setup');
-
-    // UP14EF9012 inside Salt Plant (~120m)
-    await processVehicleLocation(vehicles[2], 28.6815, 77.4412, new Date(baseDate.getTime() + 50 * 60000), 'Initial Setup');
-
-    // DL01XY7788 inside Ghaziabad Plant (~190m)
-    await processVehicleLocation(vehicles[3], 28.6660, 77.3460, new Date(baseDate.getTime() + 75 * 60000), 'Initial Setup');
-
-    // HR26AA1122 Outside (On NH9 Highway, ~4.5 km away)
-    await processVehicleLocation(vehicles[4], 28.5950, 77.3200, new Date(baseDate.getTime() + 120 * 60000), 'Initial Setup');
-
-    // UP16ZZ4455 Outside (Near Mayur Vihar, ~6 km away)
-    await processVehicleLocation(vehicles[5], 28.6120, 77.2950, new Date(baseDate.getTime() + 130 * 60000), 'Initial Setup');
-
-    console.log('[Seed] Successfully seeded all initial geofences and data!');
+    console.log('[Seed] Used the saved plant records and created account and vehicle records without synthetic GPS positions.');
   } catch (error) {
     console.error('[Seed Error]:', error);
   } finally {

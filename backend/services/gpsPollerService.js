@@ -13,7 +13,7 @@ const axios = require('axios');
 async function syncGpsPositions(syncType = 'Auto Sync') {
   const isAuto = syncType.toLowerCase().includes('auto') || syncType.toLowerCase().includes('cron');
   return await executeGpsSync({
-    source: isAuto ? 'AUTO' : 'MANUAL',
+    source: isAuto ? 'AUTO' : 'GPS-AUTO',
     triggerType: syncType,
   });
 }
@@ -26,8 +26,10 @@ async function testGpsConnection(targetProvider = null) {
     // If testing Fleetx specifically
     if (providerLower.includes('fleetx')) {
       const fxConfig = settings.find((s) => s.provider && s.provider.toLowerCase().includes('fleetx'));
-      const apiUrl = fxConfig?.apiUrl || DEFAULT_FLEETX_URL;
-      const token = fxConfig?.encryptedApiKey || DEFAULT_FLEETX_TOKEN;
+      let apiUrl = fxConfig?.apiUrl || DEFAULT_FLEETX_URL;
+      if (!apiUrl || apiUrl.includes('••••')) apiUrl = DEFAULT_FLEETX_URL;
+      let token = fxConfig?.encryptedApiKey || DEFAULT_FLEETX_TOKEN;
+      if (!token || token.includes('••••')) token = DEFAULT_FLEETX_TOKEN;
 
       const res = await fetchFleetxTelemetryWithRetries(apiUrl, token, 1);
       const count = res.list ? res.list.length : 0;
@@ -59,9 +61,10 @@ async function testGpsConnection(targetProvider = null) {
     // If testing WheelsEye specifically
     if (providerLower.includes('wheels')) {
       const weConfig = settings.find((s) => s.provider && s.provider.toLowerCase().includes('wheels'));
-      const apiUrl = weConfig?.apiUrl || DEFAULT_WHEELSEYE_URL;
+      let apiUrl = weConfig?.apiUrl || DEFAULT_WHEELSEYE_URL;
+      if (!apiUrl || apiUrl.includes('••••')) apiUrl = DEFAULT_WHEELSEYE_URL;
 
-      const res = await fetchWheelseyeTelemetryWithRetries(apiUrl, 1);
+      const res = await fetchWheelseyeTelemetryWithRetries(apiUrl, 1, weConfig?.encryptedApiKey || process.env.WHEELSEYE_API_KEY || '');
       const count = res.list ? res.list.length : 0;
 
       await GpsSetting.findOneAndUpdate(
@@ -90,22 +93,25 @@ async function testGpsConnection(targetProvider = null) {
     // Default: Test both WheelsEye and Fleetx
     const results = [];
     const weConfig = settings.find((s) => s.provider && s.provider.toLowerCase().includes('wheels'));
-    const weUrl = weConfig?.apiUrl || DEFAULT_WHEELSEYE_URL;
+    let weUrl = weConfig?.apiUrl || DEFAULT_WHEELSEYE_URL;
+    if (!weUrl || weUrl.includes('••••')) weUrl = DEFAULT_WHEELSEYE_URL;
 
     try {
-      const weRes = await fetchWheelseyeTelemetryWithRetries(weUrl, 1);
+      const weRes = await fetchWheelseyeTelemetryWithRetries(weUrl, 1, weConfig?.encryptedApiKey || process.env.WHEELSEYE_API_KEY || '');
       results.push(`WheelsEye: ${weRes.list.length} vehicles`);
       await GpsSetting.findOneAndUpdate(
         { $or: [{ provider: /wheels/i }, { apiUrl: /wheelseye/i }] },
-        { $set: { connectionStatus: 'Connected', lastSync: new Date(), lastError: '' } }
+        { $set: { connectionStatus: 'Connected', lastSync: new Date(), lastError: '', apiUrl: weUrl } }
       );
     } catch (weErr) {
       results.push(`WheelsEye: Failed (${weErr.message})`);
     }
 
     const fxConfig = settings.find((s) => s.provider && s.provider.toLowerCase().includes('fleetx'));
-    const fxUrl = fxConfig?.apiUrl || DEFAULT_FLEETX_URL;
-    const fxToken = fxConfig?.encryptedApiKey || DEFAULT_FLEETX_TOKEN;
+    let fxUrl = fxConfig?.apiUrl || DEFAULT_FLEETX_URL;
+    if (!fxUrl || fxUrl.includes('••••')) fxUrl = DEFAULT_FLEETX_URL;
+    let fxToken = fxConfig?.encryptedApiKey || DEFAULT_FLEETX_TOKEN;
+    if (!fxToken || fxToken.includes('••••')) fxToken = DEFAULT_FLEETX_TOKEN;
 
     try {
       const fxRes = await fetchFleetxTelemetryWithRetries(fxUrl, fxToken, 1);

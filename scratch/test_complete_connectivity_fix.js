@@ -146,7 +146,6 @@ const server = app.listen(5099, '127.0.0.1', async () => {
         username: 'UP1420220001234',
         password: '9876543210',
         loginType: 'Driver',
-        location: { latitude: 28.628, longitude: 77.367, accuracy: 10 },
       }
     );
     assertTest(

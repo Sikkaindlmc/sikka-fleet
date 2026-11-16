@@ -66,7 +66,7 @@ export default function DriverPlantWidget({ summary }: DriverPlantWidgetProps) {
               {currentPlant?.location || 'Plant Coordinates'}
             </p>
             <span className="text-[11px] font-semibold text-emerald-400 block mt-1">
-              Geofence Radius: {currentPlant?.radiusMeters || 500} meters
+              Geofence Radius: {currentPlant?.radiusMeters ?? 'N/A'} meters
             </span>
           </div>
         </div>

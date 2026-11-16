@@ -6,16 +6,15 @@ const gpsConfigSchema = new mongoose.Schema(
       type: String,
       required: [true, 'GPS provider name is required'],
       trim: true,
-      default: 'Built-in Live Fleet Telematics Simulator',
     },
     apiUrl: {
       type: String,
       trim: true,
-      default: 'https://api.gps-provider.local/v1/vehicles',
+      default: '',
     },
     encryptedApiKey: {
       type: String,
-      default: 'sikka_live_gps_key_9948271',
+      default: '',
     },
     encryptedApiSecret: {
       type: String,
@@ -24,13 +23,13 @@ const gpsConfigSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: ['Active', 'Inactive'],
-      default: 'Active',
+      default: 'Inactive',
     },
     pollIntervalSeconds: {
       type: Number,
-      default: 15,
-      min: 5,
-      max: 300,
+      default: 1800,
+      min: 1800,
+      max: 1800,
     },
   },
   {

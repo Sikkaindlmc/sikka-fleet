@@ -118,7 +118,6 @@ async function runTests() {
         username: 'UP1420220001234',
         password: '9876543210',
         loginType: 'Driver',
-        location: { latitude: 28.628, longitude: 77.367, accuracy: 25 },
       }
     );
     report(
@@ -140,7 +139,6 @@ async function runTests() {
         username: 'UP1420220001234',
         password: '9876543210',
         loginType: 'Driver',
-        location: { latitude: 28.628, longitude: 77.367, accuracy: 15 },
       }
     );
     report(

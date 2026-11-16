@@ -150,8 +150,10 @@ if (require.main === module) {
     console.log(`📡 Production: https://fleet.sikkaind.com/api`);
     console.log(`=========================================`);
 
-    // Start 24x7 autonomous server-side GPS 30-minute scheduler
-    startGpsScheduler();
+    // GitHub Actions is the default scheduler; enable the in-process cron only when configured.
+    if (process.env.GPS_SCHEDULER_MODE === 'server') {
+      startGpsScheduler();
+    }
 
   });
 }

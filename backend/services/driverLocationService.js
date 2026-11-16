@@ -2,7 +2,7 @@ const Plant = require('../models/Plant');
 const Driver = require('../models/Driver');
 const DriverPlantRecord = require('../models/DriverPlantRecord');
 const DriverLocation = require('../models/DriverLocation');
-const { calculateHaversineDistance } = require('./geofenceService');
+const { calculateHaversineDistance, getPlantRadiusMeters } = require('./geofenceService');
 
 // 20-minute interval definitions
 const REFRESH_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes
@@ -70,7 +70,13 @@ async function processDriverLocation({ driverId, latitude, longitude, accuracy =
 
   // 2. Compare coordinates against every active plant radius
   for (const plant of activePlants) {
-    const radius = plant.radiusMeters || plant.radiusMeter || 500;
+    const radius = getPlantRadiusMeters(plant);
+    if (
+      radius === null ||
+      !Number.isFinite(plant.latitude) ||
+      !Number.isFinite(plant.longitude) ||
+      (plant.latitude === 0 && plant.longitude === 0)
+    ) continue;
     const distance = getDistance(latitude, longitude, plant.latitude, plant.longitude);
 
     if (distance <= radius) {
@@ -272,7 +278,7 @@ async function getDriverLocationSummary(driverDoc) {
         id: plant._id,
         name: plant.plantName,
         location: plant.location,
-        radiusMeters: plant.radiusMeters || plant.radiusMeter || 500,
+        radiusMeters: plant.radiusMeters ?? plant.radiusMeter ?? null,
         latitude: plant.latitude,
         longitude: plant.longitude,
       };

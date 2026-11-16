@@ -44,7 +44,7 @@ router.get('/options', async (req, res) => {
 // GET /api/reports/fleet - Generate Fleet Report
 router.get('/fleet', async (req, res) => {
   try {
-    const { fromDate, toDate, vehicleNumber } = req.query;
+    const { fromDate, toDate, vehicleNumber, plant } = req.query;
 
     if (!fromDate || !toDate) {
       return res.status(400).json({ error: 'Both From Date and To Date are mandatory.' });
@@ -54,6 +54,7 @@ router.get('/fleet', async (req, res) => {
       fromDate,
       toDate,
       vehicleNumber: vehicleNumber || 'ALL',
+      plant: plant || 'ALL',
     });
 
     res.json(report);
@@ -88,7 +89,7 @@ router.get('/drivers', async (req, res) => {
 // GET /api/reports/export - Export Report as Excel .xlsx File
 router.get('/export', async (req, res) => {
   try {
-    const { reportType, fromDate, toDate, vehicleNumber, driverId } = req.query;
+    const { reportType, fromDate, toDate, vehicleNumber, driverId, plant } = req.query;
 
     if (!fromDate || !toDate) {
       return res.status(400).send('Both From Date and To Date are mandatory.');
@@ -121,16 +122,20 @@ router.get('/export', async (req, res) => {
         fromDate,
         toDate,
         vehicleNumber: vehicleNumber || 'ALL',
+        plant: plant || 'ALL',
       });
       filename = `Sikka_Fleet_Report_${result.dateRange.displayFrom}_to_${result.dateRange.displayTo}.xlsx`;
 
       dataRows = result.rows.map((r) => ({
-        'Vehicle Number': r.vehicleNumber,
         'Date': r.date,
-        'Salt Plant Stay Hour': r.saltPlantStay,
-        'Tea Plant Stay Hour': r.teaPlantStay,
-        'Dasna Plant Stay Hour': r.dasnaPlantStay,
-        'Outside Total Hour': r.outsideTotal,
+        'Vehicle No': r.vehicleNumber,
+        'DASNA hrs': r.dasnaHrs,
+        'Salt Plant hrs': r.saltPlantHrs,
+        'Tea Plant hrs': r.teaPlantHrs,
+        'Outside hrs': r.outsideHrs,
+        'No GPS Data hrs': r.noGpsDataHrs,
+        'Total hrs': r.totalHrs,
+        'Status': r.status,
       }));
     }
 

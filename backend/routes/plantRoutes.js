@@ -39,17 +39,26 @@ router.post('/', async (req, res) => {
     if (!location || !location.trim()) {
       return res.status(400).json({ error: 'Location is required.' });
     }
+    if (latitude === undefined || latitude === null || String(latitude).trim() === '') {
+      return res.status(400).json({ error: 'Latitude is required.' });
+    }
+    if (longitude === undefined || longitude === null || String(longitude).trim() === '') {
+      return res.status(400).json({ error: 'Longitude is required.' });
+    }
     const numRadius = Number(radiusMeters !== undefined ? radiusMeters : radiusMeter);
-    if (isNaN(numRadius) || numRadius <= 0) {
+    if (!Number.isFinite(numRadius) || numRadius <= 0) {
       return res.status(400).json({ error: 'Radius must be a positive number greater than 0.' });
     }
     const numLat = Number(latitude);
-    if (isNaN(numLat) || numLat < -90 || numLat > 90) {
+    if (!Number.isFinite(numLat) || numLat < -90 || numLat > 90) {
       return res.status(400).json({ error: 'Latitude must be a valid coordinate between -90 and 90.' });
     }
     const numLon = Number(longitude);
-    if (isNaN(numLon) || numLon < -180 || numLon > 180) {
+    if (!Number.isFinite(numLon) || numLon < -180 || numLon > 180) {
       return res.status(400).json({ error: 'Longitude must be a valid coordinate between -180 and 180.' });
+    }
+    if (numLat === 0 && numLon === 0) {
+      return res.status(400).json({ error: 'Plant coordinates cannot be 0,0.' });
     }
 
     const plantStatus = status === 'Inactive' ? 'Inactive' : 'Active';
@@ -115,17 +124,26 @@ router.put('/:id', async (req, res) => {
     if (!location || !location.trim()) {
       return res.status(400).json({ error: 'Location is required.' });
     }
+    if (latitude === undefined || latitude === null || String(latitude).trim() === '') {
+      return res.status(400).json({ error: 'Latitude is required.' });
+    }
+    if (longitude === undefined || longitude === null || String(longitude).trim() === '') {
+      return res.status(400).json({ error: 'Longitude is required.' });
+    }
     const numRadius = Number(radiusMeters !== undefined ? radiusMeters : radiusMeter);
-    if (isNaN(numRadius) || numRadius <= 0) {
+    if (!Number.isFinite(numRadius) || numRadius <= 0) {
       return res.status(400).json({ error: 'Radius must be a positive number greater than 0.' });
     }
     const numLat = Number(latitude);
-    if (isNaN(numLat) || numLat < -90 || numLat > 90) {
+    if (!Number.isFinite(numLat) || numLat < -90 || numLat > 90) {
       return res.status(400).json({ error: 'Latitude must be between -90 and 90.' });
     }
     const numLon = Number(longitude);
-    if (isNaN(numLon) || numLon < -180 || numLon > 180) {
+    if (!Number.isFinite(numLon) || numLon < -180 || numLon > 180) {
       return res.status(400).json({ error: 'Longitude must be between -180 and 180.' });
+    }
+    if (numLat === 0 && numLon === 0) {
+      return res.status(400).json({ error: 'Plant coordinates cannot be 0,0.' });
     }
 
     const plantStatus = status === 'Inactive' ? 'Inactive' : 'Active';

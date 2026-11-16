@@ -6,14 +6,22 @@ const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
 const PlantEntryEvent = require('../models/PlantEntryEvent');
 const PlanNotification = require('../models/PlanNotification');
 const GpsSetting = require('../models/GpsSetting');
+const GpsSyncLog = require('../models/GpsSyncLog');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
 const {
   attachNearestDriversToVehicles,
   findNearestDriversForLocation,
 } = require('../services/driverMatchingService');
-const { calculateHaversineDistance } = require('../services/geofenceService');
+const {
+  calculateHaversineDistance,
+  calculateStayDuration,
+  getVehiclePlantStatus,
+  getPlantRadiusMeters,
+} = require('../services/geofenceService');
 const { getReadableLocation } = require('../services/locationHelper');
+const { resolveMovementStatus } = require('../services/telemetryValues');
 const { getNextFixed30MinSlot } = require('../services/gpsCronWorker');
+const { getFleetGpsSnapshot } = require('../services/gpsDataService');
 const mongoose = require('mongoose');
 const PlanAuditLog = require('../models/PlanAuditLog');
 const { isValidObjectId, sanitizeText } = require('../utils/security');
@@ -55,7 +63,7 @@ router.get('/summary', async (req, res) => {
               id: driverSummary.currentPlant.id || 'current-plant',
               name: driverSummary.currentPlant.name,
               location: driverSummary.currentPlant.location || 'Configured Plant Radius',
-              radiusMeter: driverSummary.currentPlant.radiusMeters || 500,
+              radiusMeter: driverSummary.currentPlant.radiusMeters ?? null,
               latitude: driverSummary.currentPlant.latitude,
               longitude: driverSummary.currentPlant.longitude,
               vehicleCount: 1,
@@ -87,117 +95,66 @@ router.get('/summary', async (req, res) => {
       });
     }
 
-    const plantQuery = { status: 'Active' };
-
-    // RBAC: If user has restricted plant permissions, only include those plants
-    if (req.user.accessPlants && req.user.accessPlants.length > 0) {
-      const allowedPlantIds = req.user.accessPlants.map((p) => (p._id ? p._id : p));
-      plantQuery._id = { $in: allowedPlantIds };
-    }
-
-    const activePlants = await Plant.find(plantQuery).sort({ plantName: 1 });
-
-    // Aggregate vehicle counts by currentPlantId and status
-    // Only count Active vehicles
-    const activeVehicles = await Vehicle.find({ status: 'Active' }).select('_id');
-    const activeVehicleIds = activeVehicles.map((v) => v._id);
-
-    const statuses = await VehicleCurrentStatus.find({
-      vehicleId: { $in: activeVehicleIds },
-    }).populate('vehicleId', 'vehicleNumber driverName mobile fleetType status');
-
-    const plantCounts = new Map();
-    const plantDrivers = new Map();
-    let outsideCount = 0;
-    const outsideDriversSet = new Set();
-
-    for (const st of statuses) {
-      if (!st.vehicleId || st.vehicleId.status !== 'Active') continue;
-
-      const driverKey = (st.vehicleId.driverName && st.vehicleId.driverName.trim())
-        ? st.vehicleId.driverName.trim().toLowerCase()
-        : (st.vehicleId.mobile || null);
-
-      if (st.status === 'Inside' && st.currentPlantId) {
-        const pid = st.currentPlantId.toString();
-        plantCounts.set(pid, (plantCounts.get(pid) || 0) + 1);
-
-        if (!plantDrivers.has(pid)) {
-          plantDrivers.set(pid, new Set());
-        }
-        if (driverKey) {
-          plantDrivers.get(pid).add(driverKey);
-        }
-      } else {
-        outsideCount++;
-        if (driverKey) {
-          outsideDriversSet.add(driverKey);
-        }
-      }
-    }
-
-    // Also include active registered drivers from Driver collection
-    const allRegisteredDrivers = await Driver.find({ status: 'Active' });
-    for (const d of allRegisteredDrivers) {
-      const dKey = (d.driverName || d.mobileNumber || '').trim().toLowerCase();
-      if (!dKey) continue;
-      if (d.currentStatus === 'Inside' && d.currentPlantId) {
-        const pid = d.currentPlantId.toString();
-        if (!plantDrivers.has(pid)) plantDrivers.set(pid, new Set());
-        plantDrivers.get(pid).add(dKey);
-      } else if (d.currentStatus === 'Outside') {
-        outsideDriversSet.add(dKey);
-      }
-    }
-
-    // Dynamic widgets based on active Plant records (strictly real database counts, no mock data)
-    const plantWidgets = activePlants.map((plant) => {
-      const pid = plant._id.toString();
-      const vCount = plantCounts.get(pid) || 0;
-      const dSet = plantDrivers.get(pid);
-      const dCount = dSet ? dSet.size : 0;
-      const radius = plant.radiusMeter || plant.radiusMeters || 500;
-
-      return {
-        id: plant._id,
-        name: plant.plantName,
-        location: plant.location,
-        radiusMeter: radius,
-        latitude: plant.latitude,
-        longitude: plant.longitude,
-        vehicleCount: vCount,
-        driverCount: dCount,
+    const snapshot = await getFleetGpsSnapshot();
+    const allowedPlantIds = req.user.accessPlants && req.user.accessPlants.length > 0
+      ? new Set(req.user.accessPlants.map((plant) => (plant._id ? plant._id.toString() : plant.toString())))
+      : null;
+    const plantWidgets = snapshot.plantWidgets
+      .filter((plant) => !allowedPlantIds || allowedPlantIds.has(plant.id.toString()))
+      .map((plant) => ({
+        ...plant,
+        vehicleCount: plant.vehicles.length,
+        driverCount: new Set(plant.vehicles.map((item) => item.vehicle.driverName).filter(Boolean)).size,
         isOutside: false,
-      };
-    });
+        vehicles: plant.vehicles.map((item) => ({
+          vehicleNumber: item.vehicle.vehicleNumber,
+          entryDateTime: item.entryGpsTimestamp,
+          lastUpdateDateTime: item.gpsTimestamp,
+          stayHours: item.stayHours,
+          gps_status: item.gpsStatus,
+        })),
+      }));
+    const outsideVehicles = snapshot.outsideVehicles.map((item) => ({
+      vehicleNumber: item.vehicle.vehicleNumber,
+      outsideSince: item.outsideSince,
+      outsideHours: item.outsideHours,
+      lastUpdateDateTime: item.gpsTimestamp,
+      gps_status: item.gpsStatus,
+    }));
 
     const setting = await GpsSetting.findOne().sort({ updatedAt: -1 });
-    const lastEvaluated = setting?.last_evaluated_timestamp || setting?.lastSync || new Date();
-    const nextSync = setting?.next_scheduled_sync_at || getNextFixed30MinSlot(new Date());
-    const syncStatus = setting?.last_sync_status || 'SUCCESS';
+    const lastSuccessfulSync = await GpsSyncLog.findOne({ status: 'SUCCESS' }).sort({ completedAt: -1 });
+    const latestSyncLog = await GpsSyncLog.findOne().sort({ startedAt: -1 });
+    const lastSuccessful = lastSuccessfulSync?.lastEvaluatedTimestamp || setting?.last_evaluated_timestamp || null;
+    const lastEvaluated = lastSuccessful;
+    const nextSync = getNextFixed30MinSlot(new Date());
+    const syncStatus = latestSyncLog?.status || setting?.last_sync_status || 'IDLE';
+    const providerSettings = await GpsSetting.find({ connectionStatus: 'AUTH_FAILED' }).select('provider');
 
     res.json({
       plantWidgets,
       outsideWidget: {
         id: 'outside',
         name: 'Outside',
-        vehicleCount: outsideCount,
-        driverCount: outsideDriversSet.size,
+        vehicleCount: snapshot.outsideVehicles.length,
+        driverCount: new Set(snapshot.outsideVehicles.map((item) => item.vehicle.driverName).filter(Boolean)).size,
         isOutside: true,
+        vehicles: outsideVehicles,
       },
-      totalActiveVehicles: activeVehicles.length,
+      totalActiveVehicles: snapshot.totalActiveVehicles,
       lastUpdated: lastEvaluated,
       last_evaluated_timestamp: lastEvaluated,
-      last_successful_sync_at: lastEvaluated,
+      last_successful_sync_at: lastSuccessful,
       next_scheduled_sync_at: nextSync,
       next_sync_timestamp: nextSync,
       last_sync_status: syncStatus,
-      last_sync_source: setting?.last_sync_source || 'AUTO',
+      last_sync_source: latestSyncLog?.source || setting?.last_sync_source || null,
+      authFailedProviders: req.user.role === 'Admin' ? providerSettings.map((item) => item.provider) : [],
       autoSync: {
         status: syncStatus === 'FAILED' ? 'Failed' : 'Active',
         intervalMinutes: 30,
         lastEvaluated,
-        lastSuccessfulSyncAt: lastEvaluated,
+        lastSuccessfulSyncAt: lastSuccessful,
         nextScheduledSyncAt: nextSync,
         nextSync,
       },
@@ -233,53 +190,41 @@ router.get('/plants/:plantId/vehicles', async (req, res) => {
       return res.status(404).json({ error: 'Plant not found.' });
     }
 
-    const activePlants = await Plant.find({ status: 'Active' });
-    const gpsSetting = await GpsSetting.findOne().sort({ updatedAt: -1 });
-
-    // Find current statuses for this plant
-    const currentStatuses = await VehicleCurrentStatus.find({
-      currentPlantId: plantId,
-      status: 'Inside',
-    })
-      .populate('vehicleId', 'vehicleNumber driverName mobile fleetType ownerName status')
-      .sort({ lastEntryDateTime: -1 });
-
-    const vehicles = currentStatuses
-      .filter((item) => item.vehicleId && item.vehicleId.status === 'Active')
+    const snapshot = await getFleetGpsSnapshot();
+    const activePlants = snapshot.plants;
+    const vehicles = snapshot.fleet
+      .filter((item) => item.status === 'Inside' && item.plant?.id?.toString() === plantId)
       .map((item) => {
-        const readableLoc =
-          getReadableLocation(item.latitude, item.longitude, activePlants) ||
-          `At ${plant.plantName}, ${plant.location || 'Uttar Pradesh'}`;
-
-        const entryDateTime = item.lastEntryDateTime || item.createdAt || new Date();
-        const lastUpdateDateTime = item.lastUpdatedAt || gpsSetting?.lastSync || item.lastEntryDateTime;
-
+        const vehicle = item.vehicle;
+        const status = item.storedStatus;
+        const readableLoc = item.latitude !== null && item.longitude !== null
+          ? getReadableLocation(item.latitude, item.longitude, activePlants)
+          : 'N/A';
         return {
-          id: item.vehicleId._id,
-          vehicleId: item.vehicleId._id,
-          vehicleNumber: item.vehicleId.vehicleNumber,
-          driverName: item.vehicleId.driverName,
-          mobile: item.vehicleId.mobile,
-          fleetType: item.vehicleId.fleetType,
-          ownerName: item.vehicleId.ownerName,
-          entryDateTime,
-          lastUpdateDateTime,
+          id: vehicle._id,
+          vehicleId: vehicle._id,
+          vehicleNumber: vehicle.vehicleNumber,
+          driverName: vehicle.driverName,
+          mobile: vehicle.mobile,
+          fleetType: vehicle.fleetType,
+          ownerName: vehicle.ownerName,
+          entryDateTime: item.entryGpsTimestamp,
+          lastUpdateDateTime: item.gpsTimestamp,
           latitude: item.latitude,
           longitude: item.longitude,
           distanceMeter: item.distanceMeter,
+          speed: item.speed,
+          ignition: item.ignition,
+          movementStatus: status?.movementStatus || null,
+          dataCheck: false,
           status: 'Inside',
           location: readableLoc,
           readableLocation: readableLoc,
-          latest_gps_timestamp: item.latest_gps_timestamp || item.lastUpdatedAt || entryDateTime,
-          gps_status: item.gps_status || 'LIVE',
-          last_sync_source: item.last_sync_source || 'AUTO',
-          plans: (() => {
-            const activePlans = filterActivePlans(item.plans, 'Add Plan');
-            if (Array.isArray(item.plans) && item.plans.length !== activePlans.length) {
-              VehicleCurrentStatus.updateOne({ _id: item._id }, { $set: { plans: activePlans } }).catch(() => {});
-            }
-            return activePlans;
-          })(),
+          latest_gps_timestamp: item.gpsTimestamp,
+          gps_status: item.gpsStatus,
+          last_sync_source: status?.last_sync_source || null,
+          stayHours: item.stayHours,
+          plans: filterActivePlans(status?.plans, 'Add Plan'),
         };
       });
 
@@ -298,7 +243,7 @@ router.get('/plants/:plantId/vehicles', async (req, res) => {
         id: plant._id,
         name: plant.plantName,
         location: plant.location,
-        radiusMeter: plant.radiusMeter,
+        radiusMeter: getPlantRadiusMeters(plant),
         availableDrivers: plantAvailableDrivers,
       },
       vehicles: vehiclesWithDrivers,
@@ -407,8 +352,8 @@ router.get('/plants/:plantId/drivers', async (req, res) => {
         );
       }
 
-      const plantRadius = plant.radiusMeter || plant.radiusMeters || 500;
-      if (isInsideThisPlant || distToPlant <= plantRadius) {
+      const plantRadius = getPlantRadiusMeters(plant);
+      if (isInsideThisPlant || (plantRadius !== null && distToPlant <= plantRadius)) {
         const key = d.mobileNumber || d.driverName;
         if (!driversMap.has(key)) {
           const vehStatus = currentStatuses.find(
@@ -455,7 +400,7 @@ router.get('/plants/:plantId/drivers', async (req, res) => {
         id: plant._id,
         name: plant.plantName,
         location: plant.location,
-        radiusMeter: plant.radiusMeter,
+        radiusMeter: getPlantRadiusMeters(plant),
       },
       drivers,
     });
@@ -494,8 +439,12 @@ router.post('/vehicles/:vehicleId/plan', async (req, res) => {
       statusDoc = await VehicleCurrentStatus.create({
         vehicleId,
         status: 'Outside',
-        latitude: 28.6,
-        longitude: 77.3,
+        current_geofence: 'UNKNOWN',
+        latitude: null,
+        longitude: null,
+        latest_gps_timestamp: null,
+        gps_status: 'GPS DATA UNAVAILABLE',
+        lastUpdatedAt: null,
         plans: [],
       });
     }
@@ -793,75 +742,36 @@ router.get('/outside/vehicles', async (req, res) => {
       return res.status(403).json({ error: 'Access Denied: Drivers cannot view company fleet vehicles.' });
     }
 
-    const PlantEntry = require('../models/PlantEntry');
     const { getReadableLocation } = require('../services/locationHelper');
-    const { calcVehicleTodayHours } = require('../services/reportCalculationService');
-    const activePlants = await Plant.find({ status: 'Active' });
-
-    const currentStatuses = await VehicleCurrentStatus.find({
-      status: 'Outside',
-    })
-      .populate('vehicleId', 'vehicleNumber driverName mobile fleetType ownerName status')
-      .sort({ lastUpdatedAt: -1 });
-
-    const vehicleIds = currentStatuses
-      .filter((s) => s.vehicleId && s.vehicleId.status === 'Active')
-      .map((s) => s.vehicleId._id);
-
-    const plantEntries = await PlantEntry.find({ vehicleId: { $in: vehicleIds } }).sort({ entryDateTime: -1 });
-    const lastEntryMap = new Map();
-    for (const pe of plantEntries) {
-      const vid = pe.vehicleId.toString();
-      if (!lastEntryMap.has(vid)) {
-        lastEntryMap.set(vid, pe);
-      }
-    }
-
-    // GPS-based today hours calculation (replaces running-clock formula)
-    const now = new Date();
-    const activeItems = currentStatuses.filter((item) => item.vehicleId && item.vehicleId.status === 'Active');
-
-    // Calculate GPS-based hours for all vehicles in parallel
-    const hoursResults = await Promise.all(
-      activeItems.map((item) => calcVehicleTodayHours(item.vehicleId.vehicleNumber, now).catch(() => ({
-        plantHours: '00:00', outsideHours: '00:00', plantBreakdown: {},
-      })))
-    );
-
-    const vehicles = activeItems.map((item, idx) => {
-      const lastEntry    = lastEntryMap.get(item.vehicleId._id.toString());
-      const lastOutPlant = item.lastExitPlantName || (lastEntry ? lastEntry.plantName : (activePlants[0]?.plantName || 'Tea Plant'));
-      const plantOutTime = item.lastExitDateTime  || (lastEntry ? lastEntry.entryDateTime : item.lastUpdatedAt);
-      const todayHours   = hoursResults[idx];
-
+    const snapshot = await getFleetGpsSnapshot();
+    const vehicles = snapshot.outsideVehicles.map((item) => {
+      const vehicle = item.vehicle;
+      const status = item.storedStatus;
       return {
-        id:                   item.vehicleId._id,
-        vehicleId:            item.vehicleId._id,
-        vehicleNumber:        item.vehicleId.vehicleNumber,
-        lastOutPlantName:     lastOutPlant,
-        plantOutDateTime:     plantOutTime,
-        lastLocationDateTime: item.lastUpdatedAt,
-        // GPS-based today outside hours (not a running clock since last exit)
-        outsideHours:         todayHours.outsideHours,
-        // Also expose today plant hours and breakdown for dashboard cards
-        plantHours:           todayHours.plantHours,
-        plantBreakdown:       todayHours.plantBreakdown,
-        status:               'Outside',
-        latitude:             item.latitude,
-        longitude:            item.longitude,
-        readableLocation:     getReadableLocation(item.latitude, item.longitude, activePlants),
-        latest_gps_timestamp: item.latest_gps_timestamp || item.lastUpdatedAt,
-        gps_status:           item.gps_status || 'LIVE',
-        last_sync_source:     item.last_sync_source || 'AUTO',
-        fleetType:            item.vehicleId.fleetType,
-        ownerName:            item.vehicleId.ownerName,
-        plans: (() => {
-          const activePlans = filterActivePlans(item.plans, 'Next Trip Plan');
-          if (Array.isArray(item.plans) && item.plans.length !== activePlans.length) {
-            VehicleCurrentStatus.updateOne({ _id: item._id }, { $set: { plans: activePlans } }).catch(() => {});
-          }
-          return activePlans;
-        })(),
+        id: vehicle._id,
+        vehicleId: vehicle._id,
+        vehicleNumber: vehicle.vehicleNumber,
+        lastOutPlantName: null,
+        outsideSince: item.outsideSince,
+        plantOutDateTime: item.outsideSince,
+        lastLocationDateTime: item.gpsTimestamp,
+        outsideHours: item.outsideHours,
+        status: 'Outside',
+        latitude: item.latitude,
+        longitude: item.longitude,
+        speed: item.speed,
+        ignition: item.ignition,
+        movementStatus: status?.movementStatus || null,
+        dataCheck: false,
+        readableLocation: item.latitude !== null && item.longitude !== null
+          ? getReadableLocation(item.latitude, item.longitude, snapshot.plants)
+          : 'N/A',
+        latest_gps_timestamp: item.gpsTimestamp,
+        gps_status: item.gpsStatus,
+        last_sync_source: status?.last_sync_source || null,
+        fleetType: vehicle.fleetType,
+        ownerName: vehicle.ownerName,
+        plans: filterActivePlans(status?.plans, 'Next Trip Plan'),
       };
     });
 
@@ -1023,15 +933,14 @@ router.get('/plants/:plantId/export', async (req, res) => {
       return res.status(404).send('Plant not found');
     }
 
+    const activeVehicleIds = (await Vehicle.find({ status: 'Active' }).select('_id')).map((vehicle) => vehicle._id);
     const currentStatuses = await VehicleCurrentStatus.find({
-      currentPlantId: plantId,
-      status: 'Inside',
+      vehicleId: { $in: activeVehicleIds },
     })
       .populate('vehicleId', 'vehicleNumber driverName mobile fleetType ownerName status')
       .sort({ lastEntryDateTime: -1 });
 
     const activePlants = await Plant.find({ status: 'Active' });
-    const gpsSetting = await GpsSetting.findOne().sort({ updatedAt: -1 });
 
     const headers = [
       'Vehicle Number',
@@ -1056,6 +965,16 @@ router.get('/plants/:plantId/export', async (req, res) => {
       .filter((st) => st.vehicleId && st.vehicleId.status === 'Active')
       .map((st) => {
         const v = st.vehicleId;
+        const plantEval = getVehiclePlantStatus(
+          {
+            latitude: st.latitude,
+            longitude: st.longitude,
+            gpsTimestamp: st.latest_gps_timestamp,
+            entryDateTime: st.lastEntryDateTime,
+          },
+          activePlants
+        );
+        if (!plantEval.isInside || plantEval.plantId?.toString() !== plantId) return null;
         const plans = filterActivePlans(st.plans, 'Add Plan');
         const latestPlan = plans.length > 0 ? plans[plans.length - 1] : null;
         const latestPlanStr = latestPlan
@@ -1073,20 +992,17 @@ router.get('/plants/:plantId/export', async (req, res) => {
                 .join('<br/>')
             : 'None';
 
-        const readableLoc =
-          getReadableLocation(st.latitude, st.longitude, activePlants) ||
-          `At ${plant.plantName}, ${plant.location || 'Uttar Pradesh'}`;
-
-        const entryDate = st.lastEntryDateTime || st.createdAt || new Date();
-        const lastUpdateDate = st.lastUpdatedAt || gpsSetting?.lastSync || entryDate;
-        const diffMs = entryDate ? Math.max(0, Date.now() - new Date(entryDate).getTime()) : 0;
-        const totalMins = Math.floor(diffMs / 60000);
-        const stayHoursStr = `${String(Math.floor(totalMins / 60)).padStart(2, '0')}:${String(totalMins % 60).padStart(2, '0')} Hrs`;
+        const readableLoc = typeof st.latitude === 'number' && typeof st.longitude === 'number'
+          ? getReadableLocation(st.latitude, st.longitude, activePlants)
+          : 'N/A';
+        const entryDate = st.lastEntryDateTime || null;
+        const gpsDate = st.latest_gps_timestamp || null;
+        const stayHoursStr = plantEval.stayHours === 'N/A' ? 'N/A' : `${plantEval.stayHours} Hrs`;
 
         const cells = [
           v.vehicleNumber,
           formatIST(entryDate),
-          formatIST(lastUpdateDate),
+          formatIST(gpsDate),
           stayHoursStr,
           readableLoc,
           latestPlanStr,
@@ -1102,6 +1018,7 @@ router.get('/plants/:plantId/export', async (req, res) => {
           )
           .join('')}</tr>`;
       })
+      .filter(Boolean)
       .join('');
 
     const excelHtml = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
@@ -1148,29 +1065,15 @@ router.get('/outside/export', async (req, res) => {
       return res.status(403).send('Access Denied: Drivers cannot export fleet reports.');
     }
 
-    const PlantEntry = require('../models/PlantEntry');
     const { getReadableLocation } = require('../services/locationHelper');
-    const { calcVehicleTodayHours } = require('../services/reportCalculationService');
     const activePlants = await Plant.find({ status: 'Active' });
 
+    const activeVehicleIds = (await Vehicle.find({ status: 'Active' }).select('_id')).map((vehicle) => vehicle._id);
     const currentStatuses = await VehicleCurrentStatus.find({
-      status: 'Outside',
+      vehicleId: { $in: activeVehicleIds },
     })
       .populate('vehicleId', 'vehicleNumber driverName mobile fleetType ownerName status')
       .sort({ lastUpdatedAt: -1 });
-
-    const vehicleIds = currentStatuses
-      .filter((s) => s.vehicleId && s.vehicleId.status === 'Active')
-      .map((s) => s.vehicleId._id);
-
-    const plantEntries = await PlantEntry.find({ vehicleId: { $in: vehicleIds } }).sort({ entryDateTime: -1 });
-    const lastEntryMap = new Map();
-    for (const pe of plantEntries) {
-      const vid = pe.vehicleId.toString();
-      if (!lastEntryMap.has(vid)) {
-        lastEntryMap.set(vid, pe);
-      }
-    }
 
     const headers = [
       'Vehicle Number',
@@ -1193,25 +1096,34 @@ router.get('/outside/export', async (req, res) => {
       )
       .join('')}</tr>`;
 
-    // GPS-based hours for Excel export (same source of truth as the API response)
-    const { calcVehicleTodayHours: calcHoursForExport } = require('../services/reportCalculationService');
     const now = new Date();
-    const activeExportStatuses = currentStatuses.filter((st) => st.vehicleId && st.vehicleId.status === 'Active');
-    const exportHoursResults = await Promise.all(
-      activeExportStatuses.map((st) =>
-        calcHoursForExport(st.vehicleId.vehicleNumber, now).catch(() => ({ outsideHours: '00:00' }))
-      )
-    );
+    const activeExportStatuses = currentStatuses.filter((st) => {
+      if (!st.vehicleId || st.vehicleId.status !== 'Active') return false;
+      const evaluation = getVehiclePlantStatus(
+        {
+          latitude: st.latitude,
+          longitude: st.longitude,
+          gpsTimestamp: st.latest_gps_timestamp,
+        },
+        activePlants,
+        { now }
+      );
+      return !evaluation.isInside;
+    });
 
     const rowsHtml = activeExportStatuses
-      .map((st, idx) => {
+      .map((st) => {
         const v = st.vehicleId;
-        const lastEntry    = lastEntryMap.get(v._id.toString());
-        const lastOutPlant = st.lastExitPlantName || (lastEntry ? lastEntry.plantName : (activePlants[0]?.plantName || 'Tea Plant'));
-        const plantOutTime = st.lastExitDateTime  || (lastEntry ? lastEntry.entryDateTime : st.lastUpdatedAt);
-        const outsideHour  = exportHoursResults[idx].outsideHours;
+        const lastOutPlant = st.lastExitPlantName || 'N/A';
+        const plantOutTime = st.lastExitDateTime || null;
+        const gpsTime = st.latest_gps_timestamp || null;
+        const outsideHour = plantOutTime && gpsTime
+          ? calculateStayDuration(plantOutTime, gpsTime)
+          : 'N/A';
         const driverMobile = v.driverName ? `${v.driverName} - ${v.mobile ? '+91 ' + v.mobile : ''}` : 'No Driver Available';
-        const readableLoc  = getReadableLocation(st.latitude, st.longitude, activePlants);
+        const readableLoc = typeof st.latitude === 'number' && typeof st.longitude === 'number'
+          ? getReadableLocation(st.latitude, st.longitude, activePlants)
+          : 'N/A';
         const plans        = filterActivePlans(st.plans, 'Next Trip Plan');
         const latestPlan   = plans.length > 0 ? plans[plans.length - 1] : null;
         const latestPlanStr = latestPlan
@@ -1222,7 +1134,7 @@ router.get('/outside/export', async (req, res) => {
           v.vehicleNumber,
           lastOutPlant,
           formatIST(plantOutTime),
-          formatIST(st.lastUpdatedAt),
+          formatIST(gpsTime),
           outsideHour,
           'Outside',
           driverMobile,

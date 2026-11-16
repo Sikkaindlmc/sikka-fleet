@@ -23,7 +23,7 @@ const vehicleLocationSchema = new mongoose.Schema(
     },
     gpsDateTime: {
       type: Date,
-      default: Date.now,
+      required: true,
       index: true,
     },
     receivedAt: {
@@ -32,11 +32,28 @@ const vehicleLocationSchema = new mongoose.Schema(
     },
     speed: {
       type: Number,
-      default: 0,
+      default: null,
+    },
+    speedRaw: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
     },
     ignition: {
       type: Boolean,
-      default: false,
+      default: null,
+    },
+    ignitionRaw: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+    movementStatus: {
+      type: String,
+      enum: ['Moving', 'Stopped', null],
+      default: null,
+    },
+    rawTelemetry: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
     },
     address: {
       type: String,
@@ -59,8 +76,8 @@ const vehicleLocationSchema = new mongoose.Schema(
     },
     sync_source: {
       type: String,
-      enum: ['AUTO', 'MANUAL', 'STARTUP', 'RETRY'],
-      default: 'AUTO',
+      enum: ['AUTO', 'STARTUP', 'RETRY', 'GPS-AUTO'],
+      default: 'GPS-AUTO',
     },
     rawEventId: {
       type: String,
@@ -69,6 +86,16 @@ const vehicleLocationSchema = new mongoose.Schema(
     source: {
       type: String,
       default: 'WheelsEye GPS',
+    },
+    provider: {
+      type: String,
+      default: 'WheelsEye GPS',
+      index: true,
+    },
+    vehicleNumberNormalized: {
+      type: String,
+      default: '',
+      index: true,
     },
   },
   {
@@ -81,5 +108,6 @@ const vehicleLocationSchema = new mongoose.Schema(
 vehicleLocationSchema.index({ vehicleId: 1, gpsDateTime: -1 });
 vehicleLocationSchema.index({ vehicleNumber: 1, gpsDateTime: -1 });
 vehicleLocationSchema.index({ vehicleId: 1, gpsDateTime: 1 });
+vehicleLocationSchema.index({ vehicleNumberNormalized: 1, provider: 1, gpsDateTime: 1 });
 
 module.exports = mongoose.model('VehicleLocation', vehicleLocationSchema);

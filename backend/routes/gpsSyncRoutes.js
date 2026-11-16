@@ -8,6 +8,7 @@ const router = express.Router();
 const { verifyToken } = require('../middleware/auth');
 const { timingSafeCompare } = require('../utils/security');
 const { gpsSyncLimiter } = require('../middleware/rateLimiter');
+const { getCurrentIstSlotKey } = require('../services/gpsScheduler');
 
 /**
  * Middleware: Verify caller is either an authenticated user or authorized cron worker
@@ -32,7 +33,13 @@ function authorizeGpsSyncCaller(req, res, next) {
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
     return verifyToken(req, res, () => {
-      req.syncCaller = `User (${req.user.username || req.user.fullName || 'User'})`;
+      if (req.user.role !== 'Admin') {
+        return res.status(403).json({
+          error: 'Only administrators can trigger an on-demand GPS synchronization.',
+          code: 'ADMIN_REQUIRED',
+        });
+      }
+      req.syncCaller = `On-demand user (${req.user.username || req.user.fullName || 'User'})`;
       req.isCron = false;
       next();
     });
@@ -82,7 +89,7 @@ router.get('/logs', (req, res, next) => {
     const source = req.query.source ? req.query.source.toUpperCase() : null;
 
     const filter = {};
-    if (source && ['AUTO', 'MANUAL'].includes(source)) {
+    if (source && ['AUTO', 'GPS-AUTO'].includes(source)) {
       filter.source = source;
     }
 
@@ -106,19 +113,20 @@ router.get('/logs', (req, res, next) => {
  */
 async function handleTriggerSync(req, res) {
   try {
-    const source = req.isCron ? 'AUTO' : 'MANUAL';
-    const triggerType = req.isCron ? 'WEBHOOK_CRON' : (typeof req.body?.triggerType === 'string' ? req.body.triggerType.slice(0, 50) : 'MANUAL_TRIGGER');
+    const source = req.isCron ? 'AUTO' : 'GPS-AUTO';
+    const triggerType = req.isCron ? 'WEBHOOK_CRON' : (typeof req.body?.triggerType === 'string' ? req.body.triggerType.slice(0, 50) : 'USER_TRIGGER');
 
     console.log(`[API /api/gps-sync/run] Triggered (Source: ${source}, Trigger: ${triggerType}, Caller: ${req.syncCaller})`);
 
     const result = await executeGpsSync({
       source,
       triggerType,
+      ...(req.isCron ? { slotKey: getCurrentIstSlotKey() } : {}),
     });
 
     res.json({
       success: true,
-      message: 'Wheelseye GPS synchronization executed successfully.',
+      message: 'GPS synchronization executed successfully.',
       ...result,
     });
   } catch (error) {
@@ -130,7 +138,7 @@ async function handleTriggerSync(req, res) {
   }
 }
 
-// POST /api/gps-sync/run - Manual button trigger & external runners
+// POST /api/gps-sync/run - On-demand button trigger & external runners
 router.post('/run', gpsSyncLimiter, authorizeGpsSyncCaller, handleTriggerSync);
 
 // GET /api/gps-sync/run - Vercel Cron GET runner

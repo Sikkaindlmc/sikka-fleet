@@ -88,15 +88,18 @@ router.post('/', async (req, res) => {
       status: status === 'Inactive' ? 'Inactive' : 'Active',
     });
 
-    // Create initial VehicleCurrentStatus record as Outside
+    // Keep an unlocated vehicle explicitly unavailable until a vendor GPS point arrives.
     await VehicleCurrentStatus.findOneAndUpdate(
       { vehicleId: newVehicle._id },
       {
         vehicleId: newVehicle._id,
         status: 'Outside',
-        latitude: 28.5355,
-        longitude: 77.3910,
-        lastUpdatedAt: new Date(),
+        current_geofence: 'UNKNOWN',
+        latitude: null,
+        longitude: null,
+        latest_gps_timestamp: null,
+        gps_status: 'GPS DATA UNAVAILABLE',
+        lastUpdatedAt: null,
       },
       { upsert: true, new: true }
     );

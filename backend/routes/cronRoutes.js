@@ -1,5 +1,5 @@
 const express = require('express');
-const { executeWheelseyeAutoSync } = require('../services/wheelseyeAutoSyncService');
+const { executeGpsSync } = require('../services/gpsSyncService');
 const CronExecutionLog = require('../models/CronExecutionLog');
 const GpsSetting = require('../models/GpsSetting');
 
@@ -47,7 +47,10 @@ async function handleCronSync(req, res) {
     const triggerType = req.headers['x-vercel-id'] ? 'VERCEL_CRON' : 'CRON_WORKER_IST';
     console.log(`[API /api/cron/sync-gps] Triggered via ${triggerType} (${req.cronCaller || 'Caller'})`);
 
-    const result = await executeWheelseyeAutoSync(triggerType);
+    const result = await executeGpsSync({
+      source: 'AUTO',
+      triggerType,
+    });
 
     return res.json({
       success: true,

@@ -1,5 +1,5 @@
 const express = require('express');
-const { syncGpsPositions } = require('../services/gpsPollerService');
+const { executeGpsSync } = require('../services/gpsSyncService');
 const { getCronWorkerStatus } = require('../services/gpsCronWorker');
 const GpsSetting = require('../models/GpsSetting');
 
@@ -23,10 +23,12 @@ function authorizeSyncCaller(req, res, next) {
   if (configuredCronSecret) {
     if (cronSecretHeader && timingSafeCompare(cronSecretHeader, configuredCronSecret)) {
       req.syncCaller = 'Cron Worker (Secret Verified)';
+      req.isCron = true;
       return next();
     }
     if (authHeader && authHeader.startsWith('Bearer ') && timingSafeCompare(authHeader.slice(7).trim(), configuredCronSecret)) {
       req.syncCaller = 'Cron Worker (Bearer Secret Verified)';
+      req.isCron = true;
       return next();
     }
   }
@@ -34,7 +36,14 @@ function authorizeSyncCaller(req, res, next) {
   // 2. Check JWT User Token
   if (authHeader && authHeader.startsWith('Bearer ')) {
     return verifyToken(req, res, () => {
-      req.syncCaller = `Manual (${req.user.fullName || req.user.username || 'User'})`;
+      if (req.user.role !== 'Admin') {
+        return res.status(403).json({
+          error: 'Only administrators can trigger an on-demand GPS synchronization.',
+          code: 'ADMIN_REQUIRED',
+        });
+      }
+      req.syncCaller = `On-demand user (${req.user.fullName || req.user.username || 'User'})`;
+      req.isCron = false;
       next();
     });
   }
@@ -54,10 +63,11 @@ function authorizeSyncCaller(req, res, next) {
  */
 async function handleSyncGps(req, res) {
   try {
-    const caller = req.syncCaller || (req.user ? `Manual (${req.user.name || req.user.username})` : 'API Trigger');
-    console.log(`[API /api/fleet/sync-gps] Triggered by: ${caller}`);
+    const source = req.isCron ? 'AUTO' : 'GPS-AUTO';
+    const triggerType = req.isCron ? 'WEBHOOK_CRON' : 'USER_TRIGGER';
+    console.log(`[API /api/fleet/sync-gps] Triggered by: ${req.syncCaller || source}`);
 
-    const result = await syncGpsPositions(caller);
+    const result = await executeGpsSync({ source, triggerType });
 
     return res.json({
       success: true,

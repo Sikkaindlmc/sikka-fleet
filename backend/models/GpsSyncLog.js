@@ -24,13 +24,17 @@ const gpsSyncLogSchema = new mongoose.Schema(
     },
     source: {
       type: String,
-      enum: ['AUTO', 'MANUAL', 'STARTUP', 'RETRY'],
-      default: 'AUTO',
+      enum: ['AUTO', 'STARTUP', 'RETRY', 'GPS-AUTO'],
+      default: 'GPS-AUTO',
       index: true,
     },
     triggerType: {
       type: String,
       default: 'GPS_AUTO_SYNC_30MIN',
+    },
+    slotKey: {
+      type: String,
+      default: undefined,
     },
     vehiclesFound: {
       type: Number,
@@ -117,5 +121,6 @@ const gpsSyncLogSchema = new mongoose.Schema(
 
 gpsSyncLogSchema.index({ startedAt: -1 });
 gpsSyncLogSchema.index({ source: 1, startedAt: -1 });
+gpsSyncLogSchema.index({ slotKey: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('GpsSyncLog', gpsSyncLogSchema);

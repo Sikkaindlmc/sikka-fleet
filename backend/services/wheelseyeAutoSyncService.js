@@ -14,7 +14,7 @@ async function executeWheelseyeAutoSync(triggerType = 'CRON_WORKER_IST') {
     triggerType.includes('Auto');
 
   return await executeGpsSync({
-    source: isAuto ? 'AUTO' : 'MANUAL',
+    source: isAuto ? 'AUTO' : 'GPS-AUTO',
     triggerType,
   });
 }

@@ -6,9 +6,8 @@ const { cleanupExpiredPlans } = require('../utils/planHelper');
 
 let cronJob = null;
 let heartbeatTimer = null;
-let lastSlotExecuted = null; // String identifier of last completed IST slot e.g. "2026-10-10_14:30"
+let lastSlotAttempted = null;
 let isSchedulerRunning = false;
-let retryScheduledTimer = null;
 
 /**
  * Returns current IST slot identifier (e.g. "2026-10-10_14:00" or "2026-10-10_14:30").
@@ -37,7 +36,7 @@ function getCurrentIstSlotKey(refDate = new Date()) {
 /**
  * Triggers automated 30-minute GPS sync execution.
  */
-async function runScheduledGpsSync(triggerType = 'GPS_AUTO_SYNC_30MIN') {
+async function runScheduledGpsSync(triggerType = 'GPS_AUTO_SYNC_30MIN', slotKey = getCurrentIstSlotKey()) {
   const now = new Date();
   const istString = now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
   const currentSlot = getCurrentIstSlotKey(now);
@@ -48,11 +47,8 @@ async function runScheduledGpsSync(triggerType = 'GPS_AUTO_SYNC_30MIN') {
     const result = await executeGpsSync({
       source: 'AUTO',
       triggerType,
+      slotKey,
     });
-
-    if (result && !result.inProgress) {
-      lastSlotExecuted = currentSlot;
-    }
 
     // Auto-cleanup expired plans (Add Plan >12h, Next Trip Plan >24h)
     try {
@@ -64,21 +60,6 @@ async function runScheduledGpsSync(triggerType = 'GPS_AUTO_SYNC_30MIN') {
     return result;
   } catch (err) {
     console.error(`[GPS Scheduler IST Error] Sync failed: ${err.message}`);
-
-    // Schedule retry attempt after 3 minutes if not already scheduled (Requirement 4)
-    if (!retryScheduledTimer) {
-      console.log(`[GPS Scheduler IST] Scheduling automatic retry in 3 minutes...`);
-      retryScheduledTimer = setTimeout(async () => {
-        retryScheduledTimer = null;
-        console.log(`[GPS Scheduler IST] Executing automatic retry...`);
-        try {
-          await executeGpsSync({ source: 'AUTO', triggerType: 'GPS_AUTO_SYNC_RETRY' });
-        } catch (retryErr) {
-          console.error(`[GPS Scheduler IST Retry Error]: ${retryErr.message}`);
-        }
-      }, 3 * 60 * 1000);
-    }
-
     throw err;
   }
 }
@@ -109,7 +90,10 @@ function startGpsScheduler() {
     cronJob = cron.schedule(
       '0,30 * * * *',
       async () => {
-        await runScheduledGpsSync('CRON_WORKER_IST');
+        const slot = getCurrentIstSlotKey();
+        if (lastSlotAttempted === slot) return;
+        lastSlotAttempted = slot;
+        await runScheduledGpsSync('CRON_WORKER_IST', slot);
       },
       {
         timezone: 'Asia/Kolkata',
@@ -131,25 +115,14 @@ function startGpsScheduler() {
       const lastSync = setting?.last_evaluated_timestamp || setting?.lastSync || null;
       const timeSinceLastSyncMs = lastSync ? now.getTime() - new Date(lastSync).getTime() : Infinity;
 
-      // Determine minutes in current IST hour
-      const istParts = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'Asia/Kolkata',
-        minute: 'numeric',
-      }).formatToParts(now);
-      const curMinute = parseInt(istParts.find((p) => p.type === 'minute')?.value || '0', 10);
+      const slotMissed = lastSlotAttempted !== currentSlot && timeSinceLastSyncMs > 30 * 60 * 1000;
 
-      // If we are at minute 0, 1, 30, or 31 and current slot hasn't executed yet
-      const isSlotBoundary = curMinute === 0 || curMinute === 1 || curMinute === 30 || curMinute === 31;
-      const slotMissed = lastSlotExecuted !== currentSlot && timeSinceLastSyncMs > 25 * 60 * 1000;
-
-      // Or if more than 35 minutes have passed since the last sync
-      const severelyOverdue = timeSinceLastSyncMs > 35 * 60 * 1000;
-
-      if ((isSlotBoundary && slotMissed) || severelyOverdue) {
+      if (slotMissed) {
         console.log(
           `[GPS Scheduler Heartbeat] Missed slot or boundary detected (Slot: ${currentSlot}, elapsed: ${Math.round(timeSinceLastSyncMs / 60000)}m). Catching up...`
         );
-        await runScheduledGpsSync('AUTONOMOUS_HEARTBEAT_IST');
+        lastSlotAttempted = currentSlot;
+        await runScheduledGpsSync('AUTONOMOUS_HEARTBEAT_IST', currentSlot);
       }
     } catch (heartbeatErr) {
       // Non-blocking log
@@ -167,7 +140,9 @@ function startGpsScheduler() {
 
       if (!lastSync || elapsedMs > 25 * 60 * 1000) {
         console.log(`[GPS Scheduler] Startup check: Telemetry data missing or >25m old. Executing initial sync...`);
-        await runScheduledGpsSync('STARTUP_SYNC');
+        const slot = getCurrentIstSlotKey();
+        lastSlotAttempted = slot;
+        await runScheduledGpsSync('STARTUP_SYNC', slot);
       } else {
         const istNext = getNextFixed30MinSlotIST(new Date());
         console.log(`[GPS Scheduler] Startup check: Recent telemetry is fresh (${Math.round(elapsedMs / 60000)}m old). Next sync at: ${istNext.toISOString()}`);
@@ -190,10 +165,6 @@ function stopGpsScheduler() {
     clearInterval(heartbeatTimer);
     heartbeatTimer = null;
   }
-  if (retryScheduledTimer) {
-    clearTimeout(retryScheduledTimer);
-    retryScheduledTimer = null;
-  }
   isSchedulerRunning = false;
   console.log('[GPS Scheduler] Stopped.');
 }
@@ -202,5 +173,6 @@ module.exports = {
   startGpsScheduler,
   stopGpsScheduler,
   runScheduledGpsSync,
+  getCurrentIstSlotKey,
   getNextFixed30MinSlotIST,
 };

@@ -47,4 +47,10 @@ const plantSchema = new mongoose.Schema(
 
 plantSchema.index({ plantName: 1, status: 1 });
 
+plantSchema.pre('validate', function () {
+  if (this.latitude === 0 && this.longitude === 0) {
+    this.invalidate('latitude', 'Plant coordinates cannot be 0,0.');
+  }
+});
+
 module.exports = mongoose.model('Plant', plantSchema);

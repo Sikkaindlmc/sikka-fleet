@@ -6,24 +6,18 @@ const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
 const Driver = require('../models/Driver');
 const DriverLocation = require('../models/DriverLocation');
 const DriverPlantRecord = require('../models/DriverPlantRecord');
-const { calculateHaversineDistance } = require('./geofenceService');
+const { calculateHaversineDistance, getPlantRadiusMeters } = require('./geofenceService');
+const GpsHistory = require('../models/GpsHistory');
+const DailyGpsReport = require('../models/DailyGpsReport');
+const {
+  MAX_GPS_GAP_MS,
+  normalizeVehicleNumber,
+  istDateString,
+  istDayRange,
+  formatMinutes,
+  calculateDailyGpsHours,
+} = require('./gpsTimelineService');
 
-/**
- * Calculate today's GPS-based plant hours and outside hours for a single vehicle.
- *
- * Strategy:
- *   1. Load VehicleLocation pings for today (IST 00:00 → now).
- *   2. Classify each ping as a plant category or "Outside" using Haversine geo-fence.
- *   3. Build candidate intervals between consecutive pings.
- *   4. Normalize overlapping intervals.
- *   5. Return {plantHours (HH:mm), outsideHours (HH:mm)} where outsideHours = today elapsed − plant hours.
- *
- * This is the single source of truth used by both Dashboard and Report pages.
- *
- * @param {string} vehicleNumber
- * @param {Date}   [asOf]           default = now; pass a specific time for back-testing
- * @returns {Promise<{plantHours: string, outsideHours: string, plantBreakdown: Object}>}
- */
 async function calcVehicleTodayHours(vehicleNumber, asOf = new Date()) {
   // IST start-of-day for asOf
   const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
@@ -39,7 +33,7 @@ async function calcVehicleTodayHours(vehicleNumber, asOf = new Date()) {
     category: getPlantCategory(p.plantName),
     latitude:  p.latitude,
     longitude: p.longitude,
-    radius:    p.radiusMeters || p.radiusMeter || 500,
+    radius:    getPlantRadiusMeters(p),
   })).filter(p => p.category);
 
   const determinePlantState = (lat, lon) => {
@@ -329,7 +323,7 @@ function computeDailyDurations(normalizedSegments, dayStart, dayEnd) {
 /**
  * Generate Fleet Report for all vehicles across specified date range
  */
-async function generateFleetReport({ fromDate, toDate, vehicleNumber }) {
+async function generateLegacyFleetReport({ fromDate, toDate, vehicleNumber }) {
   if (!fromDate || !toDate) {
     throw new Error('From Date and To Date are mandatory.');
   }
@@ -347,7 +341,7 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber }) {
     category: getPlantCategory(p.plantName),
     latitude: p.latitude,
     longitude: p.longitude,
-    radius: p.radiusMeters || p.radiusMeter || 500,
+    radius: getPlantRadiusMeters(p),
   })).filter((p) => p.category !== null);
 
   const determinePlantState = (lat, lon) => {
@@ -548,6 +542,139 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber }) {
   };
 }
 
+async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'ALL', asOf = new Date(), persist = true }) {
+  if (!fromDate || !toDate || !/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+    throw new Error('Valid fromDate and toDate values (YYYY-MM-DD) are required.');
+  }
+  const today = istDateString(asOf);
+  if (fromDate > toDate) throw new Error('From Date cannot be later than To Date.');
+  if (toDate > today) throw new Error('Reports cannot include future dates.');
+
+  const dateList = generateDateList(fromDate, toDate);
+  const vehicles = await Vehicle.find().sort({ vehicleNumber: 1 });
+  const normalizedFilter = vehicleNumber && vehicleNumber !== 'ALL'
+    ? normalizeVehicleNumber(vehicleNumber)
+    : null;
+  const targetVehicles = normalizedFilter
+    ? vehicles.filter((vehicle) => normalizeVehicleNumber(vehicle.vehicleNumber) === normalizedFilter)
+    : vehicles;
+  const plants = await Plant.find({ status: 'Active' });
+  const rangeStart = istDayRange(fromDate).start;
+  const requestedEnd = istDayRange(toDate).end;
+  const reportEnd = toDate === today
+    ? new Date(Math.min(asOf.getTime(), requestedEnd.getTime()))
+    : requestedEnd;
+  const historyStart = new Date(rangeStart.getTime() - MAX_GPS_GAP_MS);
+  const historyEnd = new Date(reportEnd.getTime() + MAX_GPS_GAP_MS);
+  const history = await GpsHistory.find({
+    vehicleId: { $in: targetVehicles.map((vehicle) => vehicle._id) },
+    gpsTimestamp: { $gte: historyStart, $lte: historyEnd },
+  }).sort({ gpsTimestamp: 1, syncTime: 1 });
+  const byVehicle = new Map();
+  for (const sample of history) {
+    const key = sample.vehicleId.toString();
+    if (!byVehicle.has(key)) byVehicle.set(key, []);
+    byVehicle.get(key).push(sample);
+  }
+
+  const rows = [];
+  for (const vehicle of targetVehicles) {
+    const samples = byVehicle.get(vehicle._id.toString()) || [];
+    for (const date of dateList) {
+      const { start } = istDayRange(date);
+      const dayEnd = istDayRange(date).end;
+      const isInProgress = date === today;
+      const end = isInProgress
+        ? new Date(Math.min(asOf.getTime(), dayEnd.getTime()))
+        : dayEnd;
+      const daily = calculateDailyGpsHours(samples, plants, start, end);
+      const { totalMinutes, segments } = daily;
+      const allocated = daily.minutes;
+      const row = {
+        vehicleNumber: vehicle.vehicleNumber,
+        vehicleNumberNormalized: normalizeVehicleNumber(vehicle.vehicleNumber),
+        vehicleId: vehicle._id,
+        date,
+        dateRaw: date,
+        status: isInProgress ? 'In progress' : 'Complete',
+        inProgress: isInProgress,
+        dasnaMinutes: allocated.DASNA,
+        saltPlantMinutes: allocated['Salt Plant'],
+        teaPlantMinutes: allocated['Tea Plant'],
+        outsideMinutes: allocated.Outside,
+        noGpsDataMinutes: allocated['No GPS Data'],
+        totalMinutes,
+        dasnaHrs: formatMinutes(allocated.DASNA),
+        saltPlantHrs: formatMinutes(allocated['Salt Plant']),
+        teaPlantHrs: formatMinutes(allocated['Tea Plant']),
+        outsideHrs: formatMinutes(allocated.Outside),
+        noGpsDataHrs: formatMinutes(allocated['No GPS Data']),
+        totalHrs: formatMinutes(totalMinutes),
+        saltPlantStay: formatMinutes(allocated['Salt Plant']),
+        teaPlantStay: formatMinutes(allocated['Tea Plant']),
+        dasnaPlantStay: formatMinutes(allocated.DASNA),
+        outsideTotal: formatMinutes(allocated.Outside),
+        segments,
+      };
+      if (plant === 'ALL' || (allocated[plant] || 0) > 0) rows.push(row);
+      if (persist) {
+        await DailyGpsReport.updateOne(
+          { vehicleNumberNormalized: row.vehicleNumberNormalized, date },
+          {
+            $set: {
+              vehicleId: row.vehicleId,
+              vehicleNumber: row.vehicleNumber,
+              vehicleNumberNormalized: row.vehicleNumberNormalized,
+              date,
+              dasnaMinutes: row.dasnaMinutes,
+              saltPlantMinutes: row.saltPlantMinutes,
+              teaPlantMinutes: row.teaPlantMinutes,
+              outsideMinutes: row.outsideMinutes,
+              noGpsDataMinutes: row.noGpsDataMinutes,
+              totalMinutes,
+              inProgress: isInProgress,
+              segments,
+            },
+          },
+          { upsert: true }
+        );
+      }
+    }
+  }
+
+  const totals = rows.reduce((result, row) => {
+    result.dasnaMinutes += row.dasnaMinutes;
+    result.saltPlantMinutes += row.saltPlantMinutes;
+    result.teaPlantMinutes += row.teaPlantMinutes;
+    result.outsideMinutes += row.outsideMinutes;
+    result.noGpsDataMinutes += row.noGpsDataMinutes;
+    result.totalMinutes += row.totalMinutes;
+    return result;
+  }, {
+    dasnaMinutes: 0,
+    saltPlantMinutes: 0,
+    teaPlantMinutes: 0,
+    outsideMinutes: 0,
+    noGpsDataMinutes: 0,
+    totalMinutes: 0,
+  });
+  for (const field of Object.keys(totals)) totals[field.replace('Minutes', 'Hrs')] = formatMinutes(totals[field]);
+
+  return {
+    reportType: 'Fleet GPS',
+    timezone: 'Asia/Kolkata',
+    dateRange: { fromDate, toDate, displayFrom: formatDisplayDate(fromDate), displayTo: formatDisplayDate(toDate) },
+    totalVehicles: targetVehicles.length,
+    totalRecords: rows.length,
+    rows,
+    totals,
+  };
+}
+
+async function rebuildDailyGpsReports({ fromDate, toDate }) {
+  return generateFleetReport({ fromDate, toDate, vehicleNumber: 'ALL', persist: true });
+}
+
 /**
  * Generate Drivers Report for all drivers across specified date range
  */
@@ -568,7 +695,7 @@ async function generateDriverReport({ fromDate, toDate, driverId }) {
     category: getPlantCategory(p.plantName),
     latitude: p.latitude,
     longitude: p.longitude,
-    radius: p.radiusMeters || p.radiusMeter || 500,
+    radius: getPlantRadiusMeters(p),
   })).filter((p) => p.category !== null);
 
   const determinePlantState = (lat, lon) => {
@@ -726,6 +853,6 @@ module.exports = {
   normalizeIntervals,
   computeDailyDurations,
   generateFleetReport,
+  rebuildDailyGpsReports,
   generateDriverReport,
-  calcVehicleTodayHours,
 };

@@ -64,19 +64,22 @@ interface LiveVehicleItem {
   vendorName: string;
   provider?: string;
   vehicleType: string;
-  latitude: number;
-  longitude: number;
-  speed: number;
-  ignition: boolean;
-  angle: number;
-  chargeOn: boolean;
-  timestamp: string;
+  latitude: number | null;
+  longitude: number | null;
+  speed: string | number | null;
+  ignition: string | number | boolean | null;
+  movementStatus: 'Moving' | 'Stopped';
+  dataCheck: boolean;
+  angle: number | null;
+  chargeOn: boolean | null;
+  timestamp: string | null;
+  gps_status?: string;
   readableTime: string;
   readableLocation?: string;
   geofence: {
     status: 'Inside' | 'Outside';
     plantName: string;
-    distanceMeter: number;
+    distanceMeter: number | null;
     nearestPlant: string;
   };
   loadingPlan: {
@@ -91,12 +94,14 @@ interface LiveVehicleItem {
   };
 }
 
+const isVehicleMoving = (vehicle: LiveVehicleItem) => vehicle.movementStatus === 'Moving';
+
 interface GpsSettingData {
   _id?: string;
   provider: string;
   apiUrl: string;
   status: 'Active' | 'Inactive';
-  connectionStatus: 'Connected' | 'Connection Failed' | 'Pending';
+  connectionStatus: 'Connected' | 'Connection Failed' | 'Pending' | 'AUTH_FAILED';
   lastSync?: string | null;
   lastError?: string | null;
   pollIntervalSeconds: number;
@@ -293,8 +298,8 @@ function GpsPageContent() {
 
       setFormData({
         provider: current.provider || selectedProviderTab,
-        apiUrl: current.apiUrl || (selectedProviderTab === 'Fleetx' ? 'https://api.fleetx.io/api/v1/analytics/live' : 'https://api.wheelseye.com/currentLoc?accessToken=53afc208-0981-48c7-b134-d85d2f33dc0c'),
-        apiKey: current.maskedApiKey || (selectedProviderTab === 'Fleetx' ? '75683dcb-9df0-429c-b3a2-646542ac50e5' : '53afc208-0981-48c7-b134-d85d2f33dc0c'),
+        apiUrl: current.apiUrl || (selectedProviderTab === 'Fleetx' ? 'https://api.fleetx.io/api/v1/analytics/live' : ''),
+        apiKey: current.maskedApiKey || '',
         apiSecret: current.hasApiSecret ? '••••••••••••' : '',
         status: current.status || 'Active',
         pollIntervalSeconds: current.pollIntervalSeconds || 1800,
@@ -330,7 +335,7 @@ function GpsPageContent() {
         setFormData({
           provider: 'Fleetx',
           apiUrl: 'https://api.fleetx.io/api/v1/analytics/live',
-          apiKey: '75683dcb-9df0-429c-b3a2-646542ac50e5',
+          apiKey: '',
           apiSecret: '',
           status: 'Active',
           pollIntervalSeconds: 1800,
@@ -338,8 +343,8 @@ function GpsPageContent() {
       } else {
         setFormData({
           provider: 'WheelsEye GPS',
-          apiUrl: 'https://api.wheelseye.com/currentLoc?accessToken=53afc208-0981-48c7-b134-d85d2f33dc0c',
-          apiKey: '53afc208-0981-48c7-b134-d85d2f33dc0c',
+          apiUrl: '',
+          apiKey: '',
           apiSecret: '',
           status: 'Active',
           pollIntervalSeconds: 1800,
@@ -482,8 +487,8 @@ function GpsPageContent() {
     const matchesSearch = v.vehicleNumber.toLowerCase().includes(searchQuery.toLowerCase().trim());
     if (!matchesSearch) return false;
 
-    if (statusFilter === 'moving') return v.speed > 0;
-    if (statusFilter === 'stopped') return v.speed === 0;
+    if (statusFilter === 'moving') return isVehicleMoving(v);
+    if (statusFilter === 'stopped') return !isVehicleMoving(v);
     return true;
   });
 
@@ -793,7 +798,7 @@ function GpsPageContent() {
                       placeholder={
                         selectedProviderTab === 'Fleetx'
                           ? 'https://api.fleetx.io/api/v1/analytics/live'
-                          : 'https://api.wheelseye.com/currentLoc?accessToken=...'
+                          : 'WheelsEye API URL'
                       }
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-mono focus:border-emerald-500 focus:outline-hidden"
                       required
@@ -810,8 +815,8 @@ function GpsPageContent() {
                       onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
                       placeholder={
                         selectedProviderTab === 'Fleetx'
-                          ? '75683dcb-9df0-429c-b3a2-646542ac50e5'
-                          : '53afc208-0981-48c7-b134-d85d2f33dc0c'
+                          ? 'Fleetx API token'
+                          : 'WheelsEye API token'
                       }
                       className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-mono focus:border-emerald-500 focus:outline-hidden"
                     />
@@ -899,7 +904,7 @@ function GpsPageContent() {
                   Last Sync
                 </span>
                 <span className="text-xs font-bold text-slate-700 mt-0.5 block truncate">
-                  {formatDateTime(setting?.lastSync || new Date())}
+                  {setting?.lastSync ? formatDateTime(setting.lastSync) : 'N/A'}
                 </span>
               </div>
             </div>
@@ -958,7 +963,7 @@ function GpsPageContent() {
                       : 'bg-slate-200/70 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  Moving ({liveVehicles.filter((v) => v.speed > 0).length})
+                  Moving ({liveVehicles.filter(isVehicleMoving).length})
                 </button>
                 <button
                   type="button"
@@ -969,7 +974,7 @@ function GpsPageContent() {
                       : 'bg-slate-200/70 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  Stopped ({liveVehicles.filter((v) => v.speed === 0).length})
+                  Stopped ({liveVehicles.filter((v) => !isVehicleMoving(v)).length})
                 </button>
               </div>
             </div>
@@ -984,7 +989,7 @@ function GpsPageContent() {
               ) : (
                 filteredVehicles.map((v) => {
                   const isSelected = selectedVehicle?.vehicleNumber === v.vehicleNumber;
-                  const isMoving = v.speed > 0;
+                  const isMoving = isVehicleMoving(v);
                   const hasPlan = Boolean(v.loadingPlan?.currentPlan);
 
                   return (
@@ -1016,17 +1021,19 @@ function GpsPageContent() {
                           {/* Ignition Pill */}
                           <span
                             className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
-                              v.ignition
+                              v.ignition === true
                                 ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-slate-100 text-slate-500'
+                                : v.ignition === false
+                                  ? 'bg-slate-100 text-slate-500'
+                                  : 'bg-amber-100 text-amber-800'
                             }`}
                           >
                             <span
                               className={`w-1.5 h-1.5 rounded-full ${
-                                v.ignition ? 'bg-emerald-500' : 'bg-slate-400'
+                                v.ignition === true ? 'bg-emerald-500' : v.ignition === false ? 'bg-slate-400' : 'bg-amber-500'
                               }`}
                             />
-                            {v.ignition ? 'IGN ON' : 'IGN OFF'}
+                            {v.ignition === null || v.ignition === undefined ? 'IGN N/A' : `IGN ${String(v.ignition)}`}
                           </span>
                         </div>
 
@@ -1048,6 +1055,16 @@ function GpsPageContent() {
                               ? `Inside ${v.geofence.plantName}`
                               : 'Outside Plants'}
                           </span>
+                          {v.gps_status === 'GPS STALE' && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-800">
+                              GPS STALE
+                            </span>
+                          )}
+                          {v.dataCheck && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-100 text-rose-800">
+                              Data check
+                            </span>
+                          )}
 
                           {hasPlan ? (
                             <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-100 text-indigo-800">
@@ -1070,10 +1087,10 @@ function GpsPageContent() {
                               : 'bg-slate-100 text-slate-600'
                           }`}
                         >
-                          {isMoving ? `${Math.round(v.speed)} km/h` : 'Stopped'}
+                          {v.speed === null || v.speed === undefined ? 'N/A' : String(v.speed)}
                         </span>
                         <span className="text-[10px] text-slate-400 mt-1 font-mono">
-                          {v.readableTime?.split(',')[1] || ''}
+                          {v.timestamp ? formatDateTime(v.timestamp) : 'GPS time N/A'}
                         </span>
                       </div>
                     </button>
@@ -1110,14 +1127,14 @@ function GpsPageContent() {
                         </h2>
                         <span
                           className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                            selectedVehicle.speed > 0
+                            isVehicleMoving(selectedVehicle)
                               ? 'bg-emerald-100 text-emerald-800'
                               : 'bg-slate-100 text-slate-700'
                           }`}
                         >
-                          {selectedVehicle.speed > 0
-                            ? `Moving (${Math.round(selectedVehicle.speed)} km/h)`
-                            : 'Stopped / Idle'}
+                          {selectedVehicle.speed === null
+                            ? 'Speed N/A'
+                            : `${isVehicleMoving(selectedVehicle) ? 'Moving' : 'Stopped'} (${selectedVehicle.speed} km/h)`}
                         </span>
                       </div>
                       <p className="text-xs text-slate-500 mt-0.5">
@@ -1129,7 +1146,9 @@ function GpsPageContent() {
                   {/* Direct Map Link */}
                   <div className="flex items-center gap-2">
                     <a
-                      href={`https://maps.google.com/?q=${selectedVehicle.latitude},${selectedVehicle.longitude}`}
+                      href={selectedVehicle.latitude !== null && selectedVehicle.longitude !== null
+                        ? `https://maps.google.com/?q=${selectedVehicle.latitude},${selectedVehicle.longitude}`
+                        : '#'}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition cursor-pointer"
@@ -1177,7 +1196,7 @@ function GpsPageContent() {
                             Vehicle Location / Readable Address
                           </span>
                           <p className="text-sm font-extrabold text-slate-950 mt-0.5 leading-snug">
-                            {selectedVehicle.readableLocation || 'Near Meerut Road Corridor, Ghaziabad, Uttar Pradesh'}
+                            {selectedVehicle.readableLocation || 'N/A'}
                           </p>
                         </div>
                       </div>
@@ -1187,22 +1206,33 @@ function GpsPageContent() {
                           GPS Updated Date Time
                         </span>
                         <span className="text-xs font-bold text-slate-900 font-mono block mt-0.5">
-                          {selectedVehicle.readableTime || formatDateTime(selectedVehicle.timestamp)}
+                          {selectedVehicle.timestamp
+                            ? (selectedVehicle.readableTime || formatDateTime(selectedVehicle.timestamp))
+                            : 'N/A'}
                         </span>
                       </div>
                     </div>
                   </div>
 
                   {/* INTERACTIVE MAP CONTAINER WITH CUSTOM VEHICLE ICON PIN (Google Maps) */}
-                  <VehicleLiveMap
-                    vehicleNumber={selectedVehicle.vehicleNumber}
-                    latitude={selectedVehicle.latitude}
-                    longitude={selectedVehicle.longitude}
-                    speed={selectedVehicle.speed}
-                    readableLocation={selectedVehicle.readableLocation}
-                    readableTime={selectedVehicle.readableTime || formatDateTime(selectedVehicle.timestamp)}
-                    plantName={selectedVehicle.geofence?.plantName}
-                  />
+                  {selectedVehicle.latitude !== null && selectedVehicle.longitude !== null ? (
+                    <VehicleLiveMap
+                      vehicleNumber={selectedVehicle.vehicleNumber}
+                      latitude={selectedVehicle.latitude}
+                      longitude={selectedVehicle.longitude}
+                      speed={selectedVehicle.speed}
+                      movementStatus={selectedVehicle.movementStatus}
+                      readableLocation={selectedVehicle.readableLocation}
+                      readableTime={selectedVehicle.timestamp
+                        ? (selectedVehicle.readableTime || formatDateTime(selectedVehicle.timestamp))
+                        : 'N/A'}
+                      plantName={selectedVehicle.geofence?.plantName}
+                    />
+                  ) : (
+                    <div className="h-80 sm:h-96 rounded-2xl border border-slate-200 bg-slate-50 flex items-center justify-center text-sm font-semibold text-slate-500">
+                      GPS coordinates N/A
+                    </div>
+                  )}
                 </div>
 
                 {/* CURRENT LOADING / DISPATCH PLAN CARD */}
@@ -1288,7 +1318,9 @@ function GpsPageContent() {
                         Coordinates (Lat, Lon)
                       </span>
                       <span className="font-mono font-bold text-slate-800 mt-1 block">
-                        {selectedVehicle.latitude.toFixed(6)}, {selectedVehicle.longitude.toFixed(6)}
+                        {selectedVehicle.latitude !== null && selectedVehicle.longitude !== null
+                          ? `${selectedVehicle.latitude.toFixed(6)}, ${selectedVehicle.longitude.toFixed(6)}`
+                          : 'N/A'}
                       </span>
                     </div>
 
@@ -1297,7 +1329,7 @@ function GpsPageContent() {
                         Current Speed
                       </span>
                       <span className="font-extrabold text-slate-900 text-sm mt-0.5 block">
-                        {Math.round(selectedVehicle.speed)} km/h
+                        {selectedVehicle.speed === null || selectedVehicle.speed === undefined ? 'N/A' : String(selectedVehicle.speed)}
                       </span>
                     </div>
 
@@ -1308,11 +1340,13 @@ function GpsPageContent() {
                       <div className="flex items-center gap-1.5 mt-1 font-bold">
                         <span
                           className={`w-2 h-2 rounded-full ${
-                            selectedVehicle.ignition ? 'bg-emerald-500' : 'bg-slate-400'
+                            selectedVehicle.ignition === true ? 'bg-emerald-500' : selectedVehicle.ignition === false ? 'bg-slate-400' : 'bg-amber-500'
                           }`}
                         />
-                        <span className={selectedVehicle.ignition ? 'text-emerald-700' : 'text-slate-600'}>
-                          {selectedVehicle.ignition ? 'Ignition ON' : 'Ignition OFF'}
+                        <span className={selectedVehicle.ignition === true ? 'text-emerald-700' : selectedVehicle.ignition === false ? 'text-slate-600' : 'text-amber-700'}>
+                          {selectedVehicle.ignition === null || selectedVehicle.ignition === undefined
+                            ? 'N/A'
+                            : `Ignition ${String(selectedVehicle.ignition)}`}
                         </span>
                       </div>
                     </div>
@@ -1322,7 +1356,7 @@ function GpsPageContent() {
                         Heading / Compass
                       </span>
                       <span className="font-bold text-slate-800 mt-1 block">
-                        {selectedVehicle.angle}° Angle
+                        {selectedVehicle.angle === null ? 'N/A' : `${selectedVehicle.angle}° Angle`}
                       </span>
                     </div>
 
@@ -1340,7 +1374,7 @@ function GpsPageContent() {
                         Telemetry Time
                       </span>
                       <span className="font-medium text-slate-800 mt-1 block truncate">
-                        {selectedVehicle.readableTime || formatDateTime(selectedVehicle.timestamp)}
+                        {selectedVehicle.timestamp ? (selectedVehicle.readableTime || formatDateTime(selectedVehicle.timestamp)) : 'N/A'}
                       </span>
                     </div>
                   </div>

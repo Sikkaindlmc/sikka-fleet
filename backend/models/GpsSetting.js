@@ -11,11 +11,11 @@ const gpsSettingSchema = new mongoose.Schema(
     apiUrl: {
       type: String,
       trim: true,
-      default: 'https://api.wheelseye.com/currentLoc?accessToken=53afc208-0981-48c7-b134-d85d2f33dc0c',
+      default: '',
     },
     encryptedApiKey: {
       type: String,
-      default: '53afc208-0981-48c7-b134-d85d2f33dc0c',
+      default: '',
     },
     apiSecret: {
       type: String,
@@ -28,7 +28,7 @@ const gpsSettingSchema = new mongoose.Schema(
     },
     connectionStatus: {
       type: String,
-      enum: ['Connected', 'Connection Failed', 'Pending'],
+      enum: ['Connected', 'Connection Failed', 'Pending', 'AUTH_FAILED'],
       default: 'Connected',
     },
     lastSync: {

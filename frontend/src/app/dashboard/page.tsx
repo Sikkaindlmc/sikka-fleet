@@ -32,7 +32,7 @@ import Modal from '../../components/Modal';
 import AlertBanner, { AlertState } from '../../components/AlertBanner';
 import VehicleIcon from '../../components/VehicleIcon';
 import { apiRequest, API_BASE_URL } from '../../lib/api';
-import { formatDateTime, formatDistance, calculateOutsideHours, getDurationColorClasses } from '../../lib/formatters';
+import { formatDateTime, formatDistance, getDurationColorClasses } from '../../lib/formatters';
 import { useAuth } from '../../lib/authContext';
 import DriverDashboardView from '../../components/DriverDashboardView';
 import NearestDriverCell from '../../components/NearestDriverCell';
@@ -104,7 +104,7 @@ interface PlantWidget {
   id: string;
   name: string;
   location: string;
-  radiusMeter: number;
+  radiusMeter: number | null;
   latitude: number;
   longitude: number;
   vehicleCount: number;
@@ -125,13 +125,18 @@ interface PlantVehicle {
   locationStale?: boolean;
   fleetType: string;
   ownerName?: string;
-  entryDateTime: string;
+  entryDateTime: string | null;
   lastUpdateDateTime?: string | null;
   latest_gps_timestamp?: string | null;
   gps_status?: string | null;
   last_sync_source?: string | null;
-  latitude: number;
-  longitude: number;
+  stayHours?: string | null;
+  speed?: string | number | null;
+  ignition?: string | number | boolean | null;
+  movementStatus?: 'Moving' | 'Stopped' | null;
+  dataCheck?: boolean;
+  latitude: number | null;
+  longitude: number | null;
   distanceMeter?: number;
   location?: string;
   readableLocation?: string;
@@ -139,32 +144,34 @@ interface PlantVehicle {
   plans?: VehiclePlanItem[];
 }
 
-// Entry Time से Current Time के बीच Stay Hours (HH:MM) कैलकुलेट करने का फ़ंक्शन
-const calculateStayHours = (entryDateTimeStr?: string | null): string => {
-  if (!entryDateTimeStr) return '00:00';
+// Entry Time से Current/GPS Time के बीच Stay Hours (HH:MM) कैलकुलेट करने का फ़ंक्शन (Frozen if Stale)
+const calculateStayHours = (
+  entryDateTimeStr?: string | null,
+  gpsTimestampStr?: string | null
+): string => {
+  if (!entryDateTimeStr || !gpsTimestampStr) return 'N/A';
 
   try {
-    let entryDate: Date;
-
-    // Handle "DD-MM-YYYY, HH:mm:ss" or ISO string
-    if (typeof entryDateTimeStr === 'string' && entryDateTimeStr.includes(', ')) {
-      const [datePart, timePart] = entryDateTimeStr.split(', ');
-      const sep = datePart.includes('-') ? '-' : '/';
-      const parts = datePart.split(sep);
-      if (parts.length === 3) {
-        const [day, month, year] = parts;
-        entryDate = new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${timePart}`);
-      } else {
-        entryDate = new Date(entryDateTimeStr);
+    const parseDate = (dStr: string) => {
+      if (dStr.includes(', ')) {
+        const [datePart, timePart] = dStr.split(', ');
+        const sep = datePart.includes('-') ? '-' : '/';
+        const parts = datePart.split(sep);
+        if (parts.length === 3) {
+          const [day, month, year] = parts;
+          return new Date(`${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${timePart}`);
+        }
       }
-    } else {
-      entryDate = new Date(entryDateTimeStr);
-    }
+      return new Date(dStr);
+    };
 
-    if (isNaN(entryDate.getTime())) return '00:00';
+    const entryDate = parseDate(entryDateTimeStr);
+    if (isNaN(entryDate.getTime())) return 'N/A';
 
-    const now = new Date(); // Current system time
-    const diffInMs = now.getTime() - entryDate.getTime();
+    const refDate = parseDate(gpsTimestampStr);
+    if (isNaN(refDate.getTime())) return 'N/A';
+
+    const diffInMs = refDate.getTime() - entryDate.getTime();
     if (diffInMs < 0) return '00:00';
 
     const totalMinutes = Math.floor(diffInMs / (1000 * 60));
@@ -176,7 +183,7 @@ const calculateStayHours = (entryDateTimeStr?: string | null): string => {
 
     return `${formattedHours}:${formattedMinutes}`;
   } catch {
-    return '00:00';
+    return 'N/A';
   }
 };
 
@@ -190,6 +197,10 @@ interface OutsideVehicle {
   gps_status?: string | null;
   last_sync_source?: string | null;
   lastLocationTime?: string;
+  speed?: string | number | null;
+  ignition?: string | number | boolean | null;
+  movementStatus?: 'Moving' | 'Stopped' | null;
+  dataCheck?: boolean;
   outsideHours?: string | null;
   status: string;
   driverName?: string | null;
@@ -201,8 +212,8 @@ interface OutsideVehicle {
   locationStale?: boolean;
   fleetType?: string;
   ownerName?: string;
-  latitude: number;
-  longitude: number;
+  latitude: number | null;
+  longitude: number | null;
   readableLocation?: string;
   plans?: VehiclePlanItem[];
 }
@@ -222,7 +233,8 @@ export default function DashboardPage() {
   const [nextScheduledSyncAt, setNextScheduledSyncAt] = useState<string | null>(null);
   const [syncStatusState, setSyncStatusState] = useState<'IDLE' | 'SUCCESS' | 'FAILED' | 'SYNCING'>('SUCCESS');
   const [isBackendSyncing, setIsBackendSyncing] = useState(false);
-  const [nextSyncCountdown, setNextSyncCountdown] = useState<string>('30:00');
+  const [nextSyncCountdown, setNextSyncCountdown] = useState<string>('N/A');
+  const [authFailedProviders, setAuthFailedProviders] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [alert, setAlert] = useState<AlertState | null>(null);
@@ -448,7 +460,7 @@ export default function DashboardPage() {
     try {
       if (activeModal === 'plant' && selectedPlant) {
         const data = await apiRequest<{
-          plant: { id: string; name: string; location: string; radiusMeter: number; availableDrivers?: NearestDriverItem[] };
+          plant: { id: string; name: string; location: string; radiusMeter: number | null; availableDrivers?: NearestDriverItem[] };
           vehicles: PlantVehicle[];
         }>(`/dashboard/plants/${selectedPlant.id}/vehicles`);
         setPlantVehicles(data.vehicles || []);
@@ -502,13 +514,14 @@ export default function DashboardPage() {
         next_sync_timestamp?: string;
         next_scheduled_sync_at?: string;
         last_sync_status?: string;
+        authFailedProviders?: string[];
       }>('/dashboard/summary');
 
       setPlantWidgets(data.plantWidgets || []);
       setOutsideWidget(data.outsideWidget);
       setTotalActiveVehicles(data.totalActiveVehicles || 0);
 
-      const evalTimestamp = data.last_successful_sync_at || data.last_evaluated_timestamp || data.lastUpdated;
+      const evalTimestamp = data.last_evaluated_timestamp || data.lastUpdated;
       if (evalTimestamp) {
         setLastUpdated(evalTimestamp);
       }
@@ -520,6 +533,7 @@ export default function DashboardPage() {
       if (data.last_sync_status) {
         setSyncStatusState(data.last_sync_status as any);
       }
+      setAuthFailedProviders(data.authFailedProviders || []);
     } catch (err: any) {
       setAlert({
         type: 'error',
@@ -536,23 +550,9 @@ export default function DashboardPage() {
 
     const calculateCountdown = () => {
       const now = new Date();
-      let targetTime: Date;
-
-      if (nextScheduledSyncAt) {
-        targetTime = new Date(nextScheduledSyncAt);
-        if (isNaN(targetTime.getTime())) {
-          targetTime = new Date(now.getTime() + 30 * 60 * 1000);
-        }
-      } else {
-        const minutes = now.getMinutes();
-        const target = new Date(now);
-        if (minutes < 30) {
-          target.setMinutes(30, 0, 0);
-        } else {
-          target.setHours(target.getHours() + 1, 0, 0, 0);
-        }
-        targetTime = target;
-      }
+      if (!nextScheduledSyncAt) return 'N/A';
+      const targetTime = new Date(nextScheduledSyncAt);
+      if (isNaN(targetTime.getTime())) return 'N/A';
 
       const diffMs = targetTime.getTime() - now.getTime();
 
@@ -621,7 +621,7 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [fetchSummary]);
 
-  // Handle Manual GPS Sync Trigger
+  // Handle on-demand provider GPS sync
   const handleTriggerSync = async () => {
     setIsSyncing(true);
     setAlert(null);
@@ -636,32 +636,21 @@ export default function DashboardPage() {
         vehiclesProcessed?: number;
       };
 
-      try {
-        result = await apiRequest<{
-          message: string;
-          last_evaluated_timestamp?: string;
-          last_successful_sync_at?: string;
-          next_scheduled_sync_at?: string;
-          lastSync?: string;
-          processedCount?: number;
-          vehiclesProcessed?: number;
-        }>('/gps-sync/run', {
-          method: 'POST',
-          body: JSON.stringify({ triggerType: 'MANUAL_DASHBOARD_BUTTON' }),
-        });
-      } catch {
-        result = await apiRequest<{
-          message: string;
-          last_evaluated_timestamp?: string;
-          lastSync?: string;
-          processedCount?: number;
-        }>('/fleet/sync-gps', {
-          method: 'POST',
-        });
-      }
+      result = await apiRequest<{
+        message: string;
+        last_evaluated_timestamp?: string;
+        last_successful_sync_at?: string;
+        next_scheduled_sync_at?: string;
+        lastSync?: string;
+        processedCount?: number;
+        vehiclesProcessed?: number;
+      }>('/gps-sync/run', {
+        method: 'POST',
+        body: JSON.stringify({ triggerType: 'USER_DASHBOARD_BUTTON' }),
+      });
 
-      const updatedTime = result.last_successful_sync_at || result.last_evaluated_timestamp || result.lastSync || new Date().toISOString();
-      setLastUpdated(updatedTime);
+      const updatedTime = result.last_successful_sync_at || result.last_evaluated_timestamp || result.lastSync;
+      if (updatedTime) setLastUpdated(updatedTime);
       if (result.next_scheduled_sync_at) {
         setNextScheduledSyncAt(result.next_scheduled_sync_at);
       }
@@ -675,7 +664,7 @@ export default function DashboardPage() {
       await fetchSummary(false);
       if (selectedPlant) {
         const data = await apiRequest<{
-          plant: { id: string; name: string; location: string; radiusMeter: number; availableDrivers?: NearestDriverItem[] };
+          plant: { id: string; name: string; location: string; radiusMeter: number | null; availableDrivers?: NearestDriverItem[] };
           vehicles: PlantVehicle[];
         }>(`/dashboard/plants/${selectedPlant.id}/vehicles`);
         setPlantVehicles(data.vehicles || []);
@@ -698,7 +687,7 @@ export default function DashboardPage() {
     setIsModalLoading(true);
     try {
       const data = await apiRequest<{
-        plant: { id: string; name: string; location: string; radiusMeter: number; availableDrivers?: NearestDriverItem[] };
+        plant: { id: string; name: string; location: string; radiusMeter: number | null; availableDrivers?: NearestDriverItem[] };
         vehicles: PlantVehicle[];
       }>(`/dashboard/plants/${plant.id}/vehicles`);
       setSelectedPlant({
@@ -746,7 +735,7 @@ export default function DashboardPage() {
     try {
       const data = await apiRequest<{
         title: string;
-        plant: { id: string; name: string; location: string; radiusMeter: number };
+        plant: { id: string; name: string; location: string; radiusMeter: number | null };
         drivers: DashboardDriverItem[];
       }>(`/dashboard/plants/${plant.id}/drivers`);
       setPlantDriversList(data.drivers || []);
@@ -898,13 +887,13 @@ export default function DashboardPage() {
             {syncStatusState === 'FAILED' ? (
               <div
                 className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-800 shadow-2xs select-none"
-                title="Auto-Sync encountered an error and is retrying automatically"
+                title="The most recent scheduled GPS sync failed."
               >
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
                 </span>
-                <span>Auto-Sync Retrying... ⚠️</span>
+                <span>Auto-Sync Failed</span>
               </div>
             ) : isBackendSyncing ? (
               <div
@@ -928,20 +917,27 @@ export default function DashboardPage() {
             )}
 
 
-            <button
-              type="button"
-              onClick={handleTriggerSync}
-              disabled={isSyncing || isLoading}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Synchronizing GPS...' : 'Sync GPS Now'}</span>
-            </button>
+            {user?.role === 'Admin' && (
+              <button
+                type="button"
+                onClick={handleTriggerSync}
+                disabled={isSyncing || isLoading}
+                className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>{isSyncing ? 'Synchronizing GPS...' : 'Sync GPS Now'}</span>
+              </button>
+            )}
           </div>
         </div>
 
         {/* Alert Feedback */}
         <AlertBanner alert={alert} onDismiss={() => setAlert(null)} />
+        {authFailedProviders.length > 0 && (
+          <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
+            GPS authentication failed for {authFailedProviders.join(', ')}. Update the provider credentials in GPS settings.
+          </div>
+        )}
 
         {/* Section Title */}
         <div className="pt-2">
@@ -999,7 +995,7 @@ export default function DashboardPage() {
                   </p>
 
                   <p className="text-[11px] text-slate-400 mt-1">
-                    Radius: <strong className="text-slate-700">{plant.radiusMeter || 500} meters</strong>
+                    Radius: <strong className="text-slate-700">{plant.radiusMeter ?? 'N/A'} meters</strong>
                   </p>
                 </div>
 
@@ -1161,7 +1157,7 @@ export default function DashboardPage() {
           isOpen={activeModal === 'plant'}
           onClose={() => setActiveModal(null)}
           title={`${selectedPlant?.name || 'Plant'} – Vehicles`}
-          subtitle={`Currently detected inside configured ${selectedPlant?.radiusMeter || 500}m geofence radius`}
+          subtitle={`Currently detected inside configured ${selectedPlant?.radiusMeter ?? 'N/A'}m geofence radius`}
           maxWidth="5xl"
         >
           {/* Modal Header Actions: Export to Excel */}
@@ -1177,7 +1173,7 @@ export default function DashboardPage() {
                 onClick={handleTriggerSync}
                 disabled={isSyncing}
                 className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
-                title="Trigger manual GPS sync to fetch latest telemetry for all vehicles"
+                title="Trigger an on-demand GPS sync to fetch the latest telemetry for all vehicles"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
                 <span>{isSyncing ? 'Syncing...' : 'Sync GPS'}</span>
@@ -1237,6 +1233,10 @@ export default function DashboardPage() {
                             <span className="font-extrabold text-slate-900 text-sm tracking-wide">
                               {v.vehicleNumber}
                             </span>
+                            <span className="text-[10px] font-bold text-slate-600">
+                              IGN {v.ignition === null || v.ignition === undefined ? 'N/A' : String(v.ignition)} · {v.speed === null || v.speed === undefined ? 'N/A' : String(v.speed)}
+                            </span>
+                            {v.dataCheck && <span className="text-[10px] font-bold text-rose-700">Data check</span>}
                             {v.gps_status === 'GPS STALE' && (
                               <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300" title="GPS telemetry is older than 60 minutes">
                                 GPS STALE
@@ -1255,21 +1255,19 @@ export default function DashboardPage() {
                           </div>
                         </td>
                         <td className="px-5 py-3.5 text-slate-700 font-semibold whitespace-nowrap">
-                          {formatDateTime(v.entryDateTime)}
+                          {v.entryDateTime ? formatDateTime(v.entryDateTime) : 'N/A'}
                         </td>
                         <td className="px-5 py-3.5 text-slate-600 font-medium whitespace-nowrap">
                           <div>
-                            <span>{formatDateTime(v.latest_gps_timestamp || v.lastUpdateDateTime || v.entryDateTime)}</span>
-                            {v.last_sync_source && (
-                              <span className="ml-1.5 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200">
-                                {v.last_sync_source}
-                              </span>
-                            )}
+                            <span>{v.latest_gps_timestamp ? formatDateTime(v.latest_gps_timestamp) : 'N/A'}</span>
+                            <span className="ml-1.5 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200">
+                              {v.last_sync_source || 'N/A'}
+                            </span>
                           </div>
                         </td>
                         <td className="px-5 py-3.5 whitespace-nowrap">
                           {(() => {
-                            const stayHours = calculateStayHours(v.entryDateTime);
+                            const stayHours = v.stayHours || calculateStayHours(v.entryDateTime, v.latest_gps_timestamp);
                             const colors = getDurationColorClasses(stayHours);
                             return (
                               <span
@@ -1462,9 +1460,9 @@ export default function DashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white font-medium">
                   {outsideVehicles.map((v) => {
-                    const plantOutTime = v.plantOutDateTime || v.lastLocationDateTime || v.lastLocationTime;
-                    const lastGpsTime = v.lastLocationDateTime || v.lastLocationTime;
-                    const outPlantName = v.lastOutPlantName || 'Tea Plant';
+                    const plantOutTime = v.plantOutDateTime || null;
+                    const lastGpsTime = v.latest_gps_timestamp || null;
+                    const outPlantName = v.lastOutPlantName || 'N/A';
 
                     return (
                       <tr key={v.id} className="hover:bg-slate-50/70 transition">
@@ -1475,6 +1473,10 @@ export default function DashboardPage() {
                             <span className="font-extrabold text-slate-900 text-sm tracking-wide">
                               {v.vehicleNumber}
                             </span>
+                            <span className="text-[10px] font-bold text-slate-600">
+                              IGN {v.ignition === null || v.ignition === undefined ? 'N/A' : String(v.ignition)} · {v.speed === null || v.speed === undefined ? 'N/A' : String(v.speed)}
+                            </span>
+                            {v.dataCheck && <span className="text-[10px] font-bold text-rose-700">Data check</span>}
                             {v.gps_status === 'GPS STALE' && (
                               <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300" title="GPS telemetry is older than 60 minutes">
                                 GPS STALE
@@ -1502,25 +1504,23 @@ export default function DashboardPage() {
 
                         {/* 3. Plant Out Date Time */}
                         <td className="px-5 py-3.5 text-slate-700 whitespace-nowrap font-medium">
-                          {formatDateTime(plantOutTime)}
+                          {plantOutTime ? formatDateTime(plantOutTime) : 'N/A'}
                         </td>
 
                         {/* 4. Last Location Date Time */}
                         <td className="px-5 py-3.5 text-slate-700 whitespace-nowrap font-medium">
                           <div>
-                            <span>{formatDateTime(v.latest_gps_timestamp || lastGpsTime)}</span>
-                            {v.last_sync_source && (
-                              <span className="ml-1.5 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200">
-                                {v.last_sync_source}
-                              </span>
-                            )}
+                            <span>{lastGpsTime ? formatDateTime(lastGpsTime) : 'N/A'}</span>
+                            <span className="ml-1.5 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200">
+                              {v.last_sync_source || 'N/A'}
+                            </span>
                           </div>
                         </td>
 
                         {/* Outside Hour (left side of Status) */}
                         <td className="px-5 py-3.5 whitespace-nowrap">
                           {(() => {
-                            const outsideHour = calculateOutsideHours(plantOutTime);
+                            const outsideHour = v.outsideHours || 'N/A';
                             const colors = getDurationColorClasses(outsideHour);
                             return (
                               <span

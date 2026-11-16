@@ -38,11 +38,11 @@ const vehicleCurrentStatusSchema = new mongoose.Schema(
     },
     latitude: {
       type: Number,
-      required: true,
+      default: null,
     },
     longitude: {
       type: Number,
-      required: true,
+      default: null,
     },
     distanceMeter: {
       type: Number,
@@ -65,16 +65,41 @@ const vehicleCurrentStatusSchema = new mongoose.Schema(
     },
     last_sync_source: {
       type: String,
-      enum: ['AUTO', 'MANUAL', 'STARTUP', 'RETRY'],
-      default: 'AUTO',
+      enum: ['AUTO', 'STARTUP', 'RETRY', 'GPS-AUTO'],
+      default: 'GPS-AUTO',
+    },
+    stayHours: {
+      type: String,
+      default: '00:00',
     },
     speed: {
       type: Number,
-      default: 0,
+      default: null,
+    },
+    speedRaw: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
     },
     ignition: {
       type: Boolean,
-      default: false,
+      default: null,
+    },
+    ignitionRaw: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+    movementStatus: {
+      type: String,
+      enum: ['Moving', 'Stopped', null],
+      default: null,
+    },
+    provider: {
+      type: String,
+      default: null,
+    },
+    rawTelemetry: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
     },
     address: {
       type: String,

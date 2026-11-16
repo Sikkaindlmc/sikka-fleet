@@ -35,16 +35,16 @@ export default function PlantPage() {
   const [createFormData, setCreateFormData] = useState({
     plantName: '',
     location: '',
-    radiusMeter: '500',
-    latitude: '28.6280',
-    longitude: '77.3670',
+    radiusMeter: '',
+    latitude: '',
+    longitude: '',
     status: 'Active' as 'Active' | 'Inactive',
   });
 
   const [editFormData, setEditFormData] = useState({
     plantName: '',
     location: '',
-    radiusMeter: '500',
+    radiusMeter: '',
     latitude: '',
     longitude: '',
     status: 'Active' as 'Active' | 'Inactive',
@@ -76,9 +76,9 @@ export default function PlantPage() {
     setCreateFormData({
       plantName: '',
       location: '',
-      radiusMeter: '500',
-      latitude: '28.6280',
-      longitude: '77.3670',
+      radiusMeter: '',
+      latitude: '',
+      longitude: '',
       status: 'Active',
     });
     setFormError('');
@@ -88,12 +88,7 @@ export default function PlantPage() {
   // Open Edit Modal
   const openEditModal = (plant: PlantRecord) => {
     setSelectedPlant(plant);
-    const radiusVal =
-      plant.radiusMeters !== undefined
-        ? plant.radiusMeters
-        : plant.radiusMeter !== undefined
-        ? plant.radiusMeter
-        : 500;
+    const radiusVal = plant.radiusMeters ?? plant.radiusMeter ?? '';
     setEditFormData({
       plantName: plant.plantName,
       location: plant.location,
@@ -132,6 +127,10 @@ export default function PlantPage() {
     const lon = Number(createFormData.longitude);
     if (isNaN(lon) || lon < -180 || lon > 180) {
       setFormError('Longitude must be a valid number between -180 and 180.');
+      return;
+    }
+    if (lat === 0 && lon === 0) {
+      setFormError('Plant coordinates cannot be 0,0.');
       return;
     }
 
@@ -193,6 +192,10 @@ export default function PlantPage() {
     const lon = Number(editFormData.longitude);
     if (isNaN(lon) || lon < -180 || lon > 180) {
       setFormError('Longitude must be between -180 and 180.');
+      return;
+    }
+    if (lat === 0 && lon === 0) {
+      setFormError('Plant coordinates cannot be 0,0.');
       return;
     }
 
@@ -319,7 +322,7 @@ export default function PlantPage() {
                         </div>
                       </td>
                       <td className="px-6 py-4 font-bold text-slate-800">
-                        {plant.radiusMeters || plant.radiusMeter} m
+                        {plant.radiusMeters ?? plant.radiusMeter} m
                       </td>
                       <td className="px-6 py-4 font-mono text-slate-600">
                         {plant.latitude.toFixed(6)}
@@ -417,7 +420,7 @@ export default function PlantPage() {
                 step="1"
                 value={createFormData.radiusMeter}
                 onChange={(e) => setCreateFormData({ ...createFormData, radiusMeter: e.target.value })}
-                placeholder="500"
+                placeholder="Radius in meters"
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 text-sm font-semibold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 focus:outline-hidden transition-all shadow-xs"
                 disabled={isSubmitting}
                 required
@@ -437,7 +440,7 @@ export default function PlantPage() {
                   step="any"
                   value={createFormData.latitude}
                   onChange={(e) => setCreateFormData({ ...createFormData, latitude: e.target.value })}
-                  placeholder="28.6280"
+                  placeholder="Verified latitude"
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 text-sm font-mono font-semibold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 focus:outline-hidden transition-all shadow-xs"
                   disabled={isSubmitting}
                   required
@@ -453,7 +456,7 @@ export default function PlantPage() {
                   step="any"
                   value={createFormData.longitude}
                   onChange={(e) => setCreateFormData({ ...createFormData, longitude: e.target.value })}
-                  placeholder="77.3670"
+                  placeholder="Verified longitude"
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 text-sm font-mono font-semibold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 focus:outline-hidden transition-all shadow-xs"
                   disabled={isSubmitting}
                   required
@@ -551,7 +554,7 @@ export default function PlantPage() {
                 step="1"
                 value={editFormData.radiusMeter}
                 onChange={(e) => setEditFormData({ ...editFormData, radiusMeter: e.target.value })}
-                placeholder="e.g. 500"
+                placeholder="Radius in meters"
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 text-sm font-semibold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 focus:outline-hidden transition-all shadow-xs"
                 disabled={isSubmitting}
                 required
@@ -571,7 +574,7 @@ export default function PlantPage() {
                   step="any"
                   value={editFormData.latitude}
                   onChange={(e) => setEditFormData({ ...editFormData, latitude: e.target.value })}
-                  placeholder="e.g. 28.6280"
+                  placeholder="Verified latitude"
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 text-sm font-mono font-semibold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 focus:outline-hidden transition-all shadow-xs"
                   disabled={isSubmitting}
                   required
@@ -587,7 +590,7 @@ export default function PlantPage() {
                   step="any"
                   value={editFormData.longitude}
                   onChange={(e) => setEditFormData({ ...editFormData, longitude: e.target.value })}
-                  placeholder="e.g. 77.3670"
+                  placeholder="Verified longitude"
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 text-sm font-mono font-semibold focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 focus:outline-hidden transition-all shadow-xs"
                   disabled={isSubmitting}
                   required

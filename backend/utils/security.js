@@ -73,7 +73,7 @@ function isSafeExternalUrl(inputUrl) {
  */
 function maskUrlSecret(urlStr) {
   if (!urlStr || typeof urlStr !== 'string') return '';
-  return urlStr.replace(/([?&](?:accessToken|apiKey|token|key|secret)=)([^&]+)/gi, (match, prefix, val) => {
+  return urlStr.replace(/([?&](?:access[_-]?token|api[_-]?key|token|key|secret)=)([^&]+)/gi, (match, prefix, val) => {
     if (val.length <= 4) return `${prefix}••••`;
     return `${prefix}••••••••${val.slice(-4)}`;
   });

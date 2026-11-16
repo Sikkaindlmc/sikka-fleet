@@ -3,6 +3,9 @@
  * Tests all 15 scenarios specified in Section 10 of requirements.
  */
 const { getDistance } = require('../services/driverMatchingService');
+const mongoose = require('mongoose');
+const Plant = require('../models/Plant');
+const connectDB = require('../config/db');
 
 let passedTests = 0;
 let totalTests = 0;
@@ -30,12 +33,23 @@ function getCoordOffsetMeters(lat, lon, metersNorth, metersEast = 0) {
 }
 
 async function runTests() {
+  await connectDB();
+  const plantCenter = await Plant.findOne({ status: 'Active' }).select('latitude longitude').lean();
+  if (
+    !plantCenter ||
+    !Number.isFinite(plantCenter.latitude) ||
+    !Number.isFinite(plantCenter.longitude) ||
+    (plantCenter.latitude === 0 && plantCenter.longitude === 0)
+  ) {
+    throw new Error('A valid saved Plant center is required to run the distance tests.');
+  }
+
   console.log('================================================================');
   console.log('🧪 RUNNING GPS RADIUS & DRIVER-TO-VEHICLE ASSIGNMENT TEST SUITE');
   console.log('================================================================\n');
 
-  const baseLat = 28.6139;
-  const baseLon = 77.2090;
+  const baseLat = plantCenter.latitude;
+  const baseLon = plantCenter.longitude;
 
   // Scenario 1: A driver is 50 meters away, and the configured radius is 100 meters: eligible.
   const coord50m = getCoordOffsetMeters(baseLat, baseLon, 50);
@@ -214,6 +228,7 @@ async function runTests() {
   console.log(`🎉 TEST SUMMARY: ${passedTests}/${totalTests} TESTS PASSED`);
   console.log('================================================================\n');
 
+  await mongoose.disconnect();
   if (passedTests === totalTests) {
     process.exit(0);
   } else {

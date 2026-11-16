@@ -20,6 +20,9 @@ const DriverLocation = require('./DriverLocation');
 const DriverPlantRecord = require('./DriverPlantRecord');
 const Page = require('./Page');
 const PlanAuditLog = require('./PlanAuditLog');
+const GpsHistory = require('./GpsHistory');
+const PlantStay = require('./PlantStay');
+const DailyGpsReport = require('./DailyGpsReport');
 
 module.exports = {
   User,
@@ -31,6 +34,9 @@ module.exports = {
   VehicleLocation,
   PlanNotification,
   PlanAuditLog,
+  GpsHistory,
+  PlantStay,
+  DailyGpsReport,
   PlantEntry,
   PlantEntryEvent,
   GpsConfig,
