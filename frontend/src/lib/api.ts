@@ -96,6 +96,42 @@ interface FetchOptions extends RequestInit {
   timeoutMs?: number;
 }
 
+interface RefreshedSession<T = unknown> {
+  token: string;
+  user: T;
+}
+
+let refreshInFlight: Promise<RefreshedSession> | null = null;
+
+function isAuthEndpoint(endpoint: string): boolean {
+  return /^\/?auth\/(login|refresh|logout)(?:\/|$)/.test(endpoint);
+}
+
+function isLogoutEndpoint(endpoint: string): boolean {
+  return /^\/?auth\/logout(?:\/|$)/.test(endpoint);
+}
+
+function clearClientSession(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('sikka_fleet_token');
+  localStorage.removeItem('sikka_fleet_user');
+  localStorage.setItem('sikka_fleet_logged_out', '1');
+  window.dispatchEvent(new CustomEvent('sikka:auth-expired'));
+}
+
+function isRevokedSessionError(error: unknown): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    error.status === 401 &&
+    (error.data?.code === 'SESSION_INVALID' || error.data?.code === 'SESSION_REVOKED')
+  );
+}
+
+function shouldRefreshAccessToken(error: ApiError): boolean {
+  const code = error.data?.code;
+  return ['NO_TOKEN', 'TOKEN_EXPIRED', 'TOKEN_INVALID', 'SESSION_INVALID', 'USER_NOT_FOUND'].includes(code);
+}
+
 async function executeFetch<T = any>(
   baseUrl: string,
   endpoint: string,
@@ -123,6 +159,7 @@ async function executeFetch<T = any>(
     ...options,
     headers,
     signal: controller.signal,
+    credentials: 'include',
   };
 
   try {
@@ -132,20 +169,6 @@ async function executeFetch<T = any>(
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      if (response.status === 401 && typeof window !== 'undefined') {
-        const isLoginRequest = endpoint.includes('/auth/login');
-        if (!isLoginRequest) {
-          localStorage.removeItem('sikka_fleet_token');
-          localStorage.removeItem('sikka_fleet_user');
-          window.dispatchEvent(new CustomEvent('sikka:auth-expired', { detail: data }));
-
-          if (!window.location.pathname.startsWith('/login')) {
-            const redirectPath = encodeURIComponent(window.location.pathname + window.location.search);
-            window.location.href = `/login?expired=1&redirect=${redirectPath}`;
-          }
-        }
-      }
-
       const errorMessage =
         data.error ||
         data.message ||
@@ -166,6 +189,32 @@ async function executeFetch<T = any>(
   }
 }
 
+// Refreshes on the same API origin so the HttpOnly cookie remains available.
+export function refreshSession<T = any>(
+  baseUrl = getApiBaseUrl()
+): Promise<RefreshedSession<T>> {
+  if (refreshInFlight) return refreshInFlight as Promise<RefreshedSession<T>>;
+
+  refreshInFlight = executeFetch<RefreshedSession<T>>(baseUrl, '/auth/refresh', {
+    method: 'POST',
+    timeoutMs: 8000,
+  })
+    .then((session) => {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('sikka_fleet_token', session.token);
+        localStorage.setItem('sikka_fleet_user', JSON.stringify(session.user));
+        localStorage.removeItem('sikka_fleet_logged_out');
+        window.dispatchEvent(new CustomEvent('sikka:session-refreshed', { detail: session }));
+      }
+      return session;
+    })
+    .finally(() => {
+      refreshInFlight = null;
+    });
+
+  return refreshInFlight as Promise<RefreshedSession<T>>;
+}
+
 /**
  * Universal apiRequest client with automatic fallback and retry handling.
  * - Accurately differentiates HTTP errors (e.g. 401 invalid credentials) from true network drops.
@@ -181,11 +230,44 @@ export async function apiRequest<T = any>(
     ? PRODUCTION_API_URL
     : BACKUP_CLOUD_API_URL;
 
+  const requestWithRefresh = async (
+    baseUrl: string,
+    requestOptions: FetchOptions = options
+  ): Promise<T> => {
+    try {
+      return await executeFetch<T>(baseUrl, endpoint, requestOptions);
+    } catch (requestError) {
+      if (
+        !(requestError instanceof ApiError) ||
+        requestError.status !== 401 ||
+        !shouldRefreshAccessToken(requestError) ||
+        isAuthEndpoint(endpoint)
+      ) {
+        throw requestError;
+      }
+
+      try {
+        await refreshSession(baseUrl);
+      } catch (refreshError) {
+        if (isRevokedSessionError(refreshError)) {
+          clearClientSession();
+        }
+        // A network failure must not clear the locally persisted login.
+        throw requestError;
+      }
+
+      return executeFetch<T>(baseUrl, endpoint, requestOptions);
+    }
+  };
+
   try {
-    return await executeFetch<T>(primaryBaseUrl, endpoint, options);
+    return await requestWithRefresh(primaryBaseUrl);
   } catch (primaryErr: any) {
     // If the server responded with an HTTP status code (400, 401, 403, 404, 500), do NOT treat as network drop
-    if (primaryErr instanceof ApiError && primaryErr.status > 0) {
+    if (
+      (primaryErr instanceof ApiError && primaryErr.status > 0) ||
+      isLogoutEndpoint(endpoint)
+    ) {
       throw primaryErr;
     }
 
@@ -193,7 +275,7 @@ export async function apiRequest<T = any>(
     // Try failover to redundant cloud endpoint
     try {
       console.warn(`[Network Retry] Primary endpoint unreachable. Attempting redundant cloud fallback: ${fallbackBaseUrl}`);
-      const fallbackResult = await executeFetch<T>(fallbackBaseUrl, endpoint, {
+      const fallbackResult = await requestWithRefresh(fallbackBaseUrl, {
         ...options,
         timeoutMs: 12000,
       });
@@ -210,7 +292,7 @@ export async function apiRequest<T = any>(
       // One final retry with exponential backoff delay (1000ms)
       try {
         await new Promise((resolve) => setTimeout(resolve, 1000));
-        return await executeFetch<T>(primaryBaseUrl, endpoint, {
+        return await requestWithRefresh(primaryBaseUrl, {
           ...options,
           timeoutMs: 12000,
         });

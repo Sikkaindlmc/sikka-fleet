@@ -795,6 +795,7 @@ router.get('/outside/vehicles', async (req, res) => {
 
     const PlantEntry = require('../models/PlantEntry');
     const { getReadableLocation } = require('../services/locationHelper');
+    const { calcVehicleTodayHours } = require('../services/reportCalculationService');
     const activePlants = await Plant.find({ status: 'Active' });
 
     const currentStatuses = await VehicleCurrentStatus.find({
@@ -816,53 +817,53 @@ router.get('/outside/vehicles', async (req, res) => {
       }
     }
 
-    function calculateOutsideHours(plantOutDate, currentDate = new Date()) {
-      if (!plantOutDate) return '—';
-      const outTime = new Date(plantOutDate);
-      if (isNaN(outTime.getTime())) return '—';
-      const diffMs = currentDate.getTime() - outTime.getTime();
-      if (diffMs < 0) return '00:00';
-      const totalMinutes = Math.floor(diffMs / (60 * 1000));
-      const hours = Math.floor(totalMinutes / 60);
-      const minutes = totalMinutes % 60;
-      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-    }
-
+    // GPS-based today hours calculation (replaces running-clock formula)
     const now = new Date();
-    const vehicles = currentStatuses
-      .filter((item) => item.vehicleId && item.vehicleId.status === 'Active')
-      .map((item) => {
-        const lastEntry = lastEntryMap.get(item.vehicleId._id.toString());
-        const lastOutPlant = item.lastExitPlantName || (lastEntry ? lastEntry.plantName : (activePlants[0]?.plantName || 'Tea Plant'));
-        const plantOutTime = item.lastExitDateTime || (lastEntry ? lastEntry.entryDateTime : item.lastUpdatedAt);
-        const outsideHour = calculateOutsideHours(plantOutTime, now);
+    const activeItems = currentStatuses.filter((item) => item.vehicleId && item.vehicleId.status === 'Active');
 
-        return {
-          id: item.vehicleId._id,
-          vehicleId: item.vehicleId._id,
-          vehicleNumber: item.vehicleId.vehicleNumber,
-          lastOutPlantName: lastOutPlant,
-          plantOutDateTime: plantOutTime,
-          lastLocationDateTime: item.lastUpdatedAt,
-          outsideHours: outsideHour,
-          status: 'Outside',
-          latitude: item.latitude,
-          longitude: item.longitude,
-          readableLocation: getReadableLocation(item.latitude, item.longitude, activePlants),
-          latest_gps_timestamp: item.latest_gps_timestamp || item.lastUpdatedAt,
-          gps_status: item.gps_status || 'LIVE',
-          last_sync_source: item.last_sync_source || 'AUTO',
-          fleetType: item.vehicleId.fleetType,
-          ownerName: item.vehicleId.ownerName,
-          plans: (() => {
-            const activePlans = filterActivePlans(item.plans, 'Next Trip Plan');
-            if (Array.isArray(item.plans) && item.plans.length !== activePlans.length) {
-              VehicleCurrentStatus.updateOne({ _id: item._id }, { $set: { plans: activePlans } }).catch(() => {});
-            }
-            return activePlans;
-          })(),
-        };
-      });
+    // Calculate GPS-based hours for all vehicles in parallel
+    const hoursResults = await Promise.all(
+      activeItems.map((item) => calcVehicleTodayHours(item.vehicleId.vehicleNumber, now).catch(() => ({
+        plantHours: '00:00', outsideHours: '00:00', plantBreakdown: {},
+      })))
+    );
+
+    const vehicles = activeItems.map((item, idx) => {
+      const lastEntry    = lastEntryMap.get(item.vehicleId._id.toString());
+      const lastOutPlant = item.lastExitPlantName || (lastEntry ? lastEntry.plantName : (activePlants[0]?.plantName || 'Tea Plant'));
+      const plantOutTime = item.lastExitDateTime  || (lastEntry ? lastEntry.entryDateTime : item.lastUpdatedAt);
+      const todayHours   = hoursResults[idx];
+
+      return {
+        id:                   item.vehicleId._id,
+        vehicleId:            item.vehicleId._id,
+        vehicleNumber:        item.vehicleId.vehicleNumber,
+        lastOutPlantName:     lastOutPlant,
+        plantOutDateTime:     plantOutTime,
+        lastLocationDateTime: item.lastUpdatedAt,
+        // GPS-based today outside hours (not a running clock since last exit)
+        outsideHours:         todayHours.outsideHours,
+        // Also expose today plant hours and breakdown for dashboard cards
+        plantHours:           todayHours.plantHours,
+        plantBreakdown:       todayHours.plantBreakdown,
+        status:               'Outside',
+        latitude:             item.latitude,
+        longitude:            item.longitude,
+        readableLocation:     getReadableLocation(item.latitude, item.longitude, activePlants),
+        latest_gps_timestamp: item.latest_gps_timestamp || item.lastUpdatedAt,
+        gps_status:           item.gps_status || 'LIVE',
+        last_sync_source:     item.last_sync_source || 'AUTO',
+        fleetType:            item.vehicleId.fleetType,
+        ownerName:            item.vehicleId.ownerName,
+        plans: (() => {
+          const activePlans = filterActivePlans(item.plans, 'Next Trip Plan');
+          if (Array.isArray(item.plans) && item.plans.length !== activePlans.length) {
+            VehicleCurrentStatus.updateOne({ _id: item._id }, { $set: { plans: activePlans } }).catch(() => {});
+          }
+          return activePlans;
+        })(),
+      };
+    });
 
     // Attach nearest drivers within 100m based on GPS distance (Requirements 24.2 - 24.6)
     const vehiclesWithDrivers = await attachNearestDriversToVehicles(vehicles);
@@ -1149,6 +1150,7 @@ router.get('/outside/export', async (req, res) => {
 
     const PlantEntry = require('../models/PlantEntry');
     const { getReadableLocation } = require('../services/locationHelper');
+    const { calcVehicleTodayHours } = require('../services/reportCalculationService');
     const activePlants = await Plant.find({ status: 'Active' });
 
     const currentStatuses = await VehicleCurrentStatus.find({
@@ -1191,31 +1193,27 @@ router.get('/outside/export', async (req, res) => {
       )
       .join('')}</tr>`;
 
-    function calculateOutsideHours(plantOutDate, currentDate = new Date()) {
-      if (!plantOutDate) return '—';
-      const outTime = new Date(plantOutDate);
-      if (isNaN(outTime.getTime())) return '—';
-      const diffMs = currentDate.getTime() - outTime.getTime();
-      if (diffMs < 0) return '00:00';
-      const totalMinutes = Math.floor(diffMs / (60 * 1000));
-      const hours = Math.floor(totalMinutes / 60);
-      const minutes = totalMinutes % 60;
-      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-    }
-
+    // GPS-based hours for Excel export (same source of truth as the API response)
+    const { calcVehicleTodayHours: calcHoursForExport } = require('../services/reportCalculationService');
     const now = new Date();
-    const rowsHtml = currentStatuses
-      .filter((st) => st.vehicleId && st.vehicleId.status === 'Active')
-      .map((st) => {
+    const activeExportStatuses = currentStatuses.filter((st) => st.vehicleId && st.vehicleId.status === 'Active');
+    const exportHoursResults = await Promise.all(
+      activeExportStatuses.map((st) =>
+        calcHoursForExport(st.vehicleId.vehicleNumber, now).catch(() => ({ outsideHours: '00:00' }))
+      )
+    );
+
+    const rowsHtml = activeExportStatuses
+      .map((st, idx) => {
         const v = st.vehicleId;
-        const lastEntry = lastEntryMap.get(v._id.toString());
+        const lastEntry    = lastEntryMap.get(v._id.toString());
         const lastOutPlant = st.lastExitPlantName || (lastEntry ? lastEntry.plantName : (activePlants[0]?.plantName || 'Tea Plant'));
-        const plantOutTime = st.lastExitDateTime || (lastEntry ? lastEntry.entryDateTime : st.lastUpdatedAt);
-        const outsideHour = calculateOutsideHours(plantOutTime, now);
+        const plantOutTime = st.lastExitDateTime  || (lastEntry ? lastEntry.entryDateTime : st.lastUpdatedAt);
+        const outsideHour  = exportHoursResults[idx].outsideHours;
         const driverMobile = v.driverName ? `${v.driverName} - ${v.mobile ? '+91 ' + v.mobile : ''}` : 'No Driver Available';
-        const readableLoc = getReadableLocation(st.latitude, st.longitude, activePlants);
-        const plans = filterActivePlans(st.plans, 'Next Trip Plan');
-        const latestPlan = plans.length > 0 ? plans[plans.length - 1] : null;
+        const readableLoc  = getReadableLocation(st.latitude, st.longitude, activePlants);
+        const plans        = filterActivePlans(st.plans, 'Next Trip Plan');
+        const latestPlan   = plans.length > 0 ? plans[plans.length - 1] : null;
         const latestPlanStr = latestPlan
           ? `${latestPlan.planText} (by ${latestPlan.authorName} on ${formatIST(latestPlan.createdAt)})`
           : 'No Plan';

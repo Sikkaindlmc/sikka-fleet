@@ -5,10 +5,9 @@ const GpsSetting = require('../models/GpsSetting');
 
 const router = express.Router();
 
-const { verifyToken, getJwtSecret } = require('../middleware/auth');
+const { verifyToken } = require('../middleware/auth');
 const { timingSafeCompare } = require('../utils/security');
 const { gpsSyncLimiter } = require('../middleware/rateLimiter');
-const jwt = require('jsonwebtoken');
 
 /**
  * Middleware: Verify caller is either an authenticated user or authorized cron worker
@@ -32,19 +31,11 @@ function authorizeGpsSyncCaller(req, res, next) {
   }
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
-    try {
-      const decoded = jwt.verify(token, getJwtSecret(), { algorithms: ['HS256'] });
-      req.user = decoded;
-      req.syncCaller = `User (${decoded.username || decoded.fullName || 'User'})`;
+    return verifyToken(req, res, () => {
+      req.syncCaller = `User (${req.user.username || req.user.fullName || 'User'})`;
       req.isCron = false;
-      return next();
-    } catch (err) {
-      return res.status(401).json({
-        error: 'Invalid authentication token.',
-        code: 'TOKEN_INVALID',
-      });
-    }
+      next();
+    });
   }
 
   return res.status(401).json({

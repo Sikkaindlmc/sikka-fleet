@@ -8,6 +8,164 @@ const DriverLocation = require('../models/DriverLocation');
 const DriverPlantRecord = require('../models/DriverPlantRecord');
 const { calculateHaversineDistance } = require('./geofenceService');
 
+/**
+ * Calculate today's GPS-based plant hours and outside hours for a single vehicle.
+ *
+ * Strategy:
+ *   1. Load VehicleLocation pings for today (IST 00:00 → now).
+ *   2. Classify each ping as a plant category or "Outside" using Haversine geo-fence.
+ *   3. Build candidate intervals between consecutive pings.
+ *   4. Normalize overlapping intervals.
+ *   5. Return {plantHours (HH:mm), outsideHours (HH:mm)} where outsideHours = today elapsed − plant hours.
+ *
+ * This is the single source of truth used by both Dashboard and Report pages.
+ *
+ * @param {string} vehicleNumber
+ * @param {Date}   [asOf]           default = now; pass a specific time for back-testing
+ * @returns {Promise<{plantHours: string, outsideHours: string, plantBreakdown: Object}>}
+ */
+async function calcVehicleTodayHours(vehicleNumber, asOf = new Date()) {
+  // IST start-of-day for asOf
+  const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+  const asOfMs = asOf.getTime();
+  // floor to IST midnight
+  const istMidnightMs = Math.floor((asOfMs + IST_OFFSET_MS) / 86400000) * 86400000 - IST_OFFSET_MS;
+  const dayStart = new Date(istMidnightMs);
+  const dayEnd   = asOf; // up to "now", not end-of-day
+
+  // Load plants once
+  const activePlants = await Plant.find({ status: 'Active' });
+  const plantConfigs = activePlants.map(p => ({
+    category: getPlantCategory(p.plantName),
+    latitude:  p.latitude,
+    longitude: p.longitude,
+    radius:    p.radiusMeters || p.radiusMeter || 500,
+  })).filter(p => p.category);
+
+  const determinePlantState = (lat, lon) => {
+    if (typeof lat !== 'number' || typeof lon !== 'number') return 'Outside';
+    for (const pc of plantConfigs) {
+      if (calculateHaversineDistance(lat, lon, pc.latitude, pc.longitude) <= pc.radius)
+        return pc.category;
+    }
+    return 'Outside';
+  };
+
+  // GPS pings for today (with 1-hour lookback buffer for midnight crossings)
+  const locations = await VehicleLocation.find({
+    vehicleNumber: { $regex: new RegExp(`^${vehicleNumber}$`, 'i') },
+    gpsDateTime: { $gte: new Date(dayStart.getTime() - 3600000), $lte: dayEnd },
+  }).sort({ gpsDateTime: 1 });
+
+  // Plant-Entry records for today
+  const plantEntries = await PlantEntry.find({
+    vehicleNumber: { $regex: new RegExp(`^${vehicleNumber}$`, 'i') },
+    entryDateTime: { $gte: new Date(dayStart.getTime() - 3600000), $lte: dayEnd },
+  }).sort({ entryDateTime: 1 });
+
+  // Current status (may be Inside a plant right now)
+  const vehicle = await Vehicle.findOne({ vehicleNumber: { $regex: new RegExp(`^${vehicleNumber}$`, 'i') } });
+  const currentStatus = vehicle ? await VehicleCurrentStatus.findOne({ vehicleId: vehicle._id }) : null;
+
+  const candidateIntervals = [];
+
+  // 1. Explicit PlantEntry intervals
+  for (let i = 0; i < plantEntries.length; i++) {
+    const pe    = plantEntries[i];
+    const cat   = getPlantCategory(pe.plantName);
+    if (!cat) continue;
+    const entry = new Date(pe.entryDateTime);
+    let   exit  = plantEntries[i + 1] ? new Date(plantEntries[i + 1].entryDateTime) : null;
+
+    if (!exit) {
+      if (currentStatus && currentStatus.status === 'Inside' &&
+          currentStatus.currentPlantId?.toString() === pe.plantId?.toString()) {
+        exit = dayEnd; // vehicle still inside
+      } else if (currentStatus?.lastExitDateTime) {
+        exit = new Date(currentStatus.lastExitDateTime);
+      } else {
+        exit = new Date(entry.getTime() + 30 * 60 * 1000); // 30-min estimate for isolated ping
+      }
+    }
+    if (exit > entry) candidateIntervals.push({ start: entry, end: exit, state: cat });
+  }
+
+  // 2. If vehicle is currently Inside and no PlantEntry yet today, add live stay
+  if (currentStatus && currentStatus.status === 'Inside' && currentStatus.lastEntryDateTime) {
+    const liveStart = new Date(currentStatus.lastEntryDateTime);
+    if (liveStart <= dayEnd) {
+      const livePlant = activePlants.find(p => p._id.toString() === currentStatus.currentPlantId?.toString());
+      const liveCat   = livePlant ? getPlantCategory(livePlant.plantName) : null;
+      if (liveCat) {
+        candidateIntervals.push({ start: liveStart, end: dayEnd, state: liveCat });
+      }
+    }
+  }
+
+  // 3. GPS-ping intervals
+  const points = locations.map(loc => ({
+    time:  new Date(loc.gpsDateTime || loc.receivedAt),
+    state: determinePlantState(loc.latitude, loc.longitude),
+  })).sort((a, b) => a.time - b.time);
+
+  const MAX_GAP = 2 * 3600 * 1000; // 2 h
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i], b = points[i + 1];
+    const diff = b.time - a.time;
+    if (diff <= 0) continue;
+    if (diff <= MAX_GAP) {
+      if (a.state === b.state) {
+        candidateIntervals.push({ start: a.time, end: b.time, state: a.state });
+      } else {
+        const mid = new Date(a.time.getTime() + Math.floor(diff / 2));
+        candidateIntervals.push({ start: a.time, end: mid,    state: a.state });
+        candidateIntervals.push({ start: mid,    end: b.time, state: b.state });
+      }
+    } else if (a.state !== 'Outside' && a.state === b.state) {
+      candidateIntervals.push({ start: a.time, end: b.time, state: a.state }); // parked in plant
+    }
+  }
+
+  // Normalize into non-overlapping segments clipped to [dayStart, dayEnd]
+  const clipped = candidateIntervals
+    .map(inv => ({
+      start: Math.max(inv.start.getTime(), dayStart.getTime()),
+      end:   Math.min(inv.end.getTime(),   dayEnd.getTime()),
+      state: inv.state,
+    }))
+    .filter(inv => inv.end > inv.start);
+
+  const normalized = normalizeIntervals(clipped.map(i => ({
+    start: new Date(i.start),
+    end:   new Date(i.end),
+    state: i.state,
+  })));
+
+  // Accumulate per category
+  const totalMs = { 'Salt Plant': 0, 'Tea Plant': 0, 'Dasna Plant': 0 };
+  for (const seg of normalized) {
+    const oStart = Math.max(seg.start, dayStart.getTime());
+    const oEnd   = Math.min(seg.end,   dayEnd.getTime());
+    if (oEnd > oStart && totalMs[seg.state] !== undefined) {
+      totalMs[seg.state] += oEnd - oStart;
+    }
+  }
+
+  const elapsedMs = Math.max(dayEnd.getTime() - dayStart.getTime(), 0);
+  const plantMs   = (totalMs['Salt Plant'] || 0) + (totalMs['Tea Plant'] || 0) + (totalMs['Dasna Plant'] || 0);
+  const outsideMs = Math.max(elapsedMs - plantMs, 0);
+
+  return {
+    plantHours:     msToHHMM(plantMs),
+    outsideHours:   msToHHMM(outsideMs),
+    plantBreakdown: {
+      saltPlant:  msToHHMM(totalMs['Salt Plant']),
+      teaPlant:   msToHHMM(totalMs['Tea Plant']),
+      dasnaPlant: msToHHMM(totalMs['Dasna Plant']),
+    },
+  };
+}
+
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /**
@@ -167,37 +325,6 @@ function computeDailyDurations(normalizedSegments, dayStart, dayEnd) {
     outsideTotal: msToHHMM(outsideMs),
   };
 }
-  const dStart = dayStart.getTime();
-  const dEnd = dayEnd.getTime();
-
-  const totals = {
-    'Salt Plant': 0,
-    'Tea Plant': 0,
-    'Dasna Plant': 0,
-    Outside: 0,
-  };
-
-  for (const seg of normalizedSegments) {
-    const oStart = Math.max(seg.start, dStart);
-    const oEnd = Math.min(seg.end, dEnd);
-
-    if (oEnd > oStart) {
-      const durationMs = oEnd - oStart;
-      if (totals[seg.state] !== undefined) {
-        totals[seg.state] += durationMs;
-      } else {
-        totals.Outside += durationMs;
-      }
-    }
-  }
-
-  return {
-    saltStay: msToHHMM(totals['Salt Plant']),
-    teaStay: msToHHMM(totals['Tea Plant']),
-    dasnaStay: msToHHMM(totals['Dasna Plant']),
-    outsideTotal: msToHHMM(totals.Outside),
-  };
-}
 
 /**
  * Generate Fleet Report for all vehicles across specified date range
@@ -256,12 +383,13 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber }) {
 
     // Fetch chronological vehicle movement records
     const [locations, plantEntries, currentStatus] = await Promise.all([
+      // Case-insensitive vehicleNumber match to handle mixed-case stored records
       VehicleLocation.find({
-        vehicleNumber: vNum,
+        vehicleNumber: { $regex: new RegExp(`^${vNum}$`, 'i') },
         gpsDateTime: { $gte: new Date(overallStart.getTime() - 24 * 3600 * 1000), $lte: new Date(overallEnd.getTime() + 24 * 3600 * 1000) },
       }).sort({ gpsDateTime: 1 }),
       PlantEntry.find({
-        vehicleNumber: vNum,
+        vehicleNumber: { $regex: new RegExp(`^${vNum}$`, 'i') },
         entryDateTime: { $gte: new Date(overallStart.getTime() - 24 * 3600 * 1000), $lte: new Date(overallEnd.getTime() + 24 * 3600 * 1000) },
       }).sort({ entryDateTime: 1 }),
       VehicleCurrentStatus.findOne({ vehicleId: vId }),
@@ -599,4 +727,5 @@ module.exports = {
   computeDailyDurations,
   generateFleetReport,
   generateDriverReport,
+  calcVehicleTodayHours,
 };

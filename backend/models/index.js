@@ -4,6 +4,7 @@
 const User = require('./User');
 const Plant = require('./Plant');
 const Driver = require('./Driver');
+const AuthSession = require('./AuthSession');
 const Vehicle = require('./Vehicle');
 const VehicleCurrentStatus = require('./VehicleCurrentStatus');
 const VehicleLocation = require('./VehicleLocation');
@@ -24,6 +25,7 @@ module.exports = {
   User,
   Plant,
   Driver,
+  AuthSession,
   Vehicle,
   VehicleCurrentStatus,
   VehicleLocation,

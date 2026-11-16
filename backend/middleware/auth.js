@@ -2,8 +2,11 @@ const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Driver = require('../models/Driver');
+const AuthSession = require('../models/AuthSession');
 require('../models/Plant');
 const connectDB = require('../config/db');
+
+const SESSION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
 const getJwtSecret = () => {
   const secret = process.env.JWT_SECRET;
@@ -60,6 +63,20 @@ const verifyToken = async (req, res, next) => {
       });
     }
 
+    if (decoded.sid) {
+      const session = await AuthSession.findOneAndUpdate(
+        { _id: decoded.sid, expiresAt: { $gt: new Date() } },
+        { $set: { expiresAt: new Date(Date.now() + SESSION_TTL_MS) } },
+        { new: true }
+      );
+      if (!session) {
+        return res.status(401).json({
+          error: 'Your session is no longer valid. Please sign in again.',
+          code: 'SESSION_INVALID',
+        });
+      }
+    }
+
     let account = null;
     if (decoded.role === 'Driver') {
       const driver = await Driver.findById(decoded.userId);
@@ -109,9 +126,9 @@ const verifyToken = async (req, res, next) => {
     next();
   } catch (error) {
     console.error('[Auth Middleware Error]:', error.message || error);
-    res.status(401).json({ 
-      error: 'Authentication verification failed. Please sign in again.',
-      code: 'AUTH_FAILED' 
+    res.status(503).json({
+      error: 'Authentication service is temporarily unavailable.',
+      code: 'AUTH_UNAVAILABLE',
     });
   }
 };

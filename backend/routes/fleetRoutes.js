@@ -1,12 +1,11 @@
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const { syncGpsPositions } = require('../services/gpsPollerService');
 const { getCronWorkerStatus } = require('../services/gpsCronWorker');
 const GpsSetting = require('../models/GpsSetting');
 
 const router = express.Router();
 
-const { getJwtSecret, verifyToken } = require('../middleware/auth');
+const { verifyToken } = require('../middleware/auth');
 const { timingSafeCompare } = require('../utils/security');
 const { gpsSyncLimiter } = require('../middleware/rateLimiter');
 
@@ -34,18 +33,10 @@ function authorizeSyncCaller(req, res, next) {
 
   // 2. Check JWT User Token
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
-    try {
-      const decoded = jwt.verify(token, getJwtSecret(), { algorithms: ['HS256'] });
-      req.user = decoded;
-      req.syncCaller = `Manual (${decoded.name || decoded.username || 'User'})`;
-      return next();
-    } catch (err) {
-      return res.status(401).json({
-        error: 'Invalid authentication token.',
-        code: 'TOKEN_INVALID',
-      });
-    }
+    return verifyToken(req, res, () => {
+      req.syncCaller = `Manual (${req.user.fullName || req.user.username || 'User'})`;
+      next();
+    });
   }
 
   // Reject unauthenticated requests
