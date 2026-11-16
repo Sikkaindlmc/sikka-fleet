@@ -52,11 +52,3 @@ module.exports = {
   gpsSyncLimiter,
   generalApiLimiter,
 };
-
-const generalApiLimiter = (req, res, next) => next();
-
-module.exports = {
-  authLimiter,
-  gpsSyncLimiter,
-  generalApiLimiter,
-};
