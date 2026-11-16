@@ -1,50 +1,32 @@
-// Daily GPS Report Page
-// Displays hours spent in each plant and outside per vehicle per date.
+'use client';
 
-import React, { useEffect, useState } from 'react';
-import { Table } from '@/components/Table'; // Assuming a generic Table component exists
-import { DatePicker } from '@/components/DatePicker'; // Assuming a DatePicker component
+/**
+ * GPS Daily Report Page
+ * Displays hours spent in each plant and outside per vehicle per date.
+ * This is a lightweight secondary view; the primary report lives at /reports.
+ */
+
+import React, { useEffect, useState, useCallback } from 'react';
 
 interface ReportRow {
   vehicleNumber: string;
-  date: string; // display format e.g., 01-Oct-2026
-  saltPlantStay: string; // HH:mm
+  date: string;
+  dateRaw: string;
+  saltPlantStay: string;
   teaPlantStay: string;
   dasnaPlantStay: string;
   outsideTotal: string;
 }
 
-const DailyReportPage: React.FC = () => {
-  const [from, setFrom] = useState<string>('');
-  const [to, setTo] = useState<string>('');
-  const [vehicleNumber, setVehicleNumber] = useState<string>('');
-  const [data, setData] = useState<ReportRow[]>([]);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string>('');
+export default function GpsDailyReportPage() {
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [vehicleFilter, setVehicleFilter] = useState('');
+  const [rows, setRows] = useState<ReportRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const fetchReport = async () => {
-    if (!from || !to) return;
-    setLoading(true);
-    setError('');
-    try {
-      const query = new URLSearchParams({ from, to });
-      if (vehicleNumber) query.append('vehicleNumber', vehicleNumber);
-      const res = await fetch(`/api/gps/daily-report?${query.toString()}`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Failed to load report');
-      setData(json.rows || []);
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchReport();
-  }, [from, to, vehicleNumber]);
-
-  // Default to last 7 days on first render
+  // Default to last 7 days on mount
   useEffect(() => {
     const today = new Date();
     const prior = new Date();
@@ -54,41 +36,85 @@ const DailyReportPage: React.FC = () => {
     setTo(fmt(today));
   }, []);
 
-  const columns = [
-    { header: 'Date', accessor: 'date' },
-    { header: 'Vehicle', accessor: 'vehicleNumber' },
-    { header: 'Salt Plant', accessor: 'saltPlantStay' },
-    { header: 'Tea Plant', accessor: 'teaPlantStay' },
-    { header: 'Dasna Plant', accessor: 'dasnaPlantStay' },
-    { header: 'Outside', accessor: 'outsideTotal' },
-  ];
+  const fetchReport = useCallback(async () => {
+    if (!from || !to) return;
+    setLoading(true);
+    setError('');
+    try {
+      const params = new URLSearchParams({ from, to });
+      if (vehicleFilter.trim()) params.append('vehicleNumber', vehicleFilter.trim());
+      const res = await fetch(`/api/gps/daily-report?${params}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to load report');
+      setRows(json.rows || []);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'An unexpected error occurred');
+    } finally {
+      setLoading(false);
+    }
+  }, [from, to, vehicleFilter]);
+
+  useEffect(() => {
+    if (from && to) fetchReport();
+  }, [from, to, fetchReport]);
 
   return (
-    <div style={{ padding: '1rem' }}>
-      <h2>Daily GPS Report</h2>
-      <div style={{ marginBottom: '1rem', display: 'flex', gap: '1rem', alignItems: 'center' }}>
-        <label>
-          From:{' '}
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+    <div style={{ padding: '1.5rem', fontFamily: 'system-ui, sans-serif' }}>
+      <h2 style={{ marginBottom: '1rem' }}>GPS Daily Report</h2>
+
+      {/* Filters */}
+      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem', alignItems: 'flex-end' }}>
+        <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.875rem' }}>
+          From
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+            style={{ padding: '0.4rem', border: '1px solid #ccc', borderRadius: 4 }} />
         </label>
-        <label>
-          To:{' '}
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+        <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.875rem' }}>
+          To
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+            style={{ padding: '0.4rem', border: '1px solid #ccc', borderRadius: 4 }} />
         </label>
-        <label>
-          Vehicle (optional):{' '}
-          <input type="text" placeholder="Vehicle number" value={vehicleNumber} onChange={(e) => setVehicleNumber(e.target.value)} />
+        <label style={{ display: 'flex', flexDirection: 'column', fontSize: '0.875rem' }}>
+          Vehicle (optional)
+          <input type="text" placeholder="e.g. UP14FT9142" value={vehicleFilter}
+            onChange={(e) => setVehicleFilter(e.target.value)}
+            style={{ padding: '0.4rem', border: '1px solid #ccc', borderRadius: 4 }} />
         </label>
       </div>
-      {error && <div style={{ color: 'red' }}>{error}</div>}
+
+      {error && <div style={{ color: '#dc2626', marginBottom: '0.75rem' }}>{error}</div>}
+
       {loading ? (
-        <div>Loading...</div>
+        <div style={{ padding: '2rem', textAlign: 'center' }}>Loading…</div>
       ) : (
-        <Table columns={columns} data={data} />
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+            <thead>
+              <tr style={{ background: '#f1f5f9' }}>
+                {['Vehicle Number', 'Date', 'Salt Plant Stay Hour', 'Tea Plant Stay Hour', 'Dasna Plant Stay Hour', 'Outside Total Hour'].map((h) => (
+                  <th key={h} style={{ padding: '0.6rem 0.75rem', textAlign: 'left', borderBottom: '2px solid #e2e8f0', fontWeight: 600 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr><td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>No records found</td></tr>
+              ) : (
+                rows.map((r, i) => (
+                  <tr key={`${r.vehicleNumber}-${r.dateRaw}-${i}`} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                    <td style={{ padding: '0.5rem 0.75rem', fontWeight: 500 }}>{r.vehicleNumber}</td>
+                    <td style={{ padding: '0.5rem 0.75rem' }}>{r.date}</td>
+                    <td style={{ padding: '0.5rem 0.75rem' }}>{r.saltPlantStay}</td>
+                    <td style={{ padding: '0.5rem 0.75rem' }}>{r.teaPlantStay}</td>
+                    <td style={{ padding: '0.5rem 0.75rem' }}>{r.dasnaPlantStay}</td>
+                    <td style={{ padding: '0.5rem 0.75rem' }}>{r.outsideTotal}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
-};
-
-export default DailyReportPage;
-
+}

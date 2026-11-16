@@ -1,10 +1,6 @@
 /**
  * Sikka Fleet Rate Limiting Configuration
  *
- * NOTE: IP-based throttling is keyed on the real client IP.
- * When running behind a proxy/load-balancer set `trust proxy` on the Express app
- * so that req.ip reflects the client, not the proxy.
- *
  * Auth limiter: strict – prevents brute-force login attacks.
  * GPS / general limiters: generous – allows normal fleet operations.
  */
@@ -12,24 +8,23 @@ const rateLimit = require('express-rate-limit');
 
 /**
  * Auth limiter: 10 attempts per 15 minutes per IP address.
- * Responses are deliberately slow on failure to deter automated scripts.
+ * Only counts failed requests toward the limit.
  */
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 10,
-  standardHeaders: true,  // Return `RateLimit-*` headers
+  standardHeaders: true,
   legacyHeaders: false,
-  skipSuccessfulRequests: true, // Only count failed attempts toward the limit
+  skipSuccessfulRequests: true,
   message: {
     error: 'Too many login attempts from this IP address. Please wait 15 minutes and try again.',
   },
-  // Do not expose the limiter's internals in the response body
   handler: (req, res, next, options) => {
     res.status(429).json(options.message);
   },
 });
 
-// GPS sync limiter: generous – 200 requests per minute per IP
+// GPS sync limiter: 200 requests per minute per IP
 const gpsSyncLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 200,
