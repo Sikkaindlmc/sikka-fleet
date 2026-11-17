@@ -26,7 +26,7 @@ const gpsSettingSchema = new mongoose.Schema(
     connectionStatus: {
       type: String,
       enum: ['Connected', 'Connection Failed', 'Pending', 'AUTH_FAILED'],
-      default: 'Connected',
+      default: 'Pending',
     },
     lastSync: {
       type: Date,
@@ -66,6 +66,10 @@ const gpsSettingSchema = new mongoose.Schema(
       default: '',
     },
     lastSuccessAt: {
+      type: Date,
+      default: null,
+    },
+    lastConnectionCheckAt: {
       type: Date,
       default: null,
     },

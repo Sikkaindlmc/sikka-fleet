@@ -1,5 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const Vehicle = require('../models/Vehicle');
+const GpsHistory = require('../models/GpsHistory');
+const Plant = require('../models/Plant');
+const PlantStay = require('../models/PlantStay');
 const {
   buildTimeline,
   istDayRange,
@@ -7,6 +11,7 @@ const {
   formatMinutes,
   calculateDailyGpsHours,
 } = require('../services/gpsTimelineService');
+const { rebuildPlantStays } = require('../services/gpsDataService');
 
 const plants = [
   { plantName: 'DASNA Plant', latitude: 28.5, longitude: 77.2, radiusMeters: 300 },
@@ -17,6 +22,27 @@ const plants = [
 function point(gpsTimestamp, latitude, longitude) {
   return { gpsTimestamp: new Date(gpsTimestamp), latitude, longitude, syncTime: new Date(gpsTimestamp) };
 }
+
+test('rebuilding plant stays loads the chronological GPS sample utility', async () => {
+  const originals = {
+    findVehicle: Vehicle.findById,
+    findHistory: GpsHistory.find,
+    findPlants: Plant.find,
+    deleteStays: PlantStay.deleteMany,
+  };
+  Vehicle.findById = async () => ({ vehicleNumber: 'UP14AA1001' });
+  GpsHistory.find = () => ({ sort: async () => [] });
+  Plant.find = async () => [];
+  PlantStay.deleteMany = async () => ({ deletedCount: 0 });
+  try {
+    await assert.doesNotReject(rebuildPlantStays('test-vehicle-id'));
+  } finally {
+    Vehicle.findById = originals.findVehicle;
+    GpsHistory.find = originals.findHistory;
+    Plant.find = originals.findPlants;
+    PlantStay.deleteMany = originals.deleteStays;
+  }
+});
 
 test('completed vehicle-days always allocate exactly 24 hours, including long GPS outages', () => {
   const { start, end } = istDayRange('2026-11-11');

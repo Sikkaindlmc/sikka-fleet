@@ -4,6 +4,7 @@ const Vehicle = require('../models/Vehicle');
 const Driver = require('../models/Driver');
 const GpsHistory = require('../models/GpsHistory');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
+const { getAssignedGpsProvider } = require('../utils/gpsProvider');
 const {
   generateFleetReport,
   generateDriverReport,
@@ -17,15 +18,14 @@ router.use(verifyToken, checkPageAccess('Report'));
 // GET /api/reports/options - Retrieve selectable vehicles & drivers for filter dropdowns
 router.get('/options', async (req, res) => {
   try {
-    const [allVehicles, gpsVehicleIds, drivers] = await Promise.all([
-      Vehicle.find().select('vehicleNumber status').sort({ vehicleNumber: 1 }),
-      GpsHistory.distinct('vehicleId', {
-        provider: /wheels.?eye/i,
-        archived: { $ne: true },
-      }),
+    const [allVehicles, wheelsEyeVehicleIds, fleetXVehicleIds, drivers] = await Promise.all([
+      Vehicle.find().select('vehicleNumber status gpsProvider gpsProviders').sort({ vehicleNumber: 1 }),
+      GpsHistory.distinct('vehicleId', { provider: /wheels.?eye/i, archived: { $ne: true } }),
+      GpsHistory.distinct('vehicleId', { provider: /fleetx|fleet/i, archived: { $ne: true } }),
       Driver.find().select('driverName dlNumber mobileNumber status').sort({ driverName: 1 }),
     ]);
-    const gpsVehicleIdSet = new Set(gpsVehicleIds.filter(Boolean).map((id) => id.toString()));
+    const gpsVehicleIdSet = new Set([...wheelsEyeVehicleIds, ...fleetXVehicleIds]
+      .filter(Boolean).map((id) => id.toString()));
     const vehicles = allVehicles.filter((vehicle) =>
       vehicle.status === 'Active' && gpsVehicleIdSet.has(vehicle._id.toString())
     );
@@ -35,6 +35,7 @@ router.get('/options', async (req, res) => {
         id: v._id,
         vehicleNumber: v.vehicleNumber,
         status: v.status,
+        gpsProvider: getAssignedGpsProvider(v),
       })),
       drivers: drivers.map((d) => ({
         id: d._id,
@@ -53,7 +54,7 @@ router.get('/options', async (req, res) => {
 // GET /api/reports/fleet - Generate Fleet Report
 router.get('/fleet', async (req, res) => {
   try {
-    const { fromDate, toDate, vehicleNumber, plant } = req.query;
+    const { fromDate, toDate, vehicleNumber, plant, provider } = req.query;
 
     if (!fromDate || !toDate) {
       return res.status(400).json({ error: 'Both From Date and To Date are mandatory.' });
@@ -64,6 +65,7 @@ router.get('/fleet', async (req, res) => {
       toDate,
       vehicleNumber: vehicleNumber || 'ALL',
       plant: plant || 'ALL',
+      provider: provider || 'all',
     });
 
     res.json(report);
@@ -98,7 +100,7 @@ router.get('/drivers', async (req, res) => {
 // GET /api/reports/export - Export Report as Excel .xlsx File
 router.get('/export', async (req, res) => {
   try {
-    const { reportType, fromDate, toDate, vehicleNumber, driverId, plant } = req.query;
+    const { reportType, fromDate, toDate, vehicleNumber, driverId, plant, provider } = req.query;
 
     if (!fromDate || !toDate) {
       return res.status(400).send('Both From Date and To Date are mandatory.');
@@ -132,6 +134,7 @@ router.get('/export', async (req, res) => {
         toDate,
         vehicleNumber: vehicleNumber || 'ALL',
         plant: plant || 'ALL',
+        provider: provider || 'all',
       });
       filename = `Sikka_Fleet_Report_${result.dateRange.displayFrom}_to_${result.dateRange.displayTo}.xlsx`;
 

@@ -1,5 +1,7 @@
 const express = require('express');
 const GpsSetting = require('../models/GpsSetting');
+const Vehicle = require('../models/Vehicle');
+const GpsCredentialAuditLog = require('../models/GpsCredentialAuditLog');
 const { verifyToken, checkPageAccess, requireRole } = require('../middleware/auth');
 const { testGpsConnection } = require('../services/gpsPollerService');
 const {
@@ -11,6 +13,7 @@ const {
 const { generateFleetReport } = require('../services/reportCalculationService');
 const { getFleetGpsSnapshot } = require('../services/gpsDataService');
 const { filterActivePlans } = require('../utils/planHelper');
+const { getAssignedGpsProvider, getGpsConnectionStatus } = require('../utils/gpsProvider');
 
 const router = express.Router();
 
@@ -117,6 +120,10 @@ function getProviderSettingQuery(provider) {
   };
 }
 
+function getProviderConnectionStatus(setting, provider) {
+  return getGpsConnectionStatus(setting, provider);
+}
+
 function getProviderCredential(setting, provider) {
   return getEffectiveGpsCredential(setting, provider);
 }
@@ -134,7 +141,7 @@ function serializeProviderSetting(setting, provider) {
     provider,
     apiUrl: maskUrlSecret(getProviderApiUrl(setting, provider)),
     status: environmentUrl ? 'Active' : setting?.status || 'Active',
-    connectionStatus: setting?.connectionStatus || 'Pending',
+    connectionStatus: getProviderConnectionStatus(setting, provider),
     lastSync: setting?.lastSync || null,
     lastSuccessAt: setting?.lastSuccessAt || null,
     lastErrorAt: setting?.lastErrorAt || null,
@@ -181,7 +188,7 @@ router.get('/', async (req, res) => {
       provider: 'WheelsEye GPS',
       apiUrl: maskUrlSecret(effectiveUrl),
       status: process.env.WHEELSEYE_API_URL?.trim() ? 'Active' : setting?.status || 'Active',
-      connectionStatus: setting?.connectionStatus || 'Pending',
+      connectionStatus: getProviderConnectionStatus(setting, 'WheelsEye GPS'),
       lastSync: setting?.lastSync || null,
       lastSuccessAt: setting?.lastSuccessAt || null,
       lastErrorAt: setting?.lastErrorAt || null,
@@ -236,7 +243,7 @@ router.get('/providers', async (req, res) => {
   }
 });
 
-router.post('/providers/:provider', async (req, res) => {
+router.post('/providers/:provider', requireRole('Admin'), async (req, res) => {
   try {
     const provider = getGpsProvider(req.params.provider);
     const { apiUrl, apiKey, status, pollIntervalSeconds } = req.body;
@@ -247,6 +254,7 @@ router.post('/providers/:provider', async (req, res) => {
       connectionStatus: 'Pending',
       pollIntervalSeconds: Number(pollIntervalSeconds) || 1800,
     };
+    const changedFields = [];
 
     if (typeof apiUrl === 'string' && apiUrl.trim() && !apiUrl.includes('••••')) {
       const parsedUrl = new URL(apiUrl.trim());
@@ -261,12 +269,17 @@ router.post('/providers/:provider', async (req, res) => {
         }
       }
       update.apiUrl = parsedUrl.toString();
+      changedFields.push('apiUrl');
       const suppliedCredential = typeof apiKey === 'string' && apiKey.trim() && !apiKey.includes('••••')
         ? apiKey.trim()
         : urlCredentials.find(Boolean);
-      if (suppliedCredential) update.encryptedApiKey = encryptGpsCredential(suppliedCredential);
+      if (suppliedCredential) {
+        update.encryptedApiKey = encryptGpsCredential(suppliedCredential);
+        changedFields.push('apiCredential');
+      }
     } else if (typeof apiKey === 'string' && apiKey.trim() && !apiKey.includes('••••')) {
       update.encryptedApiKey = encryptGpsCredential(apiKey.trim());
+      changedFields.push('apiCredential');
     }
 
     const setting = await GpsSetting.findOneAndUpdate(
@@ -274,6 +287,20 @@ router.post('/providers/:provider', async (req, res) => {
       { $set: update },
       { new: true, upsert: true, runValidators: true }
     );
+    if (changedFields.length > 0) {
+      try {
+        await GpsCredentialAuditLog.create({
+          provider,
+          changedFields: [...new Set(changedFields)],
+          changedBy: req.user._id,
+        });
+      } catch (auditError) {
+        console.error('[GPS Credential Audit Error]:', auditError.message);
+        return res.status(500).json({
+          error: 'GPS configuration was updated, but its audit record could not be saved.',
+        });
+      }
+    }
     res.json({
       message: `${provider} settings saved successfully.`,
       setting: serializeProviderSetting(setting || currentSetting, provider),
@@ -305,9 +332,9 @@ router.post('/providers/:provider/test-connection', gpsSyncLimiter, async (req, 
         $set: {
           provider,
           connectionStatus: 'Connected',
-          lastSync: now,
-          lastSuccessAt: now,
+          lastConnectionCheckAt: now,
           lastError: '',
+          lastErrorCode: '',
           consecutiveFailures: 0,
         },
       },
@@ -413,7 +440,7 @@ router.delete('/vehicle-icon', async (req, res) => {
 });
 
 // POST /api/gps - Save or update GPS configuration
-router.post('/', async (req, res) => {
+router.post('/', requireRole('Admin'), async (req, res) => {
   try {
     const { apiUrl, apiKey, status, pollIntervalSeconds } = req.body;
 
@@ -443,6 +470,7 @@ router.post('/', async (req, res) => {
     };
 
     let urlCredential = '';
+    const changedFields = [];
     if (apiUrl && !apiUrl.includes('••••')) {
       const parsedUrl = new URL(apiUrl.trim());
       for (const key of ['accessToken', 'access_token', 'apiKey', 'api_key', 'token', 'key', 'secret']) {
@@ -452,17 +480,34 @@ router.post('/', async (req, res) => {
         }
       }
       updateData.apiUrl = parsedUrl.toString();
+      changedFields.push('apiUrl');
     }
     if (apiKey && !apiKey.includes('••••')) {
       updateData.encryptedApiKey = encryptGpsCredential(apiKey.trim());
+      changedFields.push('apiCredential');
     } else if (urlCredential) {
       updateData.encryptedApiKey = encryptGpsCredential(urlCredential);
+      changedFields.push('apiCredential');
     }
     if (setting) {
       Object.assign(setting, updateData);
       await setting.save();
     } else {
       setting = await GpsSetting.create(updateData);
+    }
+    if (changedFields.length > 0) {
+      try {
+        await GpsCredentialAuditLog.create({
+          provider: providerClean,
+          changedFields: [...new Set(changedFields)],
+          changedBy: req.user._id,
+        });
+      } catch (auditError) {
+        console.error('[GPS Credential Audit Error]:', auditError.message);
+        return res.status(500).json({
+          error: 'GPS configuration was updated, but its audit record could not be saved.',
+        });
+      }
     }
 
     const effectiveCredential = getEffectiveGpsCredential(setting);
@@ -549,9 +594,10 @@ router.get('/live-vehicles', async (req, res) => {
   try {
     const { getReadableLocation } = require('../services/locationHelper');
 
-    const [wheelsEyeSetting, fleetXSetting] = await Promise.all([
+    const [wheelsEyeSetting, fleetXSetting, registeredVehicles] = await Promise.all([
       GpsSetting.findOne(getProviderSettingQuery('WheelsEye GPS')).sort({ updatedAt: -1 }),
       GpsSetting.findOne(getProviderSettingQuery('FleetX')).sort({ updatedAt: -1 }),
+      Vehicle.find().select('gpsProvider gpsProviders').lean(),
     ]);
     const snapshot = await getFleetGpsSnapshot();
     const liveFleet = snapshot.fleet.filter((item) =>
@@ -627,6 +673,24 @@ router.get('/live-vehicles', async (req, res) => {
           };
         });
     });
+    const getProviderCounts = (provider) => {
+      const expectedProvider = provider === 'FleetX' ? 'fleetx' : 'wheelseye';
+      const registeredVehicleCount = registeredVehicles.filter(
+        (vehicle) => getAssignedGpsProvider(vehicle) === expectedProvider
+      ).length;
+      const locatedVehicleIds = new Set(liveVehicles
+        .filter((vehicle) =>
+          vehicle.provider === provider &&
+          vehicle.hasGps &&
+          Number.isFinite(vehicle.latitude) &&
+          Number.isFinite(vehicle.longitude)
+        )
+        .map((vehicle) => vehicle.vehicleId.toString()));
+      return {
+        registeredVehicleCount,
+        validGpsVehicleCount: locatedVehicleIds.size,
+      };
+    };
 
     res.json({
       totalCount: liveVehicles.length,
@@ -634,16 +698,18 @@ router.get('/live-vehicles', async (req, res) => {
       apiUrl: wheelsEyeSetting ? maskUrlSecret(wheelsEyeSetting.apiUrl) : '',
       lastSync: snapshot.lastUpdated || null,
       wheelsEyeStatus: {
-        connectionStatus: wheelsEyeSetting?.connectionStatus || 'Pending',
+        connectionStatus: getProviderConnectionStatus(wheelsEyeSetting, 'WheelsEye GPS'),
         lastError: wheelsEyeSetting?.lastError || '',
         lastErrorCode: wheelsEyeSetting?.lastErrorCode || '',
         lastSuccessAt: wheelsEyeSetting?.lastSuccessAt || null,
+        ...getProviderCounts('WheelsEye GPS'),
       },
       fleetXStatus: {
-        connectionStatus: fleetXSetting?.connectionStatus || 'Pending',
+        connectionStatus: getProviderConnectionStatus(fleetXSetting, 'FleetX'),
         lastError: fleetXSetting?.lastError || '',
         lastErrorCode: fleetXSetting?.lastErrorCode || '',
         lastSuccessAt: fleetXSetting?.lastSuccessAt || null,
+        ...getProviderCounts('FleetX'),
       },
       vehicles: liveVehicles,
     });

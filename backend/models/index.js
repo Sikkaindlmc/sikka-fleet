@@ -24,6 +24,7 @@ const GpsHistory = require('./GpsHistory');
 const PlantStay = require('./PlantStay');
 const ZoneSession = require('./ZoneSession');
 const DailyGpsReport = require('./DailyGpsReport');
+const GpsCredentialAuditLog = require('./GpsCredentialAuditLog');
 
 module.exports = {
   User,
@@ -39,6 +40,7 @@ module.exports = {
   PlantStay,
   ZoneSession,
   DailyGpsReport,
+  GpsCredentialAuditLog,
   PlantEntry,
   PlantEntryEvent,
   GpsConfig,

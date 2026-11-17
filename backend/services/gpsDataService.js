@@ -13,10 +13,12 @@ const {
   msToHHMM,
 } = require('./geofenceService');
 const { GPS_STALE_THRESHOLD_MS: STALE_THRESHOLD_MS } = require('../config/gps');
+const { getAssignedGpsProvider, getGpsConnectionStatus } = require('../utils/gpsProvider');
 const {
   MAX_GPS_GAP_MS,
   normalizeVehicleNumber,
   classifyGpsSample,
+  uniqueChronologicalSamples,
   latestStayBounds,
 } = require('./gpsTimelineService');
 
@@ -85,7 +87,12 @@ function isDashboardEligibleGpsVehicle(item) {
     (item.hasGps === true || item.providerLocations?.some((location) => location.hasGps)));
 }
 
+function getProviderConnectionStatus(health, provider) {
+  return getGpsConnectionStatus(health, provider);
+}
+
 function buildProviderLocation(provider, sample, session, plants, now, health) {
+  const connectionStatus = getProviderConnectionStatus(health, provider);
   if (!sample) {
     return {
       provider,
@@ -102,8 +109,8 @@ function buildProviderLocation(provider, sample, session, plants, now, health) {
       deviceNumber: null,
       angle: null,
       rawTelemetry: null,
-      connectionStatus: health?.connectionStatus || 'Pending',
-      lastSuccessfulSyncAt: health?.lastSuccessAt || null,
+      connectionStatus,
+      lastSuccessfulSyncAt: health?.lastSuccessAt || health?.lastSync || null,
     };
   }
 
@@ -137,7 +144,7 @@ function buildProviderLocation(provider, sample, session, plants, now, health) {
       : sample.gpsTimestamp
     : null;
   const durationEnd = !evaluation.isStale &&
-    health?.connectionStatus === 'Connected' &&
+    connectionStatus === 'Connected' &&
     (health.consecutiveFailures || 0) === 0
     ? now.getTime()
     : new Date(sample.gpsTimestamp).getTime();
@@ -167,8 +174,8 @@ function buildProviderLocation(provider, sample, session, plants, now, health) {
     gpsStatus: evaluation.gps_status,
     isStale: evaluation.isStale,
     distanceMeter: evaluation.distanceMeter,
-    connectionStatus: health?.connectionStatus || 'Pending',
-    lastSuccessfulSyncAt: health?.lastSuccessAt || null,
+    connectionStatus,
+    lastSuccessfulSyncAt: health?.lastSuccessAt || health?.lastSync || null,
   };
 }
 
@@ -194,7 +201,7 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } =
     VehicleCurrentStatus.find({ archived: { $ne: true } }),
     ZoneSession.find({ exitedAt: null, archived: { $ne: true } }),
     GpsSetting.find({ archived: { $ne: true } })
-      .select('provider status connectionStatus lastSuccessAt lastErrorAt lastErrorCode lastError consecutiveFailures'),
+      .select('provider apiUrl status connectionStatus lastSync lastSuccessAt lastConnectionCheckAt lastErrorAt lastErrorCode lastError consecutiveFailures'),
   ]);
   const history = await GpsHistory.find({
     archived: { $ne: true },
@@ -251,13 +258,14 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } =
         `${normalizeGpsProvider(sample.provider)}:${sample.gpsTimestamp}:${sample.latitude}:${sample.longitude}`;
       if (!sampleMap.has(sampleId)) sampleMap.set(sampleId, sample);
     }
-    const vehicleSamples = [...sampleMap.values()];
-    const vehicleStatuses = statusesByVehicleId.get(vehicleId) || [];
-    const providerNames = new Set([
-      ...(vehicle.gpsProviders || []),
-      ...vehicleSamples.map((sample) => sample.provider),
-      ...vehicleStatuses.map((status) => status.provider),
-    ].map(normalizeGpsProvider));
+    const assignedProvider = getAssignedGpsProvider(vehicle) === 'fleetx' ? 'FleetX' : DEFAULT_GPS_PROVIDER;
+    const vehicleSamples = [...sampleMap.values()].filter(
+      (sample) => normalizeGpsProvider(sample.provider) === assignedProvider
+    );
+    const vehicleStatuses = (statusesByVehicleId.get(vehicleId) || []).filter(
+      (status) => normalizeGpsProvider(status.provider) === assignedProvider
+    );
+    const providerNames = new Set([assignedProvider]);
 
     let latestSample = latestProviderSample(vehicleSamples);
     let sampleProvider = latestSample ? normalizeGpsProvider(latestSample.provider) : null;

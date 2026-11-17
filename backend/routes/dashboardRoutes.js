@@ -26,6 +26,7 @@ const mongoose = require('mongoose');
 const PlanAuditLog = require('../models/PlanAuditLog');
 const { isValidObjectId, sanitizeText, maskUrlSecret } = require('../utils/security');
 const { isGpsSchedulerRunning } = require('../services/gpsScheduler');
+const { getAssignedGpsProvider, getGpsConnectionStatus } = require('../utils/gpsProvider');
 const {
   filterActivePlans,
   getPlanExpiresAt,
@@ -190,7 +191,7 @@ router.get('/summary', async (req, res) => {
     const syncStatus = latestSyncLog?.status || setting?.last_sync_status || 'IDLE';
     const providerSettings = await GpsSetting.find({
       archived: { $ne: true },
-    }).select('provider status connectionStatus lastSuccessAt lastErrorAt lastErrorCode lastError consecutiveFailures last_sync_status next_scheduled_sync_at vehicles_processed vehicles_updated');
+    }).select('provider apiUrl status connectionStatus lastSync lastSuccessAt lastConnectionCheckAt lastErrorAt lastErrorCode lastError consecutiveFailures last_sync_status next_scheduled_sync_at vehicles_processed vehicles_updated');
     const providerMeta = [
       { provider: 'WheelsEye GPS', matcher: /wheels.?eye/i },
       { provider: 'FleetX', matcher: /fleetx|fleet/i },
@@ -205,15 +206,34 @@ router.get('/summary', async (req, res) => {
         GpsSyncLog.findOne({ provider: matcher, status: 'SUCCESS', archived: { $ne: true } }).sort({ completedAt: -1 }),
         GpsSyncLog.findOne({ provider: matcher, status: 'FAILED', archived: { $ne: true } }).sort({ completedAt: -1, startedAt: -1 }),
       ]);
+      const lastSuccessfulSyncAt = successful?.completedAt ||
+        successful?.lastEvaluatedTimestamp ||
+        setting?.lastSuccessAt ||
+        null;
+      const status = getGpsConnectionStatus(setting, provider);
+      const expectedProvider = provider === 'FleetX' ? 'fleetx' : 'wheelseye';
+      const providerVehicles = snapshot.fleet.filter((item) =>
+        item.isRegistered &&
+        getAssignedGpsProvider(item.vehicle) === expectedProvider
+      );
       return {
         provider,
-        status: setting?.connectionStatus || 'Not configured',
+        status,
         lastSyncStatus: latest?.status || setting?.last_sync_status || 'IDLE',
-        lastSuccessfulSyncAt: successful?.completedAt || successful?.lastEvaluatedTimestamp || setting?.lastSuccessAt || null,
+        lastSuccessfulSyncAt,
         lastFailedSyncAt: failed?.completedAt || failed?.startedAt || setting?.lastErrorAt || null,
         nextScheduledSyncAt: setting?.next_scheduled_sync_at || nextSync,
         vehiclesProcessed: latest?.vehiclesProcessed ?? setting?.vehicles_processed ?? 0,
         vehiclesUpdated: latest?.vehiclesUpdated ?? setting?.vehicles_updated ?? 0,
+        registeredVehicleCount: providerVehicles.length,
+        validGpsVehicleCount: providerVehicles.filter((item) =>
+          item.providerLocations?.some((location) =>
+            location.hasGps &&
+            (provider === 'FleetX'
+              ? /fleetx/i.test(String(location.provider || ''))
+              : /wheels.?eye/i.test(String(location.provider || '')))
+          )
+        ).length,
         lastError: safeGpsErrorDetails(setting?.lastError || (latest?.status === 'FAILED' ? latest.errorMessage : '')),
       };
     }));
@@ -266,7 +286,7 @@ router.get('/summary', async (req, res) => {
       providerHealth: providerSettings.map((item) => ({
         provider: item.provider,
         active: item.status === 'Active',
-        status: item.connectionStatus,
+        status: getGpsConnectionStatus(item, item.provider),
         lastSuccessAt: item.lastSuccessAt,
         lastErrorAt: item.lastErrorAt,
         lastErrorCode: item.lastErrorCode,

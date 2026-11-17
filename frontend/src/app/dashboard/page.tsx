@@ -245,6 +245,14 @@ interface OutsideVehicle {
 interface GpsSyncHealth {
   schedulerMode: string;
   schedulerStatus: string;
+  providers?: Array<{
+    provider: string;
+    status: string;
+    lastSuccessfulSyncAt?: string | null;
+    registeredVehicleCount?: number;
+    validGpsVehicleCount?: number;
+    lastError?: string;
+  }>;
 }
 
 export default function DashboardPage() {
@@ -542,6 +550,7 @@ export default function DashboardPage() {
         next_sync_timestamp?: string;
         next_scheduled_sync_at?: string;
         gps_sync_health?: GpsSyncHealth;
+        gpsProviderSyncHealth?: GpsSyncHealth['providers'];
       }>('/dashboard/summary');
 
       setAlert((current) =>
@@ -562,7 +571,9 @@ export default function DashboardPage() {
         setNextScheduledSyncAt(data.next_scheduled_sync_at || data.next_sync_timestamp || null);
       }
 
-      setGpsSyncHealth(data.gps_sync_health || null);
+      setGpsSyncHealth(data.gps_sync_health
+        ? { ...data.gps_sync_health, providers: data.gpsProviderSyncHealth || [] }
+        : null);
     } catch (err: any) {
       setAlert({
         type: 'error',
@@ -931,6 +942,34 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {(gpsSyncHealth?.providers || []).map((provider) => (
+            <div key={provider.provider} className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-slate-800">{provider.provider} GPS</span>
+                <span className={`inline-flex items-center gap-1.5 text-[10px] font-bold ${
+                  provider.status === 'Connected' ? 'text-emerald-700' : 'text-amber-700'
+                }`}>
+                  <span className={`h-2 w-2 rounded-full ${
+                    provider.status === 'Connected' ? 'bg-emerald-500' : 'bg-amber-500'
+                  }`} />
+                  {provider.status}
+                </span>
+              </div>
+              <div className="mt-1 text-[10px] text-slate-500">
+                Last sync: {provider.lastSuccessfulSyncAt ? formatDateTime(provider.lastSuccessfulSyncAt) : 'N/A'}
+                {' · '}{provider.registeredVehicleCount ?? 0} registered
+                {' · '}{provider.validGpsVehicleCount ?? 0} with GPS
+              </div>
+              {provider.lastError && (
+                <p className="mt-1 truncate text-[10px] text-rose-700" title={provider.lastError}>
+                  {provider.lastError}
+                </p>
+              )}
+            </div>
+          ))}
         </div>
 
         {/* Alert Feedback */}

@@ -21,18 +21,22 @@ interface VehicleRecord {
   fleetType: 'Own Fleet' | 'Hired' | 'Rental';
   ownerName?: string;
   gpsDeviceId?: string;
+  gpsProvider?: 'wheelseye' | 'fleetx';
   status: 'Active' | 'Inactive';
   assignedDriverId?: string | null;
   assignmentType?: 'MANUAL' | 'AUTO_GPS' | 'NONE';
   assignedAt?: string | null;
   matchingDrivers?: NearestDriverItem[];
-  gpsStatus?: 'WheelsEye' | 'No GPS (WheelsEye)';
+  gpsStatus?: 'WheelsEye' | 'FleetX' | 'No GPS' | 'No GPS (WheelsEye)';
   gpsProviders?: string[];
   createdAt: string;
   updatedAt: string;
 }
 
 function getProviderLabels(vehicle: VehicleRecord): string[] {
+  if (vehicle.gpsProvider) {
+    return [vehicle.gpsProvider === 'fleetx' ? 'FleetX' : 'WheelsEye'];
+  }
   const providers = new Set<string>();
   for (const provider of vehicle.gpsProviders || []) {
     if (/fleetx/i.test(provider)) providers.add('FleetX');
@@ -74,6 +78,7 @@ export default function VehicleRegisterPage() {
     fleetType: 'Own Fleet' as 'Own Fleet' | 'Hired' | 'Rental',
     ownerName: '',
     gpsDeviceId: '',
+    gpsProvider: 'wheelseye' as 'wheelseye' | 'fleetx',
     status: 'Active' as 'Active' | 'Inactive',
   });
   const [formError, setFormError] = useState('');
@@ -147,6 +152,7 @@ export default function VehicleRegisterPage() {
       fleetType: 'Own Fleet',
       ownerName: '',
       gpsDeviceId: '',
+      gpsProvider: 'wheelseye',
       status: 'Active',
     });
     setFormError('');
@@ -166,6 +172,7 @@ export default function VehicleRegisterPage() {
       fleetType: vehicle.fleetType,
       ownerName: vehicle.ownerName || '',
       gpsDeviceId: vehicle.gpsDeviceId || '',
+      gpsProvider: vehicle.gpsProvider || (getProviderLabels(vehicle).includes('FleetX') ? 'fleetx' : 'wheelseye'),
       status: vehicle.status,
     });
     setFormError('');
@@ -287,6 +294,7 @@ export default function VehicleRegisterPage() {
           fleetType: formData.fleetType,
           ownerName: formData.ownerName.trim(),
           gpsDeviceId: formData.gpsDeviceId.trim() || formData.vehicleNumber.trim(),
+          gpsProvider: formData.gpsProvider,
           status: formData.status,
         }),
       });
@@ -337,6 +345,7 @@ export default function VehicleRegisterPage() {
           fleetType: formData.fleetType,
           ownerName: formData.ownerName.trim(),
           gpsDeviceId: formData.gpsDeviceId.trim(),
+          gpsProvider: formData.gpsProvider,
           status: formData.status,
         }),
       });
@@ -688,6 +697,22 @@ export default function VehicleRegisterPage() {
               </select>
             </div>
 
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                GPS Provider *
+              </label>
+              <select
+                value={formData.gpsProvider}
+                onChange={(e) => setFormData({ ...formData, gpsProvider: e.target.value as 'wheelseye' | 'fleetx' })}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden bg-white"
+                disabled={isSubmitting}
+                required
+              >
+                <option value="wheelseye">WheelsEye</option>
+                <option value="fleetx">FleetX</option>
+              </select>
+            </div>
+
             {/* Conditional Owner Name */}
             {(formData.fleetType === 'Hired' || formData.fleetType === 'Rental') && (
               <div className="animate-in fade-in duration-150">
@@ -817,6 +842,22 @@ export default function VehicleRegisterPage() {
                 <option value="Own Fleet">Own Fleet</option>
                 <option value="Hired">Hired</option>
                 <option value="Rental">Rental</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                GPS Provider *
+              </label>
+              <select
+                value={formData.gpsProvider}
+                onChange={(e) => setFormData({ ...formData, gpsProvider: e.target.value as 'wheelseye' | 'fleetx' })}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden bg-white"
+                disabled={isSubmitting}
+                required
+              >
+                <option value="wheelseye">WheelsEye</option>
+                <option value="fleetx">FleetX</option>
               </select>
             </div>
 

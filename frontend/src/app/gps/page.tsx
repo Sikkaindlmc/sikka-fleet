@@ -125,7 +125,7 @@ interface GpsSettingData {
   provider: string;
   apiUrl: string;
   status: 'Active' | 'Inactive';
-  connectionStatus: 'Connected' | 'Connection Failed' | 'Pending' | 'AUTH_FAILED';
+  connectionStatus: 'Connected' | 'Connection Failed' | 'Pending' | 'AUTH_FAILED' | 'Configuration Missing' | 'Disconnected';
   lastSync?: string | null;
   lastError?: string | null;
   lastSuccessAt?: string | null;
@@ -168,8 +168,14 @@ function GpsPageContent() {
   const [providerFilter, setProviderFilter] = useState<'All' | 'WheelsEye GPS' | 'FleetX'>('All');
   const [statusFilter, setStatusFilter] = useState<'all' | 'moving' | 'stopped'>('all');
   const [providerStatuses, setProviderStatuses] = useState<{
-    wheelsEye: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'> | null;
-    fleetX: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'> | null;
+    wheelsEye: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'> & {
+      registeredVehicleCount?: number;
+      validGpsVehicleCount?: number;
+    } | null;
+    fleetX: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'> & {
+      registeredVehicleCount?: number;
+      validGpsVehicleCount?: number;
+    } | null;
   }>({ wheelsEye: null, fleetX: null });
 
   // Auto-focus searched vehicle when vehicleParam arrives
@@ -937,6 +943,9 @@ function GpsPageContent() {
                     ? formatDateTime(providerStatuses.wheelsEye.lastSuccessAt)
                     : 'N/A'}
                 </span>
+                <span className="text-[10px] text-slate-500 block">
+                  Vehicles: {providerStatuses.wheelsEye?.registeredVehicleCount ?? 0} registered / {providerStatuses.wheelsEye?.validGpsVehicleCount ?? 0} with GPS
+                </span>
                 {providerStatuses.wheelsEye?.lastError && (
                   <p className="mt-1 truncate text-[10px] font-medium text-rose-700" title={providerStatuses.wheelsEye.lastError}>
                     Error {providerStatuses.wheelsEye.lastErrorCode || ''}: {providerStatuses.wheelsEye.lastError}
@@ -960,6 +969,9 @@ function GpsPageContent() {
                   Last sync: {providerStatuses.fleetX?.lastSuccessAt
                     ? formatDateTime(providerStatuses.fleetX.lastSuccessAt)
                     : 'N/A'}
+                </span>
+                <span className="text-[10px] text-slate-500 block">
+                  Vehicles: {providerStatuses.fleetX?.registeredVehicleCount ?? 0} registered / {providerStatuses.fleetX?.validGpsVehicleCount ?? 0} with GPS
                 </span>
                 {providerStatuses.fleetX?.lastError && (
                   <p className="mt-1 truncate text-[10px] font-medium text-rose-700" title={providerStatuses.fleetX.lastError}>

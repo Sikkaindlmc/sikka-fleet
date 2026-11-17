@@ -29,6 +29,7 @@ interface VehicleOption {
   id: string;
   vehicleNumber: string;
   status: string;
+  gpsProvider: 'wheelseye' | 'fleetx';
 }
 
 interface DriverOption {
@@ -88,6 +89,7 @@ export default function ReportPage() {
 
   // Form Filter State
   const [selectedVehicle, setSelectedVehicle] = useState('ALL');
+  const [selectedGpsProvider, setSelectedGpsProvider] = useState<'all' | 'wheelseye' | 'fleetx'>('all');
   const [selectedDriver, setSelectedDriver] = useState('ALL');
   const [selectedPlant, setSelectedPlant] = useState('ALL');
   const [fromDate, setFromDate] = useState('');
@@ -130,7 +132,13 @@ export default function ReportPage() {
       setIsOptionsLoading(true);
 
       const [vehiclesRes, driversRes] = await Promise.allSettled([
-        apiRequest<any[]>('/vehicles'),
+        apiRequest<Array<{
+          _id?: string;
+          id?: string;
+          vehicleNumber?: string;
+          status?: string;
+          gpsProvider?: string;
+        }>>('/vehicles'),
         apiRequest<{ totalCount?: number; drivers?: any[] }>('/drivers'),
       ]);
 
@@ -139,10 +147,11 @@ export default function ReportPage() {
 
       if (vehiclesRes.status === 'fulfilled' && Array.isArray(vehiclesRes.value)) {
         vehicleList = vehiclesRes.value
-          .map((v: any) => ({
+          .map((v): VehicleOption => ({
             id: String(v._id || v.id || v.vehicleNumber),
             vehicleNumber: String(v.vehicleNumber || '').toUpperCase().trim(),
             status: v.status || 'Active',
+            gpsProvider: v.gpsProvider === 'fleetx' ? 'fleetx' : 'wheelseye',
           }))
           .filter((v) => v.vehicleNumber.length > 0)
           .sort((a, b) => a.vehicleNumber.localeCompare(b.vehicleNumber));
@@ -208,6 +217,7 @@ export default function ReportPage() {
   const handleReset = () => {
     if (reportType === 'Fleet') {
       setSelectedVehicle('ALL');
+      setSelectedGpsProvider('all');
     } else {
       setSelectedDriver('ALL');
     }
@@ -253,6 +263,7 @@ export default function ReportPage() {
           toDate: toDate.trim(),
           vehicleNumber: selectedVehicle,
           plant: selectedPlant,
+          provider: selectedGpsProvider,
         });
 
         const res = await apiRequest<{
@@ -452,9 +463,32 @@ export default function ReportPage() {
         {/* Filter Configuration Card */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-5 sm:p-6">
           <form onSubmit={handleRun}>
-            <div className={`grid grid-cols-1 gap-4 ${reportType === 'Fleet' ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}>
+            <div className={`grid grid-cols-1 gap-4 ${reportType === 'Fleet' ? 'md:grid-cols-5' : 'md:grid-cols-3'}`}>
               {/* Dynamic Target Selector: Vehicle Number OR Driver Name */}
               {reportType === 'Fleet' ? (
+                <>
+                <div>
+                  <label
+                    htmlFor="gps-provider-select"
+                    className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+                  >
+                    GPS Provider
+                  </label>
+                  <select
+                    id="gps-provider-select"
+                    value={selectedGpsProvider}
+                    onChange={(e) => {
+                      setSelectedGpsProvider(e.target.value as 'all' | 'wheelseye' | 'fleetx');
+                      setSelectedVehicle('ALL');
+                    }}
+                    disabled={isOptionsLoading || isRunning}
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-bold text-slate-900 bg-white"
+                  >
+                    <option value="all">All Providers</option>
+                    <option value="wheelseye">WheelsEye</option>
+                    <option value="fleetx">FleetX</option>
+                  </select>
+                </div>
                 <div>
                   <label
                     htmlFor="vehicle-select"
@@ -470,7 +504,9 @@ export default function ReportPage() {
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-bold text-slate-900 bg-white focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-hidden"
                   >
                     <option value="ALL">All Vehicles</option>
-                    {vehicles.map((v) => (
+                    {vehicles
+                      .filter((v) => selectedGpsProvider === 'all' || v.gpsProvider === selectedGpsProvider)
+                      .map((v) => (
                       <option key={v.id} value={v.vehicleNumber}>
                         {v.vehicleNumber} {v.status === 'Inactive' ? '(Inactive)' : ''}
                       </option>
@@ -480,6 +516,7 @@ export default function ReportPage() {
                     Choose All Vehicles or select an individual vehicle
                   </span>
                 </div>
+                </>
               ) : (
                 <div>
                   <label

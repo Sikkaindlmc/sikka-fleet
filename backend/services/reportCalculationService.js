@@ -14,6 +14,7 @@ const {
 const GpsHistory = require('../models/GpsHistory');
 const DailyGpsReport = require('../models/DailyGpsReport');
 const ZoneSession = require('../models/ZoneSession');
+const { getAssignedGpsProvider, normalizeGpsProvider } = require('../utils/gpsProvider');
 const {
   MAX_GPS_GAP_MS,
   normalizeVehicleNumber,
@@ -544,7 +545,7 @@ async function generateLegacyFleetReport({ fromDate, toDate, vehicleNumber }) {
   };
 }
 
-async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'ALL', asOf = new Date(), persist = true }) {
+async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'ALL', provider = 'all', asOf = new Date(), persist = true }) {
   if (!fromDate || !toDate || !/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
     throw new Error('Valid fromDate and toDate values (YYYY-MM-DD) are required.');
   }
@@ -553,15 +554,23 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
   if (toDate > today) throw new Error('Reports cannot include future dates.');
 
   const dateList = generateDateList(fromDate, toDate);
-  const [registeredVehicles, gpsVehicleIds] = await Promise.all([
+  const normalizedProvider = String(provider || 'all').toLowerCase() === 'all'
+    ? 'all'
+    : normalizeGpsProvider(provider, '');
+  if (!['all', 'wheelseye', 'fleetx'].includes(normalizedProvider)) {
+    throw new Error('GPS provider must be WheelsEye or FleetX.');
+  }
+  const [registeredVehicles, wheelsEyeVehicleIds, fleetXVehicleIds] = await Promise.all([
     Vehicle.find({ status: 'Active' }).sort({ vehicleNumber: 1 }),
-    GpsHistory.distinct('vehicleId', {
-      provider: /wheels.?eye/i,
-      archived: { $ne: true },
-    }),
+    GpsHistory.distinct('vehicleId', { provider: /wheels.?eye/i, archived: { $ne: true } }),
+    GpsHistory.distinct('vehicleId', { provider: /fleetx|fleet/i, archived: { $ne: true } }),
   ]);
-  const gpsVehicleIdSet = new Set(gpsVehicleIds.filter(Boolean).map((id) => id.toString()));
-  const vehicles = registeredVehicles.filter((vehicle) => gpsVehicleIdSet.has(vehicle._id.toString()));
+  const gpsVehicleIdSet = new Set([...wheelsEyeVehicleIds, ...fleetXVehicleIds]
+    .filter(Boolean).map((id) => id.toString()));
+  const vehicles = registeredVehicles.filter((vehicle) =>
+    gpsVehicleIdSet.has(vehicle._id.toString()) &&
+    (normalizedProvider === 'all' || getAssignedGpsProvider(vehicle) === normalizedProvider)
+  );
   const normalizedFilter = vehicleNumber && vehicleNumber !== 'ALL'
     ? normalizeVehicleNumber(vehicleNumber)
     : null;
@@ -576,13 +585,13 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
   const [history, zoneSessions] = await Promise.all([
     GpsHistory.find({
       vehicleId: { $in: targetVehicles.map((vehicle) => vehicle._id) },
-      provider: /wheels.?eye/i,
+      provider: /wheels.?eye|fleetx|fleet/i,
       archived: { $ne: true },
       gpsTimestamp: { $gte: historyStart, $lte: historyEnd },
     }).sort({ gpsTimestamp: 1, syncTime: 1 }),
     ZoneSession.find({
       vehicleId: { $in: targetVehicles.map((vehicle) => vehicle._id) },
-      provider: /wheels.?eye/i,
+      provider: /wheels.?eye|fleetx|fleet/i,
       archived: { $ne: true },
       enteredAt: { $lte: historyEnd },
       $or: [{ exitedAt: null }, { exitedAt: { $gte: historyStart } }],
@@ -592,11 +601,15 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
   const sessionsByVehicle = new Map();
   for (const sample of history) {
     if (!isVerifiedGpsSample(sample)) continue;
+    const vehicle = targetVehicles.find((candidate) => candidate._id.toString() === sample.vehicleId.toString());
+    if (!vehicle || normalizeGpsProvider(sample.provider, '') !== getAssignedGpsProvider(vehicle)) continue;
     const key = sample.vehicleId.toString();
     if (!byVehicle.has(key)) byVehicle.set(key, []);
     byVehicle.get(key).push(sample);
   }
   for (const session of zoneSessions) {
+    const vehicle = targetVehicles.find((candidate) => candidate._id.toString() === session.vehicleId.toString());
+    if (!vehicle || normalizeGpsProvider(session.provider, '') !== getAssignedGpsProvider(vehicle)) continue;
     const key = session.vehicleId.toString();
     if (!sessionsByVehicle.has(key)) sessionsByVehicle.set(key, []);
     sessionsByVehicle.get(key).push(session);

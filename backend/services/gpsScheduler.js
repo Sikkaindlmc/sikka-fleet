@@ -57,7 +57,7 @@ async function runScheduledGpsSync(triggerType = 'GPS_AUTO_SYNC_30MIN', slotKey 
     try {
       await cleanupExpiredPlans();
     } catch (cleanupErr) {
-      // Non-critical
+      console.warn('[GPS Scheduler Cleanup Warning]:', cleanupErr.message);
     }
 
     return result;
@@ -136,7 +136,7 @@ function startGpsScheduler() {
         await runScheduledGpsSync('AUTONOMOUS_HEARTBEAT_IST', currentSlot);
       }
     } catch (heartbeatErr) {
-      // Non-blocking log
+      console.warn('[GPS Scheduler Heartbeat Warning]:', heartbeatErr.message);
     }
   }, 15 * 1000);
 

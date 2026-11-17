@@ -7,6 +7,7 @@ const PlantEntry = require('../models/PlantEntry');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
 const { isValidObjectId } = require('../utils/security');
 const { normalizeVehicleNumber } = require('../services/gpsTimelineService');
+const { normalizeGpsProvider, getAssignedGpsProvider } = require('../utils/gpsProvider');
 
 const router = express.Router();
 
@@ -49,14 +50,17 @@ router.get('/', async (req, res) => {
     const fleetXVehicleIdSet = new Set(fleetXVehicleIds.filter(Boolean).map((id) => id.toString()));
     res.json(vehicles.map((vehicle) => ({
       ...vehicle.toObject(),
+      gpsProvider: getAssignedGpsProvider(vehicle),
       gpsProviders: [...new Set([
         ...(vehicle.gpsProviders || []),
         ...(wheelsEyeVehicleIdSet.has(vehicle._id.toString()) ? ['WheelsEye GPS'] : []),
         ...(fleetXVehicleIdSet.has(vehicle._id.toString()) ? ['FleetX'] : []),
       ])],
-      gpsStatus: wheelsEyeVehicleIdSet.has(vehicle._id.toString())
-        ? 'WheelsEye'
-        : 'No GPS (WheelsEye)',
+      gpsStatus: fleetXVehicleIdSet.has(vehicle._id.toString())
+        ? 'FleetX'
+        : wheelsEyeVehicleIdSet.has(vehicle._id.toString())
+          ? 'WheelsEye'
+          : 'No GPS',
     })));
   } catch (error) {
     console.error('[Get Vehicles Error]:', error);
@@ -67,7 +71,7 @@ router.get('/', async (req, res) => {
 // POST /api/vehicles - Add Vehicle
 router.post('/', async (req, res) => {
   try {
-    const { vehicleNumber, driverName, mobile, fleetType, ownerName, gpsDeviceId, status } = req.body;
+    const { vehicleNumber, driverName, mobile, fleetType, ownerName, gpsDeviceId, status, gpsProvider } = req.body;
 
     if (!vehicleNumber || !vehicleNumber.trim()) {
       return res.status(400).json({ error: 'Vehicle number is required.' });
@@ -94,6 +98,10 @@ router.post('/', async (req, res) => {
     if (!['Own Fleet', 'Hired', 'Rental'].includes(fleetType)) {
       return res.status(400).json({ error: 'Fleet type must be Own Fleet, Hired, or Rental.' });
     }
+    const normalizedGpsProvider = normalizeGpsProvider(gpsProvider, 'wheelseye');
+    if (!normalizedGpsProvider) {
+      return res.status(400).json({ error: 'GPS provider must be WheelsEye or FleetX.' });
+    }
 
     let finalOwnerName = '';
     if (fleetType === 'Hired' || fleetType === 'Rental') {
@@ -110,6 +118,7 @@ router.post('/', async (req, res) => {
       fleetType,
       ownerName: finalOwnerName,
       gpsDeviceId: gpsDeviceId ? gpsDeviceId.trim() : normalizedVehicleNumber,
+      gpsProvider: normalizedGpsProvider,
       status: status === 'Inactive' ? 'Inactive' : 'Active',
     });
 
@@ -147,7 +156,7 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ error: 'Invalid vehicle ID format.' });
     }
 
-    const { vehicleNumber, driverName, mobile, fleetType, ownerName, gpsDeviceId, status } = req.body;
+    const { vehicleNumber, driverName, mobile, fleetType, ownerName, gpsDeviceId, status, gpsProvider } = req.body;
 
     const vehicle = await Vehicle.findById(id);
     if (!vehicle) {
@@ -179,6 +188,12 @@ router.put('/:id', async (req, res) => {
     if (!['Own Fleet', 'Hired', 'Rental'].includes(fleetType)) {
       return res.status(400).json({ error: 'Fleet type must be Own Fleet, Hired, or Rental.' });
     }
+    const normalizedGpsProvider = gpsProvider === undefined
+      ? getAssignedGpsProvider(vehicle)
+      : normalizeGpsProvider(gpsProvider, '');
+    if (!normalizedGpsProvider) {
+      return res.status(400).json({ error: 'GPS provider must be WheelsEye or FleetX.' });
+    }
 
     let finalOwnerName = '';
     if (fleetType === 'Hired' || fleetType === 'Rental') {
@@ -193,6 +208,7 @@ router.put('/:id', async (req, res) => {
     vehicle.mobile = formattedMobile;
     vehicle.fleetType = fleetType;
     vehicle.ownerName = finalOwnerName;
+    vehicle.gpsProvider = normalizedGpsProvider;
     if (gpsDeviceId !== undefined) {
       vehicle.gpsDeviceId = gpsDeviceId.trim();
     }

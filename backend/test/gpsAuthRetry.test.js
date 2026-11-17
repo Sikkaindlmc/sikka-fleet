@@ -118,6 +118,85 @@ test('FleetX uses a fresh login token before fetching and refreshes it after una
   }
 });
 
+test('FleetX coalesces simultaneous login requests', async () => {
+  const originalPost = axios.post;
+  const originalGet = axios.get;
+  const originalEnv = {
+    FLEETX_LOGIN_URL: process.env.FLEETX_LOGIN_URL,
+    FLEETX_USERNAME: process.env.FLEETX_USERNAME,
+    FLEETX_PASSWORD: process.env.FLEETX_PASSWORD,
+    FLEETX_BASIC_AUTH: process.env.FLEETX_BASIC_AUTH,
+  };
+  let loginCount = 0;
+  process.env.FLEETX_LOGIN_URL = 'https://api.fleetx.io/api/v1/login';
+  process.env.FLEETX_USERNAME = 'fleetx-test-user';
+  process.env.FLEETX_PASSWORD = 'fleetx-test-password';
+  process.env.FLEETX_BASIC_AUTH = '';
+  axios.post = async () => {
+    loginCount += 1;
+    await Promise.resolve();
+    return { data: { access_token: 'shared-test-token' } };
+  };
+  axios.get = async () => ({ status: 200, data: [] });
+  try {
+    await Promise.all([
+      fetchFleetxTelemetryWithRetries('https://api.fleetx.io/api/v1/analytics/live'),
+      fetchFleetxTelemetryWithRetries('https://api.fleetx.io/api/v1/analytics/live'),
+    ]);
+    assert.equal(loginCount, 1);
+  } finally {
+    axios.post = originalPost;
+    axios.get = originalGet;
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('FleetX retries an unauthorized request only once after refreshing the token', async () => {
+  const originalPost = axios.post;
+  const originalGet = axios.get;
+  const originalEnv = {
+    FLEETX_LOGIN_URL: process.env.FLEETX_LOGIN_URL,
+    FLEETX_USERNAME: process.env.FLEETX_USERNAME,
+    FLEETX_PASSWORD: process.env.FLEETX_PASSWORD,
+    FLEETX_BASIC_AUTH: process.env.FLEETX_BASIC_AUTH,
+  };
+  let loginCount = 0;
+  let requestCount = 0;
+  process.env.FLEETX_LOGIN_URL = 'https://api.fleetx.io/api/v1/login';
+  process.env.FLEETX_USERNAME = 'fleetx-test-user';
+  process.env.FLEETX_PASSWORD = 'fleetx-test-password';
+  process.env.FLEETX_BASIC_AUTH = '';
+  axios.post = async () => {
+    loginCount += 1;
+    return { data: { access_token: `refreshed-test-token-${loginCount}` } };
+  };
+  axios.get = async () => {
+    requestCount += 1;
+    const error = new Error('Unauthorized');
+    error.response = { status: 401 };
+    throw error;
+  };
+  try {
+    await assert.rejects(fetchFleetxTelemetryWithRetries(
+      'https://api.fleetx.io/api/v1/analytics/live',
+      3,
+      'expired-test-token'
+    ));
+    assert.equal(requestCount, 2);
+    assert.equal(loginCount, 2);
+  } finally {
+    axios.post = originalPost;
+    axios.get = originalGet;
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('FleetX falls back to the configured bearer token when login credentials are unavailable', async () => {
   const originalPost = axios.post;
   const originalGet = axios.get;
