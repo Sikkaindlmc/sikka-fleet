@@ -8,16 +8,13 @@ const gpsSettingSchema = new mongoose.Schema(
       trim: true,
       default: 'WheelsEye GPS',
     },
+    archived: { type: Boolean, default: false, index: true },
     apiUrl: {
       type: String,
       trim: true,
       default: '',
     },
     encryptedApiKey: {
-      type: String,
-      default: '',
-    },
-    apiSecret: {
       type: String,
       default: '',
     },
@@ -67,6 +64,26 @@ const gpsSettingSchema = new mongoose.Schema(
     lastError: {
       type: String,
       default: '',
+    },
+    lastSuccessAt: {
+      type: Date,
+      default: null,
+    },
+    lastErrorAt: {
+      type: Date,
+      default: null,
+    },
+    lastErrorCode: {
+      type: String,
+      default: '',
+    },
+    lastCredentialSource: {
+      type: String,
+      default: '',
+    },
+    consecutiveFailures: {
+      type: Number,
+      default: 0,
     },
     pollIntervalSeconds: {
       type: Number,

@@ -1,5 +1,5 @@
 const express = require('express');
-const { executeGpsSync } = require('../services/gpsSyncService');
+const { executeGpsSyncForBothProviders } = require('../services/gpsSyncService');
 const { getCronWorkerStatus } = require('../services/gpsCronWorker');
 const GpsSetting = require('../models/GpsSetting');
 
@@ -67,16 +67,17 @@ async function handleSyncGps(req, res) {
     const triggerType = req.isCron ? 'WEBHOOK_CRON' : 'USER_TRIGGER';
     console.log(`[API /api/fleet/sync-gps] Triggered by: ${req.syncCaller || source}`);
 
-    const result = await executeGpsSync({ source, triggerType });
+    const result = await executeGpsSyncForBothProviders({ source, triggerType });
 
-    return res.json({
-      success: true,
-      message: 'GPS synchronization completed successfully.',
-      last_evaluated_timestamp: result.last_evaluated_timestamp,
-      lastSync: result.lastSync,
-      next_sync_timestamp: result.next_sync_timestamp,
-      processedCount: result.processedCount || result.vehiclesProcessed || 0,
-      syncType: result.syncType || result.triggerType,
+    return res.status(result.success ? 200 : 207).json({
+      success: result.success,
+      message: result.message,
+      providerResults: result.providerResults,
+      last_evaluated_timestamp: result.providerResults.find((item) => item.provider === 'WheelsEye GPS')?.last_evaluated_timestamp || null,
+      lastSync: result.providerResults.find((item) => item.provider === 'WheelsEye GPS')?.lastSync || null,
+      next_sync_timestamp: result.providerResults.find((item) => item.provider === 'WheelsEye GPS')?.next_sync_timestamp || null,
+      processedCount: result.providerResults.reduce((total, item) => total + (item.processedCount || item.vehiclesProcessed || 0), 0),
+      syncType: triggerType,
     });
   } catch (error) {
     console.error('[API /api/fleet/sync-gps Error]:', error);

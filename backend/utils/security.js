@@ -39,6 +39,7 @@ function isSafeExternalUrl(inputUrl) {
     if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
       return false;
     }
+    if (parsed.username || parsed.password) return false;
 
     const hostname = parsed.hostname.toLowerCase();
 

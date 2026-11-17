@@ -6,6 +6,7 @@ const cronExecutionLogSchema = new mongoose.Schema(
       type: String,
       default: 'Wheelseye GPS 30-Min Auto Sync',
     },
+    archived: { type: Boolean, default: false, index: true },
     triggerType: {
       type: String,
       default: 'CRON_WORKER_IST',

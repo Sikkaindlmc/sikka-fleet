@@ -41,6 +41,11 @@ export function isPrivateOrLanUrl(url: string): boolean {
  */
 export function getApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
+    const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (process.env.NODE_ENV === 'development' && isLocalHost) {
+      return 'http://127.0.0.1:5000/api';
+    }
+
     // 1. Check custom override in localStorage (if set by user)
     const customUrl = localStorage.getItem('sikka_fleet_server_url');
     if (customUrl && customUrl.trim()) {
@@ -79,6 +84,12 @@ export function getApiBaseUrl(): string {
 }
 
 export const API_BASE_URL = PRODUCTION_API_URL;
+
+function isLocalDevelopment(): boolean {
+  return typeof window !== 'undefined' &&
+    process.env.NODE_ENV === 'development' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+}
 
 export class ApiError extends Error {
   status: number;
@@ -216,10 +227,10 @@ export function refreshSession<T = any>(
 }
 
 /**
- * Universal apiRequest client with automatic fallback and retry handling.
+ * API client with same-origin production failover and guarded local development routing.
  * - Accurately differentiates HTTP errors (e.g. 401 invalid credentials) from true network drops.
  * - Idempotent retries on network drop with exponential backoff.
- * - Seamless automatic failover between primary (fleet.sikkaind.com) and backup (sikka-fleet.vercel.app).
+ * - Never sends local development requests to a production fallback.
  */
 export async function apiRequest<T = any>(
   endpoint: string,
@@ -263,6 +274,13 @@ export async function apiRequest<T = any>(
   try {
     return await requestWithRefresh(primaryBaseUrl);
   } catch (primaryErr: any) {
+    if (isLocalDevelopment() && !(primaryErr instanceof ApiError && primaryErr.status > 0)) {
+      throw new ApiError(
+        `Local API is unreachable at ${primaryBaseUrl}. Start the local backend on port 5000; production fallback is disabled in development.`,
+        0
+      );
+    }
+
     // If the server responded with an HTTP status code (400, 401, 403, 404, 500), do NOT treat as network drop
     if (
       (primaryErr instanceof ApiError && primaryErr.status > 0) ||

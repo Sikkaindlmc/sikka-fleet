@@ -28,6 +28,12 @@ const gpsSyncLogSchema = new mongoose.Schema(
       default: 'GPS-AUTO',
       index: true,
     },
+    syncType: {
+      type: String,
+      enum: ['AUTO', 'MANUAL'],
+      default: undefined,
+      index: true,
+    },
     triggerType: {
       type: String,
       default: 'GPS_AUTO_SYNC_30MIN',
@@ -80,6 +86,7 @@ const gpsSyncLogSchema = new mongoose.Schema(
       type: String,
       default: 'WheelsEye GPS',
     },
+    archived: { type: Boolean, default: false, index: true },
     driversChecked: {
       type: Number,
       default: 0,

@@ -1,5 +1,5 @@
 const express = require('express');
-const { executeGpsSync } = require('../services/gpsSyncService');
+const { executeGpsSyncForBothProviders } = require('../services/gpsSyncService');
 const CronExecutionLog = require('../models/CronExecutionLog');
 const GpsSetting = require('../models/GpsSetting');
 
@@ -47,21 +47,21 @@ async function handleCronSync(req, res) {
     const triggerType = req.headers['x-vercel-id'] ? 'VERCEL_CRON' : 'CRON_WORKER_IST';
     console.log(`[API /api/cron/sync-gps] Triggered via ${triggerType} (${req.cronCaller || 'Caller'})`);
 
-    const result = await executeGpsSync({
+    const result = await executeGpsSyncForBothProviders({
       source: 'AUTO',
       triggerType,
     });
 
-    return res.json({
-      success: true,
-      message: 'Wheelseye GPS cron synchronization executed successfully.',
+    return res.status(result.success ? 200 : 502).json({
+      success: result.success,
+      message: result.message,
       ...result,
     });
   } catch (error) {
     console.error('[API /api/cron/sync-gps Error]:', error);
     return res.status(500).json({
       success: false,
-      error: error.message || 'Wheelseye GPS cron sync failed.',
+      error: error.message || 'GPS cron sync failed.',
     });
   }
 }
@@ -86,8 +86,14 @@ router.get('/logs', (req, res, next) => {
 }, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
-    const logs = await CronExecutionLog.find().sort({ startedAt: -1 }).limit(limit);
-    const setting = await GpsSetting.findOne().sort({ updatedAt: -1 });
+    const logs = await CronExecutionLog.find({
+      provider: /wheels.?eye/i,
+      archived: { $ne: true },
+    }).sort({ startedAt: -1 }).limit(limit);
+    const setting = await GpsSetting.findOne({
+      provider: /wheels.?eye/i,
+      archived: { $ne: true },
+    }).sort({ updatedAt: -1 });
 
     res.json({
       success: true,

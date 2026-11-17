@@ -153,6 +153,121 @@ function calculateDailyGpsHours(samples, plants, start, end) {
   };
 }
 
+function getSessionStateAt(sessions, timeMs) {
+  let low = 0;
+  let high = sessions.length - 1;
+  let candidateIndex = -1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (new Date(sessions[middle].enteredAt).getTime() <= timeMs) {
+      candidateIndex = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  const session = candidateIndex >= 0 ? sessions[candidateIndex] : null;
+  const exitedAt = session?.exitedAt ? new Date(session.exitedAt).getTime() : Infinity;
+  if (!session || timeMs >= exitedAt) return 'No GPS Data';
+  if (session.zoneId === 'DASNA') return 'DASNA';
+  if (session.zoneId === 'SALT') return 'Salt Plant';
+  if (session.zoneId === 'TEA') return 'Tea Plant';
+  return session.zoneId === 'OUTSIDE' ? 'Outside' : 'No GPS Data';
+}
+
+function buildSessionTimeline(samples, sessions, rangeStart, rangeEnd, maxGapMs = MAX_GPS_GAP_MS) {
+  const validSamples = samples.filter((sample) => (
+    Number.isFinite(sample.latitude) && sample.latitude >= -90 && sample.latitude <= 90 &&
+    Number.isFinite(sample.longitude) && sample.longitude >= -180 && sample.longitude <= 180 &&
+    !(sample.latitude === 0 && sample.longitude === 0)
+  ));
+  const points = uniqueChronologicalSamples(validSamples, []);
+  const orderedSessions = sessions.slice().sort(
+    (a, b) => new Date(a.enteredAt).getTime() - new Date(b.enteredAt).getTime()
+  );
+  const segments = [];
+  const append = (start, end) => {
+    if (end <= start) return;
+    const boundaries = [start, end];
+    let low = 0;
+    let high = orderedSessions.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (new Date(orderedSessions[middle].enteredAt).getTime() < start) low = middle + 1;
+      else high = middle;
+    }
+    if (low > 0) {
+      const previousExit = orderedSessions[low - 1].exitedAt
+        ? new Date(orderedSessions[low - 1].exitedAt).getTime()
+        : Infinity;
+      if (previousExit > start && previousExit < end) boundaries.push(previousExit);
+    }
+    for (let index = low; index < orderedSessions.length; index += 1) {
+      const session = orderedSessions[index];
+      const enteredAt = new Date(session.enteredAt).getTime();
+      const exitedAt = session.exitedAt ? new Date(session.exitedAt).getTime() : Infinity;
+      if (enteredAt >= end) break;
+      if (enteredAt > start && enteredAt < end) boundaries.push(enteredAt);
+      if (exitedAt > start && exitedAt < end) boundaries.push(exitedAt);
+    }
+    boundaries.sort((a, b) => a - b);
+    for (let index = 0; index < boundaries.length - 1; index += 1) {
+      const segmentStart = boundaries[index];
+      const segmentEnd = boundaries[index + 1];
+      const state = getSessionStateAt(orderedSessions, segmentStart);
+      const previous = segments[segments.length - 1];
+      if (previous && previous.status === state && previous.end.getTime() === segmentStart) {
+        previous.end = new Date(segmentEnd);
+      } else {
+        segments.push({ status: state, start: new Date(segmentStart), end: new Date(segmentEnd) });
+      }
+    }
+  };
+
+  for (let index = 0; index < points.length; index += 1) {
+    const start = points[index].time.getTime();
+    const next = points[index + 1];
+    const coverageEnd = next
+      ? Math.min(next.time.getTime(), start + maxGapMs)
+      : Math.min(rangeEnd.getTime(), start + maxGapMs);
+    append(start, coverageEnd);
+  }
+
+  const clipped = segments
+    .map((segment) => ({
+      status: segment.status,
+      start: Math.max(segment.start.getTime(), rangeStart.getTime()),
+      end: Math.min(segment.end.getTime(), rangeEnd.getTime()),
+    }))
+    .filter((segment) => segment.end > segment.start)
+    .sort((a, b) => a.start - b.start);
+  const complete = [];
+  let cursor = rangeStart.getTime();
+  for (const segment of clipped) {
+    if (segment.start > cursor) {
+      complete.push({ status: 'No GPS Data', start: new Date(cursor), end: new Date(segment.start) });
+    }
+    if (segment.end <= cursor) continue;
+    const start = Math.max(cursor, segment.start);
+    complete.push({ status: segment.status, start: new Date(start), end: new Date(segment.end) });
+    cursor = segment.end;
+  }
+  if (cursor < rangeEnd.getTime()) {
+    complete.push({ status: 'No GPS Data', start: new Date(cursor), end: new Date(rangeEnd) });
+  }
+  return complete;
+}
+
+function calculateDailySessionHours(samples, sessions, start, end) {
+  const totalMinutes = Math.max(0, Math.floor((end.getTime() - start.getTime()) / 60000));
+  const segments = buildSessionTimeline(samples, sessions, start, end);
+  return {
+    totalMinutes,
+    segments,
+    minutes: allocateStatusMinutes(segments, totalMinutes),
+  };
+}
+
 function latestStayBounds(samples, plants, latestStatus, maxGapMs = MAX_GPS_GAP_MS) {
   const points = uniqueChronologicalSamples(samples, plants);
   if (points.length === 0) return { entryGpsTimestamp: null, outsideSince: null };
@@ -180,5 +295,7 @@ module.exports = {
   allocateStatusMinutes,
   formatMinutes,
   calculateDailyGpsHours,
+  buildSessionTimeline,
+  calculateDailySessionHours,
   latestStayBounds,
 };

@@ -30,6 +30,19 @@ const vehicleLocationSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    syncId: {
+      type: String,
+      default: '',
+    },
+    syncType: {
+      type: String,
+      enum: ['AUTO', 'MANUAL'],
+      default: undefined,
+    },
+    providerTransitionTimestamp: {
+      type: Date,
+      default: null,
+    },
     speed: {
       type: Number,
       default: null,
@@ -74,9 +87,21 @@ const vehicleLocationSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    plantRadiusMeters: {
+      type: Number,
+      default: null,
+    },
+    configuredPlantRadii: {
+      type: [{
+        plantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plant', default: null },
+        plantName: { type: String, required: true },
+        radiusMeters: { type: Number, required: true },
+      }],
+      default: [],
+    },
     sync_source: {
       type: String,
-      enum: ['AUTO', 'STARTUP', 'RETRY', 'GPS-AUTO'],
+      enum: ['AUTO', 'MANUAL', 'STARTUP', 'RETRY', 'GPS-AUTO'],
       default: 'GPS-AUTO',
     },
     rawEventId: {
@@ -90,6 +115,11 @@ const vehicleLocationSchema = new mongoose.Schema(
     provider: {
       type: String,
       default: 'WheelsEye GPS',
+      index: true,
+    },
+    archived: {
+      type: Boolean,
+      default: false,
       index: true,
     },
     vehicleNumberNormalized: {

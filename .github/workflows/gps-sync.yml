@@ -8,7 +8,7 @@ on:
 
 jobs:
   sync-gps:
-    name: Sync WheelsEye & Fleetx GPS
+    name: Sync WheelsEye GPS
     runs-on: ubuntu-latest
     env:
       BACKEND_URL: ${{ secrets.BACKEND_URL }}

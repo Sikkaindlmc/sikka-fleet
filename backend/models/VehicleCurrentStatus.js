@@ -6,7 +6,6 @@ const vehicleCurrentStatusSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Vehicle',
       required: true,
-      unique: true,
       index: true,
     },
     vehicleNumber: {
@@ -48,6 +47,18 @@ const vehicleCurrentStatusSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+    plantRadiusMeters: {
+      type: Number,
+      default: null,
+    },
+    configuredPlantRadii: {
+      type: [{
+        plantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plant', default: null },
+        plantName: { type: String, required: true },
+        radiusMeters: { type: Number, required: true },
+      }],
+      default: [],
+    },
     latest_gps_timestamp: {
       type: Date,
       default: null,
@@ -65,7 +76,7 @@ const vehicleCurrentStatusSchema = new mongoose.Schema(
     },
     last_sync_source: {
       type: String,
-      enum: ['AUTO', 'STARTUP', 'RETRY', 'GPS-AUTO'],
+      enum: ['AUTO', 'MANUAL', 'STARTUP', 'RETRY', 'GPS-AUTO'],
       default: 'GPS-AUTO',
     },
     stayHours: {
@@ -97,6 +108,11 @@ const vehicleCurrentStatusSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    archived: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     rawTelemetry: {
       type: mongoose.Schema.Types.Mixed,
       default: null,
@@ -109,6 +125,14 @@ const vehicleCurrentStatusSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    lastEntryDetectedAt: {
+      type: Date,
+      default: null,
+    },
+    lastEntryGpsTimestamp: {
+      type: Date,
+      default: null,
+    },
     lastExitPlantName: {
       type: String,
       default: null,
@@ -116,6 +140,23 @@ const vehicleCurrentStatusSchema = new mongoose.Schema(
     lastExitDateTime: {
       type: Date,
       default: null,
+    },
+    lastExitDetectedAt: {
+      type: Date,
+      default: null,
+    },
+    lastExitGpsTimestamp: {
+      type: Date,
+      default: null,
+    },
+    lastSyncId: {
+      type: String,
+      default: '',
+    },
+    lastSyncType: {
+      type: String,
+      enum: ['AUTO', 'MANUAL'],
+      default: undefined,
     },
     lastUpdatedAt: {
       type: Date,
@@ -177,5 +218,14 @@ vehicleCurrentStatusSchema.virtual('latest_latitude').get(function () {
 vehicleCurrentStatusSchema.virtual('latest_longitude').get(function () {
   return this.longitude;
 });
+
+vehicleCurrentStatusSchema.index(
+  { vehicleId: 1 },
+  {
+    unique: true,
+    name: 'one_active_gps_status_per_vehicle',
+    partialFilterExpression: { archived: false },
+  }
+);
 
 module.exports = mongoose.model('VehicleCurrentStatus', vehicleCurrentStatusSchema);

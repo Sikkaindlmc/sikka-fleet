@@ -6,16 +6,21 @@ const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
 const Driver = require('../models/Driver');
 const DriverLocation = require('../models/DriverLocation');
 const DriverPlantRecord = require('../models/DriverPlantRecord');
-const { calculateHaversineDistance, getPlantRadiusMeters } = require('./geofenceService');
+const {
+  calculateHaversineDistance,
+  getPlantRadiusMeters,
+  isVerifiedGpsSample,
+} = require('./geofenceService');
 const GpsHistory = require('../models/GpsHistory');
 const DailyGpsReport = require('../models/DailyGpsReport');
+const ZoneSession = require('../models/ZoneSession');
 const {
   MAX_GPS_GAP_MS,
   normalizeVehicleNumber,
   istDateString,
   istDayRange,
   formatMinutes,
-  calculateDailyGpsHours,
+  calculateDailySessionHours,
 } = require('./gpsTimelineService');
 
 async function calcVehicleTodayHours(vehicleNumber, asOf = new Date()) {
@@ -362,9 +367,6 @@ async function generateLegacyFleetReport({ fromDate, toDate, vehicleNumber }) {
   }
 
   let vehicles = await Vehicle.find(vehicleQuery).sort({ vehicleNumber: 1 });
-  if (vehicles.length === 0 && (!vehicleNumber || vehicleNumber === 'ALL')) {
-    vehicles = await Vehicle.find().sort({ vehicleNumber: 1 });
-  }
 
   const overallStart = parseISTDayRange(dateList[0]).start;
   const overallEnd = parseISTDayRange(dateList[dateList.length - 1]).end;
@@ -551,43 +553,65 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
   if (toDate > today) throw new Error('Reports cannot include future dates.');
 
   const dateList = generateDateList(fromDate, toDate);
-  const vehicles = await Vehicle.find().sort({ vehicleNumber: 1 });
+  const [registeredVehicles, gpsVehicleIds] = await Promise.all([
+    Vehicle.find({ status: 'Active' }).sort({ vehicleNumber: 1 }),
+    GpsHistory.distinct('vehicleId', {
+      provider: /wheels.?eye/i,
+      archived: { $ne: true },
+    }),
+  ]);
+  const gpsVehicleIdSet = new Set(gpsVehicleIds.filter(Boolean).map((id) => id.toString()));
+  const vehicles = registeredVehicles.filter((vehicle) => gpsVehicleIdSet.has(vehicle._id.toString()));
   const normalizedFilter = vehicleNumber && vehicleNumber !== 'ALL'
     ? normalizeVehicleNumber(vehicleNumber)
     : null;
   const targetVehicles = normalizedFilter
     ? vehicles.filter((vehicle) => normalizeVehicleNumber(vehicle.vehicleNumber) === normalizedFilter)
     : vehicles;
-  const plants = await Plant.find({ status: 'Active' });
   const rangeStart = istDayRange(fromDate).start;
   const requestedEnd = istDayRange(toDate).end;
-  const reportEnd = toDate === today
-    ? new Date(Math.min(asOf.getTime(), requestedEnd.getTime()))
-    : requestedEnd;
+  const reportEnd = requestedEnd;
   const historyStart = new Date(rangeStart.getTime() - MAX_GPS_GAP_MS);
   const historyEnd = new Date(reportEnd.getTime() + MAX_GPS_GAP_MS);
-  const history = await GpsHistory.find({
-    vehicleId: { $in: targetVehicles.map((vehicle) => vehicle._id) },
-    gpsTimestamp: { $gte: historyStart, $lte: historyEnd },
-  }).sort({ gpsTimestamp: 1, syncTime: 1 });
+  const [history, zoneSessions] = await Promise.all([
+    GpsHistory.find({
+      vehicleId: { $in: targetVehicles.map((vehicle) => vehicle._id) },
+      provider: /wheels.?eye/i,
+      archived: { $ne: true },
+      gpsTimestamp: { $gte: historyStart, $lte: historyEnd },
+    }).sort({ gpsTimestamp: 1, syncTime: 1 }),
+    ZoneSession.find({
+      vehicleId: { $in: targetVehicles.map((vehicle) => vehicle._id) },
+      provider: /wheels.?eye/i,
+      archived: { $ne: true },
+      enteredAt: { $lte: historyEnd },
+      $or: [{ exitedAt: null }, { exitedAt: { $gte: historyStart } }],
+    }).sort({ enteredAt: 1 }),
+  ]);
   const byVehicle = new Map();
+  const sessionsByVehicle = new Map();
   for (const sample of history) {
+    if (!isVerifiedGpsSample(sample)) continue;
     const key = sample.vehicleId.toString();
     if (!byVehicle.has(key)) byVehicle.set(key, []);
     byVehicle.get(key).push(sample);
+  }
+  for (const session of zoneSessions) {
+    const key = session.vehicleId.toString();
+    if (!sessionsByVehicle.has(key)) sessionsByVehicle.set(key, []);
+    sessionsByVehicle.get(key).push(session);
   }
 
   const rows = [];
   for (const vehicle of targetVehicles) {
     const samples = byVehicle.get(vehicle._id.toString()) || [];
+    const sessions = sessionsByVehicle.get(vehicle._id.toString()) || [];
     for (const date of dateList) {
       const { start } = istDayRange(date);
       const dayEnd = istDayRange(date).end;
       const isInProgress = date === today;
-      const end = isInProgress
-        ? new Date(Math.min(asOf.getTime(), dayEnd.getTime()))
-        : dayEnd;
-      const daily = calculateDailyGpsHours(samples, plants, start, end);
+      const end = dayEnd;
+      const daily = calculateDailySessionHours(samples, sessions, start, end);
       const { totalMinutes, segments } = daily;
       const allocated = daily.minutes;
       const row = {

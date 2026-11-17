@@ -10,6 +10,7 @@ const plantStaySchema = new mongoose.Schema(
     exitGpsTimestamp: { type: Date, default: null },
     lastGpsTimestamp: { type: Date, required: true },
     isCurrent: { type: Boolean, default: false, index: true },
+    archived: { type: Boolean, default: false, index: true },
   },
   { collection: 'plantStays', timestamps: true }
 );

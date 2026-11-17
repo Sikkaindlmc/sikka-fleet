@@ -2,6 +2,7 @@ const express = require('express');
 const XLSX = require('xlsx');
 const Vehicle = require('../models/Vehicle');
 const Driver = require('../models/Driver');
+const GpsHistory = require('../models/GpsHistory');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
 const {
   generateFleetReport,
@@ -16,10 +17,18 @@ router.use(verifyToken, checkPageAccess('Report'));
 // GET /api/reports/options - Retrieve selectable vehicles & drivers for filter dropdowns
 router.get('/options', async (req, res) => {
   try {
-    const [vehicles, drivers] = await Promise.all([
+    const [allVehicles, gpsVehicleIds, drivers] = await Promise.all([
       Vehicle.find().select('vehicleNumber status').sort({ vehicleNumber: 1 }),
+      GpsHistory.distinct('vehicleId', {
+        provider: /wheels.?eye/i,
+        archived: { $ne: true },
+      }),
       Driver.find().select('driverName dlNumber mobileNumber status').sort({ driverName: 1 }),
     ]);
+    const gpsVehicleIdSet = new Set(gpsVehicleIds.filter(Boolean).map((id) => id.toString()));
+    const vehicles = allVehicles.filter((vehicle) =>
+      vehicle.status === 'Active' && gpsVehicleIdSet.has(vehicle._id.toString())
+    );
 
     res.json({
       vehicles: vehicles.map((v) => ({

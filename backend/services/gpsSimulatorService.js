@@ -2,10 +2,10 @@ const Vehicle = require('../models/Vehicle');
 const Plant = require('../models/Plant');
 const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
 const GpsSetting = require('../models/GpsSetting');
-const { fetchAllGpsTelemetry } = require('./gpsSyncService');
+const { fetchWheelsEyeTelemetry } = require('./gpsSyncService');
 
 /**
- * Fetch vehicle coordinates from configured GPS providers (WheelsEye and Fleetx).
+ * Fetch vehicle coordinates from the configured WheelsEye GPS service.
  * Reads real-time telemetry from providers.
  * NEVER generates fake or simulated random coordinates.
  * If external GPS fails or is unavailable, falls back to the last known verified
@@ -17,10 +17,14 @@ async function fetchGpsLocations(gpsConfig) {
     if (gpsConfig && gpsConfig.apiUrl && !gpsConfig.apiUrl.includes('••••')) {
       settings = [gpsConfig];
     } else {
-      settings = await GpsSetting.find({ status: 'Active' });
+      settings = await GpsSetting.find({
+        status: 'Active',
+        provider: /wheels.?eye/i,
+        archived: { $ne: true },
+      });
     }
 
-    const telemetry = await fetchAllGpsTelemetry(settings);
+    const telemetry = await fetchWheelsEyeTelemetry(settings);
     if (telemetry && telemetry.vehicles && telemetry.vehicles.length > 0) {
       return telemetry.vehicles.map((v) => ({
         vehicleNumber: v.vehicleNumber,
@@ -29,7 +33,7 @@ async function fetchGpsLocations(gpsConfig) {
         speed: v.speed,
         ignition: v.ignition,
         deviceNumber: v.deviceNumber || 'N/A',
-        vendorName: v.vendorName || (v.provider === 'Fleetx' ? 'Fleetx' : 'WheelsEye GPS'),
+        vendorName: v.vendorName || 'WheelsEye GPS',
         vehicleType: v.vehicleType || 'Commercial',
         angle: v.angle || 0,
         chargeOn: v.chargeOn,

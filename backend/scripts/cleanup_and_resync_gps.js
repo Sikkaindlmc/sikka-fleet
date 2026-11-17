@@ -11,7 +11,7 @@ const { normalizeVehicleNumber } = require('../services/gpsTimelineService');
 const { rebuildPlantStays } = require('../services/gpsDataService');
 
 const execute = process.argv.includes('--execute');
-const isRealProvider = (value) => /wheels.?eye|fleetx/i.test(String(value || ''));
+const isRealProvider = (value) => /wheels.?eye/i.test(String(value || ''));
 const isManualOrFixture = (record) =>
   /manual|simulat|fixture|dummy|mock/i.test(
     `${record.sync_source || ''} ${record.provider || ''} ${record.source || ''}`
@@ -28,6 +28,9 @@ function isReportableLocation(location) {
 }
 
 async function main() {
+  if (execute && process.env.NODE_ENV === 'production') {
+    throw new Error('Refusing to delete GPS data in production.');
+  }
   const mongoUri = process.env.MONGODB_URI;
   if (!mongoUri) throw new Error('MONGODB_URI must be set in backend/.env.');
   await mongoose.connect(mongoUri, {

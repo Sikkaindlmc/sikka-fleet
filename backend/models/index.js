@@ -22,6 +22,7 @@ const Page = require('./Page');
 const PlanAuditLog = require('./PlanAuditLog');
 const GpsHistory = require('./GpsHistory');
 const PlantStay = require('./PlantStay');
+const ZoneSession = require('./ZoneSession');
 const DailyGpsReport = require('./DailyGpsReport');
 
 module.exports = {
@@ -36,6 +37,7 @@ module.exports = {
   PlanAuditLog,
   GpsHistory,
   PlantStay,
+  ZoneSession,
   DailyGpsReport,
   PlantEntry,
   PlantEntryEvent,

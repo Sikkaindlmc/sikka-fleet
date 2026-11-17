@@ -68,6 +68,11 @@ export interface VehiclePlanItem {
 
 const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const formatGpsSyncType = (syncType?: string | null): string => {
+  if (syncType === 'MANUAL') return 'Manual';
+  if (syncType === 'AUTO') return 'Automatic';
+  return syncType || 'N/A';
+};
 
 export const isPlanActive = (
   plan?: VehiclePlanItem | null,
@@ -116,6 +121,8 @@ interface PlantWidget {
 interface PlantVehicle {
   id: string;
   vehicleNumber: string;
+  plantName?: string | null;
+  registrationStatus?: 'Registered' | 'Not registered';
   driverName?: string | null;
   mobile?: string | null;
   driverDistance?: number | null;
@@ -129,6 +136,18 @@ interface PlantVehicle {
   lastUpdateDateTime?: string | null;
   latest_gps_timestamp?: string | null;
   gps_status?: string | null;
+  providerUnavailable?: string | null;
+  gpsProviderLocations?: Array<{
+    provider: string;
+    status: string;
+    plantName?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    providerTimestamp?: string | null;
+    systemSyncTimestamp?: string | null;
+    gpsStatus?: string;
+  }>;
+  locationDiscrepancyMeters?: number | null;
   last_sync_source?: string | null;
   stayHours?: string | null;
   speed?: string | number | null;
@@ -190,12 +209,16 @@ const calculateStayHours = (
 interface OutsideVehicle {
   id: string;
   vehicleNumber: string;
+  plantName?: string | null;
+  registrationStatus?: 'Registered' | 'Not registered';
   lastOutPlantName?: string | null;
   plantOutDateTime?: string | null;
   lastLocationDateTime?: string | null;
   latest_gps_timestamp?: string | null;
   gps_status?: string | null;
   last_sync_source?: string | null;
+  gpsProviderLocations?: PlantVehicle['gpsProviderLocations'];
+  locationDiscrepancyMeters?: number | null;
   lastLocationTime?: string;
   speed?: string | number | null;
   ignition?: string | number | boolean | null;
@@ -218,6 +241,42 @@ interface OutsideVehicle {
   plans?: VehiclePlanItem[];
 }
 
+interface ProviderHealth {
+  provider: string;
+  active: boolean;
+  status: string;
+  lastSuccessAt?: string | null;
+  lastErrorAt?: string | null;
+  lastErrorCode?: string;
+  lastError?: string;
+  credentialSource?: string;
+  consecutiveFailures?: number;
+}
+
+interface GpsSyncHealth {
+  schedulerMode: string;
+  schedulerStatus: string;
+  apiConnectionStatus: string;
+  lastSuccessfulSyncAt?: string | null;
+  lastFailedSyncAt?: string | null;
+  latestSyncStatus: string;
+  latestSyncVehiclesUpdated: number;
+  lastApiError?: string;
+  nextScheduledSyncAt?: string | null;
+}
+
+interface ProviderSyncHealth {
+  provider: string;
+  status: string;
+  lastSyncStatus: string;
+  lastSuccessfulSyncAt?: string | null;
+  lastFailedSyncAt?: string | null;
+  nextScheduledSyncAt?: string | null;
+  vehiclesProcessed: number;
+  vehiclesUpdated: number;
+  lastError?: string;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [plantWidgets, setPlantWidgets] = useState<PlantWidget[]>([]);
@@ -231,12 +290,14 @@ export default function DashboardPage() {
   const [totalActiveVehicles, setTotalActiveVehicles] = useState(0);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [nextScheduledSyncAt, setNextScheduledSyncAt] = useState<string | null>(null);
-  const [syncStatusState, setSyncStatusState] = useState<'IDLE' | 'SUCCESS' | 'FAILED' | 'SYNCING'>('SUCCESS');
+  const [syncStatusState, setSyncStatusState] = useState<'IDLE' | 'SUCCESS' | 'FAILED' | 'SYNCING'>('IDLE');
   const [isBackendSyncing, setIsBackendSyncing] = useState(false);
   const [nextSyncCountdown, setNextSyncCountdown] = useState<string>('N/A');
-  const [authFailedProviders, setAuthFailedProviders] = useState<string[]>([]);
+  const [providerHealth, setProviderHealth] = useState<ProviderHealth[]>([]);
+  const [gpsProviderSyncHealth, setGpsProviderSyncHealth] = useState<ProviderSyncHealth[]>([]);
+  const [gpsSyncHealth, setGpsSyncHealth] = useState<GpsSyncHealth | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncingProviders, setSyncingProviders] = useState<string[]>([]);
   const [alert, setAlert] = useState<AlertState | null>(null);
 
   // Drilldown Modal State (Vehicles & Drivers)
@@ -514,7 +575,9 @@ export default function DashboardPage() {
         next_sync_timestamp?: string;
         next_scheduled_sync_at?: string;
         last_sync_status?: string;
-        authFailedProviders?: string[];
+        providerHealth?: ProviderHealth[];
+        gpsProviderSyncHealth?: ProviderSyncHealth[];
+        gps_sync_health?: GpsSyncHealth;
       }>('/dashboard/summary');
 
       setPlantWidgets(data.plantWidgets || []);
@@ -533,7 +596,9 @@ export default function DashboardPage() {
       if (data.last_sync_status) {
         setSyncStatusState(data.last_sync_status as any);
       }
-      setAuthFailedProviders(data.authFailedProviders || []);
+      setProviderHealth(data.providerHealth || []);
+      setGpsProviderSyncHealth(data.gpsProviderSyncHealth || []);
+      setGpsSyncHealth(data.gps_sync_health || null);
     } catch (err: any) {
       setAlert({
         type: 'error',
@@ -622,12 +687,15 @@ export default function DashboardPage() {
   }, [fetchSummary]);
 
   // Handle on-demand provider GPS sync
-  const handleTriggerSync = async () => {
-    setIsSyncing(true);
+  const handleTriggerSync = async (provider: 'WheelsEye GPS' | 'Fleetx' | 'both' = 'WheelsEye GPS') => {
+    const syncKey = provider.toLowerCase();
+    setSyncingProviders((current) => current.includes(syncKey) ? current : [...current, syncKey]);
     setAlert(null);
     try {
       let result: {
         message?: string;
+        success?: boolean;
+        providerResults?: Array<{ provider: string; success: boolean; message?: string; error?: string }>;
         last_evaluated_timestamp?: string;
         last_successful_sync_at?: string;
         next_scheduled_sync_at?: string;
@@ -644,9 +712,9 @@ export default function DashboardPage() {
         lastSync?: string;
         processedCount?: number;
         vehiclesProcessed?: number;
-      }>('/gps-sync/run', {
+      }>('/gps/trigger-sync', {
         method: 'POST',
-        body: JSON.stringify({ triggerType: 'USER_DASHBOARD_BUTTON' }),
+        body: JSON.stringify({ provider }),
       });
 
       const updatedTime = result.last_successful_sync_at || result.last_evaluated_timestamp || result.lastSync;
@@ -654,11 +722,13 @@ export default function DashboardPage() {
       if (result.next_scheduled_sync_at) {
         setNextScheduledSyncAt(result.next_scheduled_sync_at);
       }
-      setSyncStatusState('SUCCESS');
+      setSyncStatusState(result.success === false ? 'FAILED' : 'SUCCESS');
 
       setAlert({
-        type: 'success',
-        message: `${result.message || 'GPS synchronization completed.'} Evaluated positions for ${result.vehiclesProcessed || result.processedCount || 0} active vehicles.`,
+        type: result.success === false ? 'error' : 'success',
+        message: result.providerResults
+          ? result.providerResults.map((item) => `${item.provider}: ${item.success ? 'Success' : item.error || item.message || 'Failed'}`).join(' • ')
+          : `${result.message || 'GPS synchronization completed.'} Evaluated positions for ${result.vehiclesProcessed || result.processedCount || 0} active vehicles.`,
       });
 
       await fetchSummary(false);
@@ -673,10 +743,10 @@ export default function DashboardPage() {
       setSyncStatusState('FAILED');
       setAlert({
         type: 'error',
-        message: err.message || 'Unable to connect to GPS provider.',
+        message: err.data?.message || err.message || `${provider} synchronization failed.`,
       });
     } finally {
-      setIsSyncing(false);
+      setSyncingProviders((current) => current.filter((item) => item !== syncKey));
     }
   };
 
@@ -883,62 +953,114 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center flex-wrap gap-2.5">
-            {/* Visual Badge: Auto-Sync Active 🟢 / Retrying ⚠️ / Syncing 🔄 */}
-            {syncStatusState === 'FAILED' ? (
-              <div
-                className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-50 border border-rose-200 rounded-xl text-xs font-bold text-rose-800 shadow-2xs select-none"
-                title="The most recent scheduled GPS sync failed."
-              >
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
-                </span>
-                <span>Auto-Sync Failed</span>
-              </div>
-            ) : isBackendSyncing ? (
-              <div
-                className="inline-flex items-center gap-1.5 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl text-xs font-bold text-amber-800 shadow-2xs select-none"
-                title="Synchronizing live GPS data with Wheelseye server..."
-              >
-                <RefreshCw className="w-3.5 h-3.5 text-amber-600 animate-spin" />
-                <span>Syncing GPS...</span>
-              </div>
-            ) : (
-              <div
-                className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-800 shadow-2xs select-none"
-                title="Automated 24/7 background GPS sync worker runs strictly every 30 minutes (Server-Side)"
-              >
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                </span>
-                <span>Auto-Sync Active 🟢</span>
-              </div>
-            )}
+            <div className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 shadow-2xs">
+              <span>Scheduler:</span>
+              <span>{gpsSyncHealth?.schedulerStatus || 'Checking status'}</span>
+            </div>
 
 
             {user?.role === 'Admin' && (
-              <button
-                type="button"
-                onClick={handleTriggerSync}
-                disabled={isSyncing || isLoading}
-                className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span>{isSyncing ? 'Synchronizing GPS...' : 'Sync GPS Now'}</span>
-              </button>
+              <div className="flex flex-wrap gap-2">
+                {(['WheelsEye GPS', 'Fleetx', 'both'] as const).map((provider) => {
+                  const syncKey = provider.toLowerCase();
+                  const label = provider === 'WheelsEye GPS' ? 'WheelsEye' : provider === 'Fleetx' ? 'FleetX' : 'Both';
+                  const syncing = syncingProviders.includes(syncKey);
+                  return (
+                    <button
+                      key={provider}
+                      type="button"
+                      onClick={() => handleTriggerSync(provider)}
+                      disabled={syncing || isLoading}
+                      className="inline-flex items-center gap-2 px-3 py-2.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
+                      <span>{syncing ? `Syncing ${label}...` : `Sync ${label} Now`}</span>
+                    </button>
+                  );
+                })}
+              </div>
             )}
           </div>
         </div>
 
         {/* Alert Feedback */}
         <AlertBanner alert={alert} onDismiss={() => setAlert(null)} />
-        {authFailedProviders.length > 0 && (
-          <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">
-            GPS authentication failed for {authFailedProviders.join(', ')}. Update the provider credentials in GPS settings.
+        <section
+          aria-label="GPS synchronization status"
+          className="rounded-xl border border-slate-200 bg-white px-4 py-4 shadow-2xs"
+        >
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-bold text-slate-900">GPS Synchronization Status</h2>
+            <span className="rounded-full px-2.5 py-1 text-xs font-bold bg-slate-100 text-slate-700">
+              {gpsProviderSyncHealth.filter((item) => item.status === 'Connected').length} / {gpsProviderSyncHealth.length || 2} providers connected
+            </span>
           </div>
-        )}
-
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {gpsProviderSyncHealth.map((provider) => (
+              <div key={provider.provider} className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <strong className="text-slate-900">{provider.provider}</strong>
+                  <span className={`rounded-full px-2 py-0.5 font-bold ${
+                    provider.status === 'Connected' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                  }`}>
+                    {provider.status}
+                  </span>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2 text-slate-600">
+                  <div>Latest: <strong className="text-slate-800">{provider.lastSyncStatus}</strong></div>
+                  <div>Vehicles updated: <strong className="text-slate-800">{provider.vehiclesUpdated}</strong></div>
+                  <div>Last success: <strong className="text-slate-800">{formatDateTime(provider.lastSuccessfulSyncAt || null)}</strong></div>
+                  <div>Last failure: <strong className="text-slate-800">{formatDateTime(provider.lastFailedSyncAt || null)}</strong></div>
+                </div>
+                {provider.lastError && (
+                  <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-rose-800">
+                    {provider.lastError}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-1 gap-3 text-xs sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <span className="text-slate-500">Scheduler configuration</span>
+              <div className="mt-0.5 font-semibold text-slate-800">
+                {gpsSyncHealth?.schedulerStatus || 'Checking status'}
+              </div>
+            </div>
+            <div>
+              <span className="text-slate-500">Latest sync result / vehicles updated</span>
+              <div className="mt-0.5 font-semibold text-slate-800">
+                {gpsSyncHealth?.latestSyncStatus || syncStatusState} / {gpsSyncHealth?.latestSyncVehiclesUpdated ?? 0}
+              </div>
+            </div>
+            <div>
+              <span className="text-slate-500">Last successful GPS sync</span>
+              <div className="mt-0.5 font-semibold text-slate-800">
+                {formatDateTime(gpsSyncHealth?.lastSuccessfulSyncAt || null)}
+              </div>
+            </div>
+            <div>
+              <span className="text-slate-500">Last failed GPS sync</span>
+              <div className="mt-0.5 font-semibold text-slate-800">
+                {formatDateTime(gpsSyncHealth?.lastFailedSyncAt || null)}
+              </div>
+            </div>
+            <div>
+              <span className="text-slate-500">Next scheduled sync</span>
+              <div className="mt-0.5 font-semibold text-slate-800">
+                {formatDateTime(gpsSyncHealth?.nextScheduledSyncAt || nextScheduledSyncAt)}
+              </div>
+            </div>
+          </div>
+          {gpsSyncHealth?.lastApiError && (
+            <div
+              role="alert"
+              className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800"
+            >
+              WheelsEye API error: {gpsSyncHealth.lastApiError}
+            </div>
+          )}
+        </section>
         {/* Section Title */}
         <div className="pt-2">
           <h2 className="text-lg font-bold text-slate-900 tracking-tight">
@@ -1170,13 +1292,13 @@ export default function DashboardPage() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={handleTriggerSync}
-                disabled={isSyncing}
+                onClick={() => handleTriggerSync('WheelsEye GPS')}
+                disabled={syncingProviders.includes('wheelseye gps')}
                 className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
                 title="Trigger an on-demand GPS sync to fetch the latest telemetry for all vehicles"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span>{isSyncing ? 'Syncing...' : 'Sync GPS'}</span>
+                <RefreshCw className={`w-3.5 h-3.5 ${syncingProviders.includes('wheelseye gps') ? 'animate-spin' : ''}`} />
+                <span>{syncingProviders.includes('wheelseye gps') ? 'Syncing...' : 'Sync GPS'}</span>
               </button>
               <button
                 type="button"
@@ -1211,7 +1333,8 @@ export default function DashboardPage() {
                   <tr>
                     <th className="px-5 py-3">Vehicle Number</th>
                     <th className="px-5 py-3">Entry Date & Time</th>
-                    <th className="px-5 py-3">Sync GPS Date Time</th>
+                    <th className="px-5 py-3">Plant / Status</th>
+                    <th className="px-5 py-3">Last GPS Updated / Sync Type</th>
                     <th className="px-5 py-3">Stay Hours</th>
                     <th className="px-5 py-3">Location</th>
                     <th className="px-5 py-3">Driver Name-Mobile</th>
@@ -1233,13 +1356,28 @@ export default function DashboardPage() {
                             <span className="font-extrabold text-slate-900 text-sm tracking-wide">
                               {v.vehicleNumber}
                             </span>
+                            {v.registrationStatus === 'Not registered' && (
+                              <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-800">Not registered</span>
+                            )}
                             <span className="text-[10px] font-bold text-slate-600">
                               IGN {v.ignition === null || v.ignition === undefined ? 'N/A' : String(v.ignition)} · {v.speed === null || v.speed === undefined ? 'N/A' : String(v.speed)}
                             </span>
                             {v.dataCheck && <span className="text-[10px] font-bold text-rose-700">Data check</span>}
-                            {v.gps_status === 'GPS STALE' && (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300" title="GPS telemetry is older than 60 minutes">
-                                GPS STALE
+                            {v.gps_status && (
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                                  v.gps_status === 'GPS STALE'
+                                    ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                }`}
+                                title="Freshness is based on the provider GPS fix timestamp"
+                              >
+                                {v.gps_status}
+                              </span>
+                            )}
+                            {v.providerUnavailable && (
+                              <span className="text-[10px] font-semibold text-amber-800" title={v.providerUnavailable}>
+                                {v.providerUnavailable}
                               </span>
                             )}
                             {v.gps_status === 'GPS SYNC FAILED' && (
@@ -1253,15 +1391,38 @@ export default function DashboardPage() {
                               </span>
                             )}
                           </div>
+                          {v.gpsProviderLocations && v.gpsProviderLocations.length > 0 && (
+                            <div className="mt-1 space-y-0.5">
+                              {v.gpsProviderLocations.map((location) => (
+                                <div key={location.provider} className="text-[10px] text-slate-500">
+                                  {location.provider}: <strong className="text-slate-700">
+                                    {location.status === 'Inside' ? `Inside ${location.plantName || 'plant'}` : location.status}
+                                  </strong>
+                                  {location.providerTimestamp ? ` · ${formatDateTime(location.providerTimestamp)}` : ''}
+                                </div>
+                              ))}
+                              {v.locationDiscrepancyMeters !== null && v.locationDiscrepancyMeters !== undefined &&
+                                Math.round(v.locationDiscrepancyMeters) > 0 && (
+                                <div className="text-[10px] font-semibold text-amber-800">
+                                  Provider locations differ by {formatDistance(v.locationDiscrepancyMeters)}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </td>
                         <td className="px-5 py-3.5 text-slate-700 font-semibold whitespace-nowrap">
                           {v.entryDateTime ? formatDateTime(v.entryDateTime) : 'N/A'}
+                        </td>
+                        <td className="px-5 py-3.5 whitespace-nowrap">
+                          <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700">
+                            {v.status || 'Inside'} · {v.plantName || selectedPlant?.name || 'Plant'}
+                          </span>
                         </td>
                         <td className="px-5 py-3.5 text-slate-600 font-medium whitespace-nowrap">
                           <div>
                             <span>{v.latest_gps_timestamp ? formatDateTime(v.latest_gps_timestamp) : 'N/A'}</span>
                             <span className="ml-1.5 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200">
-                              {v.last_sync_source || 'N/A'}
+                              {formatGpsSyncType(v.last_sync_source)}
                             </span>
                           </div>
                         </td>
@@ -1450,7 +1611,7 @@ export default function DashboardPage() {
                     <th className="px-5 py-3">Vehicle Number</th>
                     <th className="px-5 py-3">Last Out Plant Name</th>
                     <th className="px-5 py-3">Plant Out Date Time</th>
-                    <th className="px-5 py-3">Last Location Date Time</th>
+                    <th className="px-5 py-3">Last GPS Updated / Sync Type</th>
                     <th className="px-5 py-3">Outside Hour</th>
                     <th className="px-5 py-3">Status</th>
                     <th className="px-5 py-3">Driver Name-Mobile</th>
@@ -1473,26 +1634,44 @@ export default function DashboardPage() {
                             <span className="font-extrabold text-slate-900 text-sm tracking-wide">
                               {v.vehicleNumber}
                             </span>
+                            {v.registrationStatus === 'Not registered' && (
+                              <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-800">Not registered</span>
+                            )}
                             <span className="text-[10px] font-bold text-slate-600">
                               IGN {v.ignition === null || v.ignition === undefined ? 'N/A' : String(v.ignition)} · {v.speed === null || v.speed === undefined ? 'N/A' : String(v.speed)}
                             </span>
                             {v.dataCheck && <span className="text-[10px] font-bold text-rose-700">Data check</span>}
-                            {v.gps_status === 'GPS STALE' && (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300" title="GPS telemetry is older than 60 minutes">
-                                GPS STALE
-                              </span>
-                            )}
-                            {v.gps_status === 'GPS SYNC FAILED' && (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300" title="GPS sync failed on last attempt">
-                                SYNC FAILED
-                              </span>
-                            )}
-                            {v.gps_status === 'GPS DATA UNAVAILABLE' && (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-300" title="Vehicle not in latest telematics stream">
-                                NO GPS
+                            {v.gps_status && (
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                                  v.gps_status === 'GPS STALE'
+                                    ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                }`}
+                                title="Freshness is based on the provider GPS fix timestamp"
+                              >
+                                {v.gps_status}
                               </span>
                             )}
                           </div>
+                          {v.gpsProviderLocations && v.gpsProviderLocations.length > 0 && (
+                            <div className="mt-1 space-y-0.5">
+                              {v.gpsProviderLocations.map((location) => (
+                                <div key={location.provider} className="text-[10px] text-slate-500">
+                                  {location.provider}: <strong className="text-slate-700">
+                                    {location.status === 'Inside' ? `Inside ${location.plantName || 'plant'}` : location.status}
+                                  </strong>
+                                  {location.providerTimestamp ? ` · ${formatDateTime(location.providerTimestamp)}` : ''}
+                                </div>
+                              ))}
+                              {v.locationDiscrepancyMeters !== null && v.locationDiscrepancyMeters !== undefined &&
+                                Math.round(v.locationDiscrepancyMeters) > 0 && (
+                                <div className="text-[10px] font-semibold text-amber-800">
+                                  Provider locations differ by {formatDistance(v.locationDiscrepancyMeters)}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </td>
 
                         {/* 2. Last Out Plant Name */}
@@ -1512,7 +1691,7 @@ export default function DashboardPage() {
                           <div>
                             <span>{lastGpsTime ? formatDateTime(lastGpsTime) : 'N/A'}</span>
                             <span className="ml-1.5 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200">
-                              {v.last_sync_source || 'N/A'}
+                              {formatGpsSyncType(v.last_sync_source)}
                             </span>
                           </div>
                         </td>

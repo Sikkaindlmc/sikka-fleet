@@ -3,11 +3,7 @@ const Vehicle = require('../models/Vehicle');
 const PlantEntry = require('../models/PlantEntry');
 const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
 const VehicleLocation = require('../models/VehicleLocation');
-
-const STALE_THRESHOLD_MS = Math.max(
-  1,
-  Number(process.env.GPS_STALE_THRESHOLD_MINUTES || 60)
-) * 60 * 1000;
+const { GPS_STALE_THRESHOLD_MS: STALE_THRESHOLD_MS } = require('../config/gps');
 
 /**
  * Calculates geodesic distance between two points in meters using the Haversine formula.
@@ -41,6 +37,20 @@ function msToHHMM(ms) {
 function getPlantRadiusMeters(plant) {
   const radius = Number(plant?.radiusMeters ?? plant?.radiusMeter);
   return Number.isFinite(radius) && radius > 0 ? radius : null;
+}
+
+function isValidFreshGpsTimestamp(gpsTimestamp, syncTimestamp, staleThresholdMs = STALE_THRESHOLD_MS) {
+  const gpsTime = new Date(gpsTimestamp);
+  const syncTime = new Date(syncTimestamp);
+  return Number.isFinite(gpsTime.getTime()) &&
+    Number.isFinite(syncTime.getTime()) &&
+    gpsTime <= syncTime &&
+    syncTime.getTime() - gpsTime.getTime() <= staleThresholdMs;
+}
+
+function isVerifiedGpsSample(sample) {
+  if (typeof sample?.statusEligible === 'boolean') return sample.statusEligible;
+  return isValidFreshGpsTimestamp(sample?.gpsTimestamp, sample?.syncTime);
 }
 
 /**
@@ -108,6 +118,7 @@ function getVehiclePlantStatus({ latitude, longitude, gpsTimestamp, entryDateTim
 
   // 2. Geofence evaluation using Haversine distance
   let matchedPlant = null;
+  const configuredPlantRadii = [];
   let minDistance = Infinity;
   let nearestPlant = '';
   let nearestDistance = Infinity;
@@ -124,6 +135,11 @@ function getVehiclePlantStatus({ latitude, longitude, gpsTimestamp, entryDateTim
     ) continue;
     const radius = getPlantRadiusMeters(plant);
     if (radius === null) continue;
+    configuredPlantRadii.push({
+      plantId: plant._id || null,
+      plantName: plant.plantName,
+      radiusMeters: radius,
+    });
     const dist = calculateHaversineDistance(lat, lon, plant.latitude, plant.longitude);
 
     if (dist < nearestDistance) {
@@ -154,6 +170,8 @@ function getVehiclePlantStatus({ latitude, longitude, gpsTimestamp, entryDateTim
     plantId,
     plantName,
     distanceMeter,
+    plantRadiusMeters: matchedPlant ? getPlantRadiusMeters(matchedPlant) : null,
+    configuredPlantRadii,
     nearestPlant,
     nearestDistance,
     gps_status,
@@ -331,5 +349,7 @@ module.exports = {
   calculateStayDuration,
   msToHHMM,
   getPlantRadiusMeters,
+  isValidFreshGpsTimestamp,
+  isVerifiedGpsSample,
   STALE_THRESHOLD_MS,
 };

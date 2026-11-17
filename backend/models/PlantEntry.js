@@ -29,6 +29,31 @@ const plantEntrySchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    detectedAt: {
+      type: Date,
+      default: null,
+    },
+    gpsTimestamp: {
+      type: Date,
+      default: null,
+    },
+    providerTransitionTimestamp: {
+      type: Date,
+      default: null,
+    },
+    syncTime: {
+      type: Date,
+      default: null,
+    },
+    syncId: {
+      type: String,
+      default: '',
+    },
+    syncType: {
+      type: String,
+      enum: ['AUTO', 'MANUAL'],
+      default: 'AUTO',
+    },
     latitude: {
       type: Number,
       required: true,
@@ -38,6 +63,10 @@ const plantEntrySchema = new mongoose.Schema(
       required: true,
     },
     distanceMeter: {
+      type: Number,
+      default: null,
+    },
+    plantRadiusMeters: {
       type: Number,
       default: null,
     },

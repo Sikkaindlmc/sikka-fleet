@@ -2,13 +2,9 @@ const GpsSetting = require('../models/GpsSetting');
 const {
   executeGpsSync,
   DEFAULT_WHEELSEYE_URL,
-  DEFAULT_FLEETX_URL,
-  DEFAULT_FLEETX_TOKEN,
   fetchWheelseyeTelemetryWithRetries,
-  fetchFleetxTelemetryWithRetries,
 } = require('./gpsSyncService');
-const { isSafeExternalUrl } = require('../utils/security');
-const axios = require('axios');
+const { decryptGpsCredential } = require('../utils/gpsCredentialCrypto');
 
 async function syncGpsPositions(syncType = 'Auto Sync') {
   const isAuto = syncType.toLowerCase().includes('auto') || syncType.toLowerCase().includes('cron');
@@ -18,124 +14,87 @@ async function syncGpsPositions(syncType = 'Auto Sync') {
   });
 }
 
-async function testGpsConnection(targetProvider = null) {
+async function testGpsConnection() {
+  const provider = 'WheelsEye GPS';
+  const settingQuery = {
+    archived: { $ne: true },
+    $or: [{ provider: /wheels/i }, { apiUrl: /wheelseye/i }],
+  };
+  const setting = await GpsSetting.findOne(settingQuery);
+  const apiUrl = (process.env.WHEELSEYE_API_URL || '').trim() || setting?.apiUrl || DEFAULT_WHEELSEYE_URL;
+  const envToken = (process.env.WHEELSEYE_API_KEY || '').trim();
+  let urlToken = '';
   try {
-    const settings = await GpsSetting.find();
-    const providerLower = (targetProvider || '').toLowerCase();
-
-    // If testing Fleetx specifically
-    if (providerLower.includes('fleetx')) {
-      const fxConfig = settings.find((s) => s.provider && s.provider.toLowerCase().includes('fleetx'));
-      let apiUrl = fxConfig?.apiUrl || DEFAULT_FLEETX_URL;
-      if (!apiUrl || apiUrl.includes('••••')) apiUrl = DEFAULT_FLEETX_URL;
-      let token = fxConfig?.encryptedApiKey || DEFAULT_FLEETX_TOKEN;
-      if (!token || token.includes('••••')) token = DEFAULT_FLEETX_TOKEN;
-
-      const res = await fetchFleetxTelemetryWithRetries(apiUrl, token, 1);
-      const count = res.list ? res.list.length : 0;
-
-      await GpsSetting.findOneAndUpdate(
-        { $or: [{ provider: /fleetx/i }, { apiUrl: /fleetx/i }] },
-        {
-          $set: {
-            provider: 'Fleetx',
-            apiUrl,
-            encryptedApiKey: token,
-            connectionStatus: 'Connected',
-            lastSync: new Date(),
-            lastError: '',
-          },
-        },
-        { upsert: true }
-      );
-
-      return {
-        status: 'Connected',
-        provider: 'Fleetx',
-        message: `Successfully connected to Fleetx GPS. Received telemetry for ${count} vehicles.`,
-        lastSync: new Date(),
-        count,
-      };
+    const parsedUrl = new URL(apiUrl);
+    for (const key of ['accessToken', 'access_token', 'apiKey', 'api_key', 'token', 'key', 'secret']) {
+      urlToken = parsedUrl.searchParams.get(key) || '';
+      if (urlToken) break;
     }
+  } catch (_) {
+    // The request service returns the user-facing URL validation failure.
+  }
+  const savedToken = decryptGpsCredential(setting?.encryptedApiKey || '').trim();
+  const token = envToken || urlToken || savedToken;
+  const credentialSource = envToken
+    ? 'WHEELSEYE_API_KEY'
+    : urlToken && process.env.WHEELSEYE_API_URL?.trim()
+      ? 'WHEELSEYE_API_URL query'
+      : urlToken
+        ? 'GPS settings URL query'
+    : token
+      ? 'GPS settings'
+      : 'none';
+  const now = new Date();
 
-    // If testing WheelsEye specifically
-    if (providerLower.includes('wheels')) {
-      const weConfig = settings.find((s) => s.provider && s.provider.toLowerCase().includes('wheels'));
-      let apiUrl = weConfig?.apiUrl || DEFAULT_WHEELSEYE_URL;
-      if (!apiUrl || apiUrl.includes('••••')) apiUrl = DEFAULT_WHEELSEYE_URL;
-
-      const res = await fetchWheelseyeTelemetryWithRetries(apiUrl, 1, weConfig?.encryptedApiKey || process.env.WHEELSEYE_API_KEY || '');
-      const count = res.list ? res.list.length : 0;
-
-      await GpsSetting.findOneAndUpdate(
-        { $or: [{ provider: /wheels/i }, { apiUrl: /wheelseye/i }] },
-        {
-          $set: {
-            provider: 'WheelsEye GPS',
-            apiUrl,
-            connectionStatus: 'Connected',
-            lastSync: new Date(),
-            lastError: '',
-          },
-        },
-        { upsert: true }
-      );
-
-      return {
-        status: 'Connected',
-        provider: 'WheelsEye GPS',
-        message: `Successfully connected to WheelsEye GPS. Received telemetry for ${count} vehicles.`,
-        lastSync: new Date(),
-        count,
-      };
-    }
-
-    // Default: Test both WheelsEye and Fleetx
-    const results = [];
-    const weConfig = settings.find((s) => s.provider && s.provider.toLowerCase().includes('wheels'));
-    let weUrl = weConfig?.apiUrl || DEFAULT_WHEELSEYE_URL;
-    if (!weUrl || weUrl.includes('••••')) weUrl = DEFAULT_WHEELSEYE_URL;
-
-    try {
-      const weRes = await fetchWheelseyeTelemetryWithRetries(weUrl, 1, weConfig?.encryptedApiKey || process.env.WHEELSEYE_API_KEY || '');
-      results.push(`WheelsEye: ${weRes.list.length} vehicles`);
-      await GpsSetting.findOneAndUpdate(
-        { $or: [{ provider: /wheels/i }, { apiUrl: /wheelseye/i }] },
-        { $set: { connectionStatus: 'Connected', lastSync: new Date(), lastError: '', apiUrl: weUrl } }
-      );
-    } catch (weErr) {
-      results.push(`WheelsEye: Failed (${weErr.message})`);
-    }
-
-    const fxConfig = settings.find((s) => s.provider && s.provider.toLowerCase().includes('fleetx'));
-    let fxUrl = fxConfig?.apiUrl || DEFAULT_FLEETX_URL;
-    if (!fxUrl || fxUrl.includes('••••')) fxUrl = DEFAULT_FLEETX_URL;
-    let fxToken = fxConfig?.encryptedApiKey || DEFAULT_FLEETX_TOKEN;
-    if (!fxToken || fxToken.includes('••••')) fxToken = DEFAULT_FLEETX_TOKEN;
-
-    try {
-      const fxRes = await fetchFleetxTelemetryWithRetries(fxUrl, fxToken, 1);
-      results.push(`Fleetx: ${fxRes.list.length} vehicles`);
-      await GpsSetting.findOneAndUpdate(
-        { $or: [{ provider: /fleetx/i }, { apiUrl: /fleetx/i }] },
-        { $set: { connectionStatus: 'Connected', lastSync: new Date(), lastError: '' } },
-        { upsert: true }
-      );
-    } catch (fxErr) {
-      results.push(`Fleetx: Failed (${fxErr.message})`);
-    }
+  try {
+    const response = await fetchWheelseyeTelemetryWithRetries(apiUrl, 1, token);
+    const count = response.list.length;
+    await GpsSetting.findOneAndUpdate(settingQuery, {
+      $set: {
+        provider,
+        connectionStatus: 'Connected',
+        lastSync: now,
+        lastSuccessAt: now,
+        lastCredentialSource: credentialSource,
+        lastError: '',
+        consecutiveFailures: 0,
+      },
+    }, { upsert: true });
 
     return {
       status: 'Connected',
-      provider: 'Multi-Provider (WheelsEye & Fleetx)',
-      message: `Connection test completed: ${results.join('; ')}`,
-      lastSync: new Date(),
+      provider,
+      httpStatus: Number(String(response.status).split(' ')[0]) || 200,
+      credentialSource,
+      message: `${provider} connection OK using ${credentialSource}. Received telemetry for ${count} vehicles.`,
+      lastSync: now,
+      count,
     };
   } catch (error) {
+    const httpStatus = error.response?.status || null;
+    const reason = httpStatus ? `HTTP ${httpStatus}` : error.code === 'ECONNABORTED' ? 'Request timed out' : 'WheelsEye request failed';
+    const nextStep = httpStatus === 401 || httpStatus === 403
+      ? 'Verify this credential is active and confirm the endpoint and auth scheme with the provider documentation.'
+      : 'Verify the WheelsEye URL and credentials in GPS settings or the server environment.';
+    await GpsSetting.findOneAndUpdate(settingQuery, {
+      $set: {
+        provider,
+        connectionStatus: httpStatus === 401 || httpStatus === 403 ? 'AUTH_FAILED' : 'Connection Failed',
+        lastError: reason,
+        lastErrorAt: now,
+        lastErrorCode: httpStatus ? String(httpStatus) : error.code || 'REQUEST_FAILED',
+        lastCredentialSource: credentialSource,
+      },
+      $inc: { consecutiveFailures: 1 },
+    }, { upsert: true });
+
     return {
       status: 'Connection Failed',
-      message: error.message || 'Unable to connect to GPS provider.',
-      lastError: error.message,
+      provider,
+      httpStatus,
+      credentialSource,
+      message: `${provider} connection failed using ${credentialSource}: ${reason}. ${nextStep}`,
+      reason,
     };
   }
 }

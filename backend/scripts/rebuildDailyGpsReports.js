@@ -11,7 +11,10 @@ async function main() {
     dbName: process.env.MONGODB_DB_NAME || undefined,
   });
 
-  const earliest = await GpsHistory.findOne().sort({ gpsTimestamp: 1 }).select('gpsTimestamp');
+  const earliest = await GpsHistory.findOne({
+    provider: /wheels.?eye/i,
+    archived: { $ne: true },
+  }).sort({ gpsTimestamp: 1 }).select('gpsTimestamp');
   if (!earliest) throw new Error('GPS history is empty; report backfill cannot use invented or manual data.');
   const fromDate = process.argv.find((arg) => arg.startsWith('--from='))?.slice(7) ||
     istDateString(earliest.gpsTimestamp);

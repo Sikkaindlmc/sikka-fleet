@@ -2,6 +2,7 @@ const express = require('express');
 const Vehicle = require('../models/Vehicle');
 const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
 const VehicleLocation = require('../models/VehicleLocation');
+const GpsHistory = require('../models/GpsHistory');
 const PlantEntry = require('../models/PlantEntry');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
 const { isValidObjectId } = require('../utils/security');
@@ -32,8 +33,20 @@ function validateAndFormatMobile(mobile) {
 // GET /api/vehicles - List all vehicles
 router.get('/', async (req, res) => {
   try {
-    const vehicles = await Vehicle.find().sort({ createdAt: -1 });
-    res.json(vehicles);
+    const [vehicles, gpsVehicleIds] = await Promise.all([
+      Vehicle.find().sort({ createdAt: -1 }),
+      GpsHistory.distinct('vehicleId', {
+        provider: /wheels.?eye/i,
+        archived: { $ne: true },
+      }),
+    ]);
+    const gpsVehicleIdSet = new Set(gpsVehicleIds.filter(Boolean).map((id) => id.toString()));
+    res.json(vehicles.map((vehicle) => ({
+      ...vehicle.toObject(),
+      gpsStatus: vehicle.status === 'Active' && gpsVehicleIdSet.has(vehicle._id.toString())
+        ? 'WheelsEye'
+        : 'No GPS (WheelsEye)',
+    })));
   } catch (error) {
     console.error('[Get Vehicles Error]:', error);
     res.status(500).json({ error: 'Failed to retrieve vehicles.' });

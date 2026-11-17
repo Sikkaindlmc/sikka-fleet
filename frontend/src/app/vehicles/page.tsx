@@ -23,6 +23,7 @@ interface VehicleRecord {
   assignmentType?: 'MANUAL' | 'AUTO_GPS' | 'NONE';
   assignedAt?: string | null;
   matchingDrivers?: NearestDriverItem[];
+  gpsStatus?: 'WheelsEye' | 'No GPS (WheelsEye)';
   createdAt: string;
   updatedAt: string;
 }
@@ -376,6 +377,13 @@ export default function VehicleRegisterPage() {
                           <VehicleIcon className="w-4 h-4 text-emerald-600 shrink-0" />
                           <span className="font-extrabold text-slate-900 text-sm tracking-wide">
                             {v.vehicleNumber}
+                          </span>
+                          <span className={`rounded-md px-1.5 py-0.5 text-[9px] font-bold ${
+                            v.gpsStatus === 'WheelsEye'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {v.gpsStatus || 'No GPS (WheelsEye)'}
                           </span>
                         </div>
                       </td>

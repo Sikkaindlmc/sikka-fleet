@@ -14,7 +14,7 @@ async function run() {
       source: 'GPS-AUTO',
       triggerType: 'SCRIPT_SYNC',
     });
-    console.log('[GPS Sync Script] Completed through the shared WheelsEye and Fleetx sync path.', result);
+    console.log('[GPS Sync Script] Completed through the WheelsEye sync path.', result);
   } finally {
     await mongoose.disconnect();
   }

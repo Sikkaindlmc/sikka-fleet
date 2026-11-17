@@ -1,5 +1,10 @@
 const express = require('express');
-const { executeGpsSync, getAutoSyncStatus } = require('../services/gpsSyncService');
+const {
+  executeGpsSync,
+  executeGpsSyncForBothProviders,
+  getAutoSyncStatus,
+  getGpsProvider,
+} = require('../services/gpsSyncService');
 const GpsSyncLog = require('../models/GpsSyncLog');
 const GpsSetting = require('../models/GpsSetting');
 
@@ -64,7 +69,7 @@ router.get('/status', (req, res, next) => {
   return verifyToken(req, res, next);
 }, async (req, res) => {
   try {
-    const status = await getAutoSyncStatus();
+    const status = await getAutoSyncStatus(req.query.provider || 'WheelsEye GPS');
     res.json(status);
   } catch (error) {
     console.error('[API /api/gps-sync/status Error]:', error);
@@ -93,8 +98,20 @@ router.get('/logs', (req, res, next) => {
       filter.source = source;
     }
 
-    const logs = await GpsSyncLog.find(filter).sort({ startedAt: -1 }).limit(limit);
-    const setting = await GpsSetting.findOne().sort({ updatedAt: -1 });
+    try {
+      filter.provider = new RegExp(getGpsProvider(req.query.provider || 'WheelsEye GPS') === 'Fleetx' ? 'fleetx' : 'wheels.?eye', 'i');
+    } catch (error) {
+      return res.status(400).json({ success: false, error: error.message });
+    }
+    filter.archived = { $ne: true };
+    const logs = await GpsSyncLog.find(filter)
+      .select('-errorMessage')
+      .sort({ startedAt: -1 })
+      .limit(limit);
+    const setting = await GpsSetting.findOne({
+      provider: new RegExp(getGpsProvider(req.query.provider || 'WheelsEye GPS') === 'Fleetx' ? 'fleetx' : 'wheels.?eye', 'i'),
+      archived: { $ne: true },
+    }).sort({ updatedAt: -1 });
 
     res.json({
       success: true,
@@ -115,25 +132,32 @@ async function handleTriggerSync(req, res) {
   try {
     const source = req.isCron ? 'AUTO' : 'GPS-AUTO';
     const triggerType = req.isCron ? 'WEBHOOK_CRON' : (typeof req.body?.triggerType === 'string' ? req.body.triggerType.slice(0, 50) : 'USER_TRIGGER');
+    const provider = typeof req.body?.provider === 'string' ? req.body.provider : 'WheelsEye GPS';
 
-    console.log(`[API /api/gps-sync/run] Triggered (Source: ${source}, Trigger: ${triggerType}, Caller: ${req.syncCaller})`);
+    console.log(`[API /api/gps-sync/run] Triggered (Provider: ${req.isCron ? 'both' : provider}, Source: ${source}, Trigger: ${triggerType}, Caller: ${req.syncCaller})`);
 
-    const result = await executeGpsSync({
+    const options = {
       source,
       triggerType,
       ...(req.isCron ? { slotKey: getCurrentIstSlotKey() } : {}),
-    });
+    };
+    const result = req.isCron || provider.toLowerCase() === 'both'
+      ? await executeGpsSyncForBothProviders(options)
+      : await executeGpsSync({ ...options, provider: getGpsProvider(provider) });
 
-    res.json({
-      success: true,
-      message: 'GPS synchronization executed successfully.',
+    const isBothProviders = req.isCron || provider.toLowerCase() === 'both';
+    res.status(result.success ? 200 : isBothProviders ? 207 : 502).json({
+      success: result.success,
+      message: result.message || `${result.provider} synchronization ${result.success ? 'completed' : 'failed'}.`,
       ...result,
     });
   } catch (error) {
     console.error('[API /api/gps-sync/run Error]:', error);
-    res.status(500).json({
+    res.status(error.provider ? 502 : 500).json({
       success: false,
       error: error.message || 'GPS synchronization failed.',
+      provider: error.provider || null,
+      providerStatus: error.providerStatus || null,
     });
   }
 }
