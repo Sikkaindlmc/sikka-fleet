@@ -37,8 +37,8 @@ import AppLayout from '../../components/AppLayout';
 import Modal from '../../components/Modal';
 import AlertBanner, { AlertState } from '../../components/AlertBanner';
 import VehicleIcon from '../../components/VehicleIcon';
-import { apiRequest, getApiBaseUrl } from '../../lib/api';
-import { formatDateTime, formatDistance } from '../../lib/formatters';
+import { apiRequest } from '../../lib/api';
+import { formatDateTime, formatDistance, formatVehicleSpeed, shouldDisplayVehicleSpeed } from '../../lib/formatters';
 import { useAuth } from '../../lib/authContext';
 import { useVehicleIcon } from '../../lib/vehicleIconContext';
 import dynamic from 'next/dynamic';
@@ -99,7 +99,26 @@ interface LiveVehicleItem {
   };
 }
 
-const isVehicleMoving = (vehicle: LiveVehicleItem) => vehicle.hasGps === true && vehicle.movementStatus === 'Moving';
+const isVehicleMoving = (vehicle: LiveVehicleItem) =>
+  vehicle.hasGps === true &&
+  shouldDisplayVehicleSpeed(vehicle.ignition, vehicle.speed, vehicle.movementStatus);
+const LOCAL_API_UNREACHABLE_PREFIX = 'Local API is unreachable at ';
+
+function getIgnitionLabel(value: LiveVehicleItem['ignition']): 'ON' | 'OFF' | 'N/A' {
+  if (value === true || /^(on|true|1|yes)$/i.test(String(value ?? ''))) return 'ON';
+  if (value === false || /^(off|false|0|no)$/i.test(String(value ?? ''))) return 'OFF';
+  return 'N/A';
+}
+
+function getVehicleLocationLabel(vehicle: LiveVehicleItem): string {
+  if (vehicle.readableLocation && vehicle.readableLocation !== 'N/A') {
+    return vehicle.readableLocation;
+  }
+  if (vehicle.latitude !== null && vehicle.longitude !== null) {
+    return `${vehicle.latitude.toFixed(6)}, ${vehicle.longitude.toFixed(6)}`;
+  }
+  return 'Location unavailable';
+}
 
 interface GpsSettingData {
   _id?: string;
@@ -131,14 +150,6 @@ function GpsPageContent() {
 
   // Settings state
   const [setting, setSetting] = useState<GpsSettingData | null>(null);
-  const [fleetxSetting, setFleetxSetting] = useState<GpsSettingData | null>(null);
-  const [apiBaseUrl, setApiBaseUrl] = useState('');
-  const [fleetxFormData, setFleetxFormData] = useState({
-    apiUrl: '',
-    apiKey: '',
-    status: 'Active' as 'Active' | 'Inactive',
-    pollIntervalSeconds: 1800,
-  });
   const [formData, setFormData] = useState({
     apiUrl: '',
     apiKey: '',
@@ -154,7 +165,12 @@ function GpsPageContent() {
   const [liveVehicles, setLiveVehicles] = useState<LiveVehicleItem[]>([]);
   const [selectedVehicle, setSelectedVehicle] = useState<LiveVehicleItem | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [providerFilter, setProviderFilter] = useState<'All' | 'WheelsEye GPS' | 'FleetX'>('All');
   const [statusFilter, setStatusFilter] = useState<'all' | 'moving' | 'stopped'>('all');
+  const [providerStatuses, setProviderStatuses] = useState<{
+    wheelsEye: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'> | null;
+    fleetX: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'> | null;
+  }>({ wheelsEye: null, fleetX: null });
 
   // Auto-focus searched vehicle when vehicleParam arrives
   useEffect(() => {
@@ -262,17 +278,25 @@ function GpsPageContent() {
         apiUrl: string;
         lastSync: string;
         wheelsEyeStatus: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'>;
-        fleetxStatus: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'>;
+        fleetXStatus: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'>;
         vehicles: LiveVehicleItem[];
       }>('/gps/live-vehicles');
 
       const vehs = res.vehicles || [];
       setLiveVehicles(vehs);
+      setAlert((current) =>
+        current?.type === 'error' && current.message.startsWith(LOCAL_API_UNREACHABLE_PREFIX)
+          ? null
+          : current
+      );
+      setProviderStatuses({
+        wheelsEye: res.wheelsEyeStatus || null,
+        fleetX: res.fleetXStatus || null,
+      });
       setSetting((current) => current ? {
         ...current,
         ...res.wheelsEyeStatus,
       } : current);
-      setFleetxSetting((current) => current ? { ...current, ...res.fleetxStatus } : current);
 
       // Keep current selection or match vehicleParam if specified, or default to first vehicle
       setSelectedVehicle((prev) => {
@@ -305,24 +329,13 @@ function GpsPageContent() {
   const fetchGpsSetting = useCallback(async () => {
     try {
       setIsLoading(true);
-      const [data, providersData] = await Promise.all([
-        apiRequest<GpsSettingData>('/gps'),
-        apiRequest<{ providers: GpsSettingData[] }>('/gps/providers'),
-      ]);
-      const fleetx = providersData.providers.find((item) => /fleetx/i.test(item.provider));
+      const data = await apiRequest<GpsSettingData>('/gps');
       setSetting(data);
-      setFleetxSetting(fleetx || null);
       setFormData({
         apiUrl: data.apiUrl || '',
         apiKey: data.maskedApiKey || '',
         status: data.status || 'Active',
         pollIntervalSeconds: data.pollIntervalSeconds || 1800,
-      });
-      setFleetxFormData({
-        apiUrl: fleetx?.apiUrl || '',
-        apiKey: fleetx?.maskedApiKey || '',
-        status: fleetx?.status || 'Active',
-        pollIntervalSeconds: fleetx?.pollIntervalSeconds || 1800,
       });
     } catch (err: any) {
       if (err.status === 401) return;
@@ -336,7 +349,6 @@ function GpsPageContent() {
   }, []);
 
   useEffect(() => {
-    setApiBaseUrl(getApiBaseUrl());
     fetchGpsSetting();
     fetchLiveVehicles(false);
 
@@ -420,52 +432,8 @@ function GpsPageContent() {
     }
   };
 
-  const handleSaveFleetxConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAlert(null);
-    setIsSaving(true);
-    try {
-      await apiRequest('/gps/providers/Fleetx', {
-        method: 'POST',
-        body: JSON.stringify({
-          apiUrl: fleetxFormData.apiUrl.trim(),
-          apiKey: fleetxFormData.apiKey,
-          status: fleetxFormData.status,
-          pollIntervalSeconds: Number(fleetxFormData.pollIntervalSeconds) || 1800,
-        }),
-      });
-      setAlert({ type: 'success', message: 'FleetX configuration saved successfully.' });
-      await fetchGpsSetting();
-    } catch (err: any) {
-      setAlert({ type: 'error', message: err.message || 'Unable to save FleetX settings.' });
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleTestFleetxConnection = async () => {
-    setIsTesting(true);
-    setAlert(null);
-    try {
-      const result = await apiRequest<{ status: string; message: string }>('/gps/providers/Fleetx/test-connection', {
-        method: 'POST',
-        body: JSON.stringify({}),
-      });
-      setAlert({
-        type: result.status === 'Connected' ? 'success' : 'error',
-        message: result.message || 'FleetX connection test completed.',
-      });
-      await Promise.all([fetchGpsSetting(), fetchLiveVehicles(false)]);
-    } catch (err: any) {
-      setAlert({ type: 'error', message: err.message || 'Unable to connect to FleetX.' });
-      await fetchGpsSetting();
-    } finally {
-      setIsTesting(false);
-    }
-  };
-
-  const handleSyncGpsNow = async (provider: 'WheelsEye GPS' | 'Fleetx' | 'both') => {
-    const syncKey = provider.toLowerCase();
+  const handleSyncGpsNow = async (provider: 'WheelsEye GPS' | 'FleetX') => {
+    const syncKey = provider === 'FleetX' ? 'fleetx' : 'wheels';
     setSyncingProviders((current) => current.includes(syncKey) ? current : [...current, syncKey]);
     setAlert(null);
     try {
@@ -538,7 +506,19 @@ function GpsPageContent() {
   };
 
   // Filtered vehicles for left side
-  const filteredVehicles = liveVehicles.filter((v) => {
+  const vehiclesByNumber = new Map<string, LiveVehicleItem>();
+  for (const vehicle of liveVehicles) {
+    const key = vehicle.vehicleNumber.trim().toUpperCase().replace(/[\s-]+/g, '');
+    const existing = vehiclesByNumber.get(key);
+    if (!existing || new Date(vehicle.timestamp || 0).getTime() > new Date(existing.timestamp || 0).getTime()) {
+      vehiclesByNumber.set(key, vehicle);
+    }
+  }
+  const aggregatedLiveVehicles = [...vehiclesByNumber.values()];
+  const providerFilteredVehicles = providerFilter === 'All'
+    ? aggregatedLiveVehicles
+    : liveVehicles.filter((vehicle) => vehicle.provider === providerFilter);
+  const filteredVehicles = providerFilteredVehicles.filter((v) => {
     const matchesSearch = v.vehicleNumber.toLowerCase().includes(searchQuery.toLowerCase().trim());
     if (!matchesSearch) return false;
 
@@ -549,7 +529,15 @@ function GpsPageContent() {
   const selectedProviderRecords = selectedVehicle
     ? liveVehicles.filter((vehicle) => vehicle.vehicleNumber === selectedVehicle.vehicleNumber)
     : [];
-  const activeVehicleCount = new Set(liveVehicles.map((vehicle) => vehicle.vehicleNumber)).size;
+  const activeVehicleCount = aggregatedLiveVehicles.length;
+  const setProviderView = (provider: 'All' | 'WheelsEye GPS' | 'FleetX') => {
+    setProviderFilter(provider);
+    setStatusFilter('all');
+    const firstVehicle = provider === 'All'
+    ? aggregatedLiveVehicles[0]
+    : liveVehicles.find((vehicle) => vehicle.provider === provider);
+    setSelectedVehicle(firstVehicle || null);
+  };
   return (
     <AppLayout pageTitle="GPS Telematics Integration" requiredPage="GPS">
       <div className="space-y-6">
@@ -596,18 +584,6 @@ function GpsPageContent() {
               : ' No successful sync recorded.'}
           </div>
         )}
-        {fleetxSetting && ['Connection Failed', 'AUTH_FAILED'].includes(fleetxSetting.connectionStatus) && (
-          <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-900">
-            FleetX request failed ({fleetxSetting.lastErrorCode || fleetxSetting.connectionStatus}).
-            {fleetxSetting.lastSuccessAt
-              ? ` Last successful sync: ${formatDateTime(fleetxSetting.lastSuccessAt)}.`
-              : ' No successful sync recorded.'}
-          </div>
-        )}
-        {apiBaseUrl && (
-          <p className="text-[11px] text-slate-500">Active API: <code>{apiBaseUrl}</code></p>
-        )}
-
         {/* ========================================================================= */}
         {/* ACTIVE TAB: SETTINGS (Vehicle Icon Setting & API Config)                  */}
         {/* ========================================================================= */}
@@ -867,66 +843,6 @@ function GpsPageContent() {
               </form>
             </div>
 
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6">
-              <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-4 border-b border-slate-100">
-                <div className="inline-flex items-center gap-2 text-xs font-bold text-slate-700">
-                  <Globe className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>FleetX GPS</span>
-                  <span className={fleetxSetting?.connectionStatus === 'Connected' ? 'text-emerald-700' : 'text-amber-700'}>
-                    {fleetxSetting?.connectionStatus || 'Pending'}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleTestFleetxConnection}
-                  disabled={isTesting}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-300 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
-                >
-                  <PlayCircle className={`w-3.5 h-3.5 ${isTesting ? 'animate-spin' : ''}`} />
-                  <span>{isTesting ? 'Testing Connection...' : 'Test FleetX Connection'}</span>
-                </button>
-              </div>
-              <div className="mb-4">
-                <h2 className="text-base font-bold text-slate-900">FleetX GPS Telematics API Configuration</h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Configure FleetX independently. Its credentials, synchronization and location records remain separate from WheelsEye.
-                </p>
-              </div>
-              <form onSubmit={handleSaveFleetxConfig} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">API Endpoint URL *</label>
-                    <input
-                      type="url"
-                      value={fleetxFormData.apiUrl}
-                      onChange={(e) => setFleetxFormData({ ...fleetxFormData, apiUrl: e.target.value })}
-                      placeholder="FleetX API URL"
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-mono focus:border-emerald-500 focus:outline-hidden"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">API Key / Bearer Token</label>
-                    <input
-                      type="password"
-                      value={fleetxFormData.apiKey}
-                      onChange={(e) => setFleetxFormData({ ...fleetxFormData, apiKey: e.target.value })}
-                      placeholder="FleetX API token"
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-mono focus:border-emerald-500 focus:outline-hidden"
-                    />
-                  </div>
-                </div>
-                <div className="flex items-center justify-end gap-3 pt-2">
-                  <button
-                    type="submit"
-                    disabled={isSaving}
-                    className="px-5 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
-                  >
-                    {isSaving ? 'Saving...' : 'Save FleetX Settings'}
-                  </button>
-                </div>
-              </form>
-            </div>
           </div>
         ) : (
           /* ========================================================================= */
@@ -937,29 +853,30 @@ function GpsPageContent() {
             <div className="flex items-center justify-between gap-3 pb-2 border-b border-slate-200">
               <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
                 <Radio className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
-                <span>Live GPS Telematics (WheelsEye + FleetX) • Auto-sync every 30 minutes</span>
+                <span>Live GPS Telematics • Auto-sync every 30 minutes</span>
               </div>
 
               <div className="flex items-center gap-2.5">
                 {user?.role === 'Admin' && (
                   <>
-                    {(['WheelsEye GPS', 'Fleetx', 'both'] as const).map((provider) => {
-                      const syncKey = provider.toLowerCase();
-                      const label = provider === 'WheelsEye GPS' ? 'WheelsEye' : provider === 'Fleetx' ? 'FleetX' : 'Both';
-                      const syncing = syncingProviders.includes(syncKey);
-                      return (
-                        <button
-                          key={provider}
-                          type="button"
-                          onClick={() => handleSyncGpsNow(provider)}
-                          disabled={syncing}
-                          className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
-                        >
-                          <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin' : ''}`} />
-                          <span>{syncing ? `Syncing ${label}...` : `Sync ${label} Now`}</span>
-                        </button>
-                      );
-                    })}
+                    <button
+                      type="button"
+                      onClick={() => handleSyncGpsNow('WheelsEye GPS')}
+                      disabled={syncingProviders.includes('wheels')}
+                      className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${syncingProviders.includes('wheels') ? 'animate-spin' : ''}`} />
+                      <span>{syncingProviders.includes('wheels') ? 'Syncing WheelsEye...' : 'Sync WheelsEye'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSyncGpsNow('FleetX')}
+                      disabled={syncingProviders.includes('fleetx')}
+                      className="inline-flex items-center gap-2 px-3.5 py-2 bg-blue-700 hover:bg-blue-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${syncingProviders.includes('fleetx') ? 'animate-spin' : ''}`} />
+                      <span>{syncingProviders.includes('fleetx') ? 'Syncing FleetX...' : 'Sync FleetX'}</span>
+                    </button>
                   </>
                 )}
                 <button
@@ -987,7 +904,7 @@ function GpsPageContent() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
                 <span className="text-[10px] font-bold uppercase text-slate-400 block">
-                  GPS Provider
+                  GPS Providers
                 </span>
                 <span className="text-sm font-extrabold text-slate-900 mt-0.5 block truncate">
                   WheelsEye + FleetX
@@ -1005,27 +922,50 @@ function GpsPageContent() {
 
               <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
                 <span className="text-[10px] font-bold uppercase text-slate-400 block">
-                  Connection Status
+                  WheelsEye GPS
                 </span>
                 <div className="flex items-center gap-1.5 mt-0.5">
                   <span className={`w-2 h-2 rounded-full ${
-                    setting?.connectionStatus === 'Connected' && fleetxSetting?.connectionStatus === 'Connected'
-                      ? 'bg-emerald-500'
-                      : 'bg-amber-500'
+                    providerStatuses.wheelsEye?.connectionStatus === 'Connected' ? 'bg-emerald-500' : 'bg-amber-500'
                   }`} />
                   <span className="text-xs font-bold text-slate-800">
-                    WE {setting?.connectionStatus || 'Pending'} / FleetX {fleetxSetting?.connectionStatus || 'Pending'}
+                    {providerStatuses.wheelsEye?.connectionStatus || 'Pending'}
                   </span>
                 </div>
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Last sync: {providerStatuses.wheelsEye?.lastSuccessAt
+                    ? formatDateTime(providerStatuses.wheelsEye.lastSuccessAt)
+                    : 'N/A'}
+                </span>
+                {providerStatuses.wheelsEye?.lastError && (
+                  <p className="mt-1 truncate text-[10px] font-medium text-rose-700" title={providerStatuses.wheelsEye.lastError}>
+                    Error {providerStatuses.wheelsEye.lastErrorCode || ''}: {providerStatuses.wheelsEye.lastError}
+                  </p>
+                )}
               </div>
 
               <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
                 <span className="text-[10px] font-bold uppercase text-slate-400 block">
-                  Last Sync
+                  FleetX GPS
                 </span>
-                <span className="text-xs font-bold text-slate-700 mt-0.5 block truncate">
-                  WE {setting?.lastSync ? formatDateTime(setting.lastSync) : 'N/A'} / FX {fleetxSetting?.lastSync ? formatDateTime(fleetxSetting.lastSync) : 'N/A'}
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className={`w-2 h-2 rounded-full ${
+                    providerStatuses.fleetX?.connectionStatus === 'Connected' ? 'bg-emerald-500' : 'bg-amber-500'
+                  }`} />
+                  <span className="text-xs font-bold text-slate-800">
+                    {providerStatuses.fleetX?.connectionStatus || 'Pending'}
+                  </span>
+                </div>
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Last sync: {providerStatuses.fleetX?.lastSuccessAt
+                    ? formatDateTime(providerStatuses.fleetX.lastSuccessAt)
+                    : 'N/A'}
                 </span>
+                {providerStatuses.fleetX?.lastError && (
+                  <p className="mt-1 truncate text-[10px] font-medium text-rose-700" title={providerStatuses.fleetX.lastError}>
+                    Error {providerStatuses.fleetX.lastErrorCode || ''}: {providerStatuses.fleetX.lastError}
+                  </p>
+                )}
               </div>
             </div>
 
@@ -1041,7 +981,7 @@ function GpsPageContent() {
                     <div className="flex items-center gap-2">
                       <VehicleIcon className="w-4 h-4 text-emerald-600" />
                       <h2 className="text-sm font-bold text-slate-900 tracking-tight">
-                        Active GPS Provider Records ({liveVehicles.length})
+                        Active GPS Provider Records ({providerFilteredVehicles.length})
                       </h2>
                     </div>
                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
@@ -1061,6 +1001,33 @@ function GpsPageContent() {
                 />
               </div>
 
+              <div className="flex items-center gap-1.5 mb-2 text-[11px] font-bold" role="group" aria-label="Filter GPS records by provider">
+                {([
+                  ['All', 'All'],
+                  ['WheelsEye GPS', 'WheelsEye'],
+                  ['FleetX', 'FleetX'],
+                ] as const).map(([provider, label]) => {
+                  const count = provider === 'All'
+                    ? activeVehicleCount
+                    : liveVehicles.filter((vehicle) => vehicle.provider === provider).length;
+                  return (
+                    <button
+                      key={provider}
+                      type="button"
+                      onClick={() => setProviderView(provider)}
+                      aria-pressed={providerFilter === provider}
+                      className={`px-2.5 py-1 rounded-lg transition ${
+                        providerFilter === provider
+                          ? 'bg-blue-700 text-white'
+                          : 'bg-slate-200/70 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {label} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+
               {/* Filter Tabs */}
               <div className="flex items-center gap-1.5 text-[11px] font-bold">
                 <button
@@ -1072,7 +1039,7 @@ function GpsPageContent() {
                       : 'bg-slate-200/70 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  All ({liveVehicles.length})
+                  All ({providerFilteredVehicles.length})
                 </button>
                 <button
                   type="button"
@@ -1083,7 +1050,7 @@ function GpsPageContent() {
                       : 'bg-slate-200/70 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  Moving ({liveVehicles.filter(isVehicleMoving).length})
+                  Moving ({providerFilteredVehicles.filter(isVehicleMoving).length})
                 </button>
                 <button
                   type="button"
@@ -1094,7 +1061,7 @@ function GpsPageContent() {
                       : 'bg-slate-200/70 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  Stopped ({liveVehicles.filter((v) => !isVehicleMoving(v)).length})
+                  Stopped ({providerFilteredVehicles.filter((v) => v.hasGps === true && !isVehicleMoving(v)).length})
                 </button>
               </div>
             </div>
@@ -1142,25 +1109,30 @@ function GpsPageContent() {
                           {/* Ignition Pill */}
                           <span
                             className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold ${
-                              v.ignition === true
+                              getIgnitionLabel(v.ignition) === 'ON'
                                 ? 'bg-emerald-100 text-emerald-800'
-                                : v.ignition === false
+                                : getIgnitionLabel(v.ignition) === 'OFF'
                                   ? 'bg-slate-100 text-slate-500'
                                   : 'bg-amber-100 text-amber-800'
                             }`}
                           >
                             <span
                               className={`w-1.5 h-1.5 rounded-full ${
-                                v.ignition === true ? 'bg-emerald-500' : v.ignition === false ? 'bg-slate-400' : 'bg-amber-500'
+                                getIgnitionLabel(v.ignition) === 'ON'
+                                  ? 'bg-emerald-500'
+                                  : getIgnitionLabel(v.ignition) === 'OFF' ? 'bg-slate-400' : 'bg-amber-500'
                               }`}
                             />
-                            {v.ignition === null || v.ignition === undefined ? 'IGN N/A' : `IGN ${String(v.ignition)}`}
+                            {`IGN ${getIgnitionLabel(v.ignition)}`}
                           </span>
                         </div>
 
                         {/* Vendor & Status */}
                         <p className="text-[11px] text-slate-500 mt-0.5 truncate font-medium">
                           {v.vendorName} • {v.vehicleType}
+                        </p>
+                        <p className="mt-1 truncate text-[11px] text-slate-600" title={getVehicleLocationLabel(v)}>
+                          Location: {getVehicleLocationLabel(v)}
                         </p>
 
                         {/* Geofence & Plan status */}
@@ -1217,7 +1189,7 @@ function GpsPageContent() {
                               : 'bg-slate-100 text-slate-600'
                           }`}
                         >
-                          {v.speed === null || v.speed === undefined ? 'N/A' : String(v.speed)}
+                          {formatVehicleSpeed(v.ignition, v.speed, v.movementStatus)}
                         </span>
                         <span className="text-[10px] text-slate-400 mt-1 font-mono">
                           {v.timestamp ? formatDateTime(v.timestamp) : 'GPS time N/A'}
@@ -1262,9 +1234,17 @@ function GpsPageContent() {
                               : 'bg-slate-100 text-slate-700'
                           }`}
                         >
-                          {selectedVehicle.speed === null
-                            ? 'Speed N/A'
-                            : `${isVehicleMoving(selectedVehicle) ? 'Moving' : 'Stopped'} (${selectedVehicle.speed} km/h)`}
+                          {shouldDisplayVehicleSpeed(
+                            selectedVehicle.ignition,
+                            selectedVehicle.speed,
+                            selectedVehicle.movementStatus
+                          )
+                            ? `${isVehicleMoving(selectedVehicle) ? 'Moving' : 'Stopped'} (${formatVehicleSpeed(
+                                selectedVehicle.ignition,
+                                selectedVehicle.speed,
+                                selectedVehicle.movementStatus
+                              )})`
+                            : selectedVehicle.movementStatus === 'Stopped' ? 'Stopped' : 'Speed N/A'}
                         </span>
                       </div>
                       {selectedVehicle.providerUnavailable && (
@@ -1323,7 +1303,7 @@ function GpsPageContent() {
                       selectedVehicle.locationDiscrepancyMeters !== undefined &&
                       Math.round(selectedVehicle.locationDiscrepancyMeters) > 0 && (
                         <p className="md:col-span-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-                          Provider location discrepancy: {formatDistance(selectedVehicle.locationDiscrepancyMeters)} between the current WheelsEye and FleetX fixes.
+                          Provider location discrepancy: {formatDistance(selectedVehicle.locationDiscrepancyMeters)} between provider fixes.
                         </p>
                       )}
                   </div>
@@ -1391,6 +1371,7 @@ function GpsPageContent() {
                       latitude={selectedVehicle.latitude}
                       longitude={selectedVehicle.longitude}
                       speed={selectedVehicle.speed}
+                      ignition={selectedVehicle.ignition}
                       movementStatus={selectedVehicle.movementStatus}
                       readableLocation={selectedVehicle.readableLocation}
                       readableTime={selectedVehicle.timestamp
@@ -1499,7 +1480,11 @@ function GpsPageContent() {
                         Current Speed
                       </span>
                       <span className="font-extrabold text-slate-900 text-sm mt-0.5 block">
-                        {selectedVehicle.speed === null || selectedVehicle.speed === undefined ? 'N/A' : String(selectedVehicle.speed)}
+                        {formatVehicleSpeed(
+                          selectedVehicle.ignition,
+                          selectedVehicle.speed,
+                          selectedVehicle.movementStatus
+                        )}
                       </span>
                     </div>
 
@@ -1510,13 +1495,13 @@ function GpsPageContent() {
                       <div className="flex items-center gap-1.5 mt-1 font-bold">
                         <span
                           className={`w-2 h-2 rounded-full ${
-                            selectedVehicle.ignition === true ? 'bg-emerald-500' : selectedVehicle.ignition === false ? 'bg-slate-400' : 'bg-amber-500'
+                            getIgnitionLabel(selectedVehicle.ignition) === 'ON'
+                              ? 'bg-emerald-500'
+                              : getIgnitionLabel(selectedVehicle.ignition) === 'OFF' ? 'bg-slate-400' : 'bg-amber-500'
                           }`}
                         />
-                        <span className={selectedVehicle.ignition === true ? 'text-emerald-700' : selectedVehicle.ignition === false ? 'text-slate-600' : 'text-amber-700'}>
-                          {selectedVehicle.ignition === null || selectedVehicle.ignition === undefined
-                            ? 'N/A'
-                            : `Ignition ${String(selectedVehicle.ignition)}`}
+                        <span className={getIgnitionLabel(selectedVehicle.ignition) === 'ON' ? 'text-emerald-700' : getIgnitionLabel(selectedVehicle.ignition) === 'OFF' ? 'text-slate-600' : 'text-amber-700'}>
+                          {getIgnitionLabel(selectedVehicle.ignition)}
                         </span>
                       </div>
                     </div>

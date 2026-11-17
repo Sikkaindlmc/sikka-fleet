@@ -6,6 +6,7 @@ const GpsHistory = require('../models/GpsHistory');
 const PlantEntry = require('../models/PlantEntry');
 const { verifyToken, checkPageAccess } = require('../middleware/auth');
 const { isValidObjectId } = require('../utils/security');
+const { normalizeVehicleNumber } = require('../services/gpsTimelineService');
 
 const router = express.Router();
 
@@ -33,17 +34,27 @@ function validateAndFormatMobile(mobile) {
 // GET /api/vehicles - List all vehicles
 router.get('/', async (req, res) => {
   try {
-    const [vehicles, gpsVehicleIds] = await Promise.all([
+    const [vehicles, wheelsEyeVehicleIds, fleetXVehicleIds] = await Promise.all([
       Vehicle.find().sort({ createdAt: -1 }),
       GpsHistory.distinct('vehicleId', {
         provider: /wheels.?eye/i,
         archived: { $ne: true },
       }),
+      GpsHistory.distinct('vehicleId', {
+        provider: /fleetx|fleet/i,
+        archived: { $ne: true },
+      }),
     ]);
-    const gpsVehicleIdSet = new Set(gpsVehicleIds.filter(Boolean).map((id) => id.toString()));
+    const wheelsEyeVehicleIdSet = new Set(wheelsEyeVehicleIds.filter(Boolean).map((id) => id.toString()));
+    const fleetXVehicleIdSet = new Set(fleetXVehicleIds.filter(Boolean).map((id) => id.toString()));
     res.json(vehicles.map((vehicle) => ({
       ...vehicle.toObject(),
-      gpsStatus: vehicle.status === 'Active' && gpsVehicleIdSet.has(vehicle._id.toString())
+      gpsProviders: [...new Set([
+        ...(vehicle.gpsProviders || []),
+        ...(wheelsEyeVehicleIdSet.has(vehicle._id.toString()) ? ['WheelsEye GPS'] : []),
+        ...(fleetXVehicleIdSet.has(vehicle._id.toString()) ? ['FleetX'] : []),
+      ])],
+      gpsStatus: wheelsEyeVehicleIdSet.has(vehicle._id.toString())
         ? 'WheelsEye'
         : 'No GPS (WheelsEye)',
     })));
@@ -62,10 +73,11 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Vehicle number is required.' });
     }
 
-    const normalizedVehicleNumber = vehicleNumber.trim().toUpperCase().replace(/\s+/g, '');
+    const normalizedVehicleNumber = normalizeVehicleNumber(vehicleNumber);
 
     // Duplicate check
-    const existingVehicle = await Vehicle.findOne({ vehicleNumber: normalizedVehicleNumber });
+    const existingVehicle = (await Vehicle.find().select('vehicleNumber'))
+      .find((vehicle) => normalizeVehicleNumber(vehicle.vehicleNumber) === normalizedVehicleNumber);
     if (existingVehicle) {
       return res.status(400).json({ error: `Vehicle with number '${normalizedVehicleNumber}' is already registered.` });
     }
@@ -146,13 +158,11 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ error: 'Vehicle number is required.' });
     }
 
-    const normalizedVehicleNumber = vehicleNumber.trim().toUpperCase().replace(/\s+/g, '');
+    const normalizedVehicleNumber = normalizeVehicleNumber(vehicleNumber);
 
     // Duplicate check if changed
-    const duplicate = await Vehicle.findOne({
-      _id: { $ne: id },
-      vehicleNumber: normalizedVehicleNumber,
-    });
+    const duplicate = (await Vehicle.find({ _id: { $ne: id } }).select('vehicleNumber'))
+      .find((candidate) => normalizeVehicleNumber(candidate.vehicleNumber) === normalizedVehicleNumber);
     if (duplicate) {
       return res.status(400).json({ error: `Vehicle number '${normalizedVehicleNumber}' is already in use.` });
     }

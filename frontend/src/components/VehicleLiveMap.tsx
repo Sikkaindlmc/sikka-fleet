@@ -5,13 +5,15 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { ExternalLink, Crosshair, Layers, Navigation } from 'lucide-react';
 import { useVehicleIcon } from '../lib/vehicleIconContext';
+import { shouldDisplayVehicleSpeed } from '../lib/formatters';
 
 interface VehicleLiveMapProps {
   vehicleNumber: string;
   latitude: number;
   longitude: number;
   speed: string | number | null;
-  movementStatus: 'Moving' | 'Stopped';
+  ignition: string | number | boolean | null;
+  movementStatus: 'Moving' | 'Stopped' | null;
   readableLocation?: string;
   readableTime?: string;
   plantName?: string;
@@ -44,6 +46,7 @@ export default function VehicleLiveMap({
   latitude,
   longitude,
   speed,
+  ignition,
   movementStatus,
   readableLocation,
   readableTime,
@@ -58,6 +61,7 @@ export default function VehicleLiveMap({
 
   const [activeLayer, setActiveLayer] = useState<MapLayerType>('googleRoad');
   const [showLayerMenu, setShowLayerMenu] = useState(false);
+  const displaySpeed = shouldDisplayVehicleSpeed(ignition, speed, movementStatus) ? speed : null;
 
   // Helper to create the custom vehicle icon pin HTML
   const createVehiclePinHtml = (
@@ -68,7 +72,7 @@ export default function VehicleLiveMap({
   ) => {
     const isCustom = !!iconUrl;
     const movingBadge = isMoving
-      ? `<span style="background:#10b981;color:#ffffff;font-size:9px;padding:1px 5px;border-radius:9999px;font-weight:700;">${curSpeed === null ? 'N/A' : String(curSpeed)}</span>`
+      ? `<span style="background:#10b981;color:#ffffff;font-size:9px;padding:1px 5px;border-radius:9999px;font-weight:700;">${curSpeed === null ? 'N/A' : `${curSpeed} km/h`}</span>`
       : `<span style="background:#64748b;color:#ffffff;font-size:9px;padding:1px 5px;border-radius:9999px;font-weight:700;">Stopped</span>`;
 
     const iconContent = isCustom
@@ -163,8 +167,8 @@ export default function VehicleLiveMap({
     if (!mapInstanceRef.current) return;
     const map = mapInstanceRef.current;
 
-    const isMoving = movementStatus === 'Moving';
-    const pinHtml = createVehiclePinHtml(vehicleIcon, vehicleNumber, isMoving, speed);
+    const isMoving = movementStatus !== 'Stopped' && displaySpeed !== null;
+    const pinHtml = createVehiclePinHtml(vehicleIcon, vehicleNumber, isMoving, displaySpeed);
 
     const customDivIcon = L.divIcon({
       className: 'vehicle-custom-pin-marker',
@@ -179,7 +183,7 @@ export default function VehicleLiveMap({
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
           <span style="font-weight:800;font-size:13px;color:#0f172a;">${vehicleNumber}</span>
           <span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:9999px;background:${isMoving ? '#d1fae5' : '#f1f5f9'};color:${isMoving ? '#065f46' : '#475569'};">
-            ${isMoving ? (speed === null ? 'N/A' : String(speed)) : 'Stopped'}
+              ${isMoving ? (displaySpeed === null ? 'N/A' : `${displaySpeed} km/h`) : 'Stopped'}
           </span>
         </div>
         ${readableLocation ? `<p style="font-size:11px;color:#334155;margin:0 0 4px 0;line-height:1.3;">${readableLocation}</p>` : ''}
@@ -203,7 +207,7 @@ export default function VehicleLiveMap({
 
     // Pan map to vehicle position
     map.panTo([latitude, longitude], { animate: true, duration: 0.5 });
-  }, [latitude, longitude, vehicleNumber, speed, movementStatus, vehicleIcon, readableLocation, readableTime]);
+  }, [latitude, longitude, vehicleNumber, displaySpeed, movementStatus, vehicleIcon, readableLocation, readableTime]);
 
   // Recenter map button handler
   const handleRecenter = () => {
@@ -233,10 +237,10 @@ export default function VehicleLiveMap({
             </span>
             <span
               className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
-                movementStatus === 'Moving' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                displaySpeed !== null ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
               }`}
             >
-              {movementStatus === 'Moving' ? (speed === null ? 'N/A' : String(speed)) : 'Stopped'}
+              {displaySpeed !== null ? `${displaySpeed} km/h` : movementStatus === 'Stopped' ? 'Stopped' : 'N/A'}
             </span>
           </div>
           <span className="text-[10px] text-slate-500 font-medium block truncate max-w-[200px] sm:max-w-[280px]">

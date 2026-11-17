@@ -7,7 +7,7 @@ Enterprise fleet management, plant geofencing, and telematics tracking system bu
 - **Dashboard**: Live plant geofencing monitoring with entry timestamps, distances, and Excel `.xls` export.
 - **Plant Management**: Add, configure, and monitor plants with custom circular geofence perimeters.
 - **Vehicle Register**: Manage fleet vehicles (Own Fleet, Hired, Rental) with custom driver attributions.
-- **GPS Telematics**: Independent WheelsEye and FleetX integrations, with 30-minute scheduled sync and dispatch planning.
+- **GPS Telematics**: WheelsEye and FleetX integrations with 30-minute scheduled sync and dispatch planning.
 - **User Management**: Role-based access control (Admin & Plant Operators) with plant-level permissions.
 - **MongoDB Atlas Integration**: Cloud MongoDB connection with automatic schema validation and indexes.
 
@@ -26,9 +26,9 @@ Enterprise fleet management, plant geofencing, and telematics tracking system bu
 
 ### GPS synchronization
 
-The GitHub Actions workflow in `.github/workflows/gps-sync.yml` calls the shared GPS sync endpoint every 30 minutes. Each scheduled run starts WheelsEye and FleetX independently. Configure repository Actions secrets `BACKEND_URL` (backend origin, without `/api`) and `CRON_SECRET` (matching the backend environment variable), and enable Actions for the repository. The schedule runs at `:00` and `:30` UTC; these are also `:30` and `:00` IST because IST is UTC+05:30. No Vercel Cron plan upgrade is required. The in-process scheduler is disabled unless `GPS_SCHEDULER_MODE=server`; use it only on an always-on backend and do not enable both schedulers.
+Each scheduled run synchronizes both WheelsEye and FleetX. The GitHub Actions workflow in `.github/workflows/gps-sync.yml` calls the shared GPS sync endpoint every 30 minutes; configure repository Actions secrets `BACKEND_URL` (backend origin, without `/api`) and `CRON_SECRET` (matching the backend environment variable), and enable Actions for the repository. The schedule runs at `:00` and `:30` UTC; these are also `:30` and `:00` IST because IST is UTC+05:30. For an always-on backend, set `GPS_SCHEDULER_MODE=server` to use the in-process scheduler instead. Configure only one scheduler.
 
-Configure each provider and credential separately in GPS Settings or with `WHEELSEYE_API_URL` / `WHEELSEYE_API_KEY` and `FLEETX_API_URL` / `FLEETX_API_KEY`. Credentials are stored encrypted when saved through the application. Dashboard controls support individual and combined manual syncs; combined sync reports each provider result separately. Vehicle Register status must be Active for new sync processing and current Dashboard/GPS visibility. Provider history remains separately stored for historical reports.
+Configure WheelsEye with `WHEELSEYE_API_URL` and `WHEELSEYE_API_KEY`. Configure FleetX with `FLEETX_LOGIN_URL`, `FLEETX_API_URL`, `FLEETX_VEHICLE_URL`, `FLEETX_BASIC_AUTH`, `FLEETX_USERNAME`, and `FLEETX_PASSWORD`; the backend uses FleetX's password-grant login to obtain and refresh a bearer token. Keep real credentials in the ignored backend `.env` or deployment secrets, never in `.env.example`. Credentials saved through GPS Settings are stored encrypted. Vehicle Register status must be Active for new sync processing and current Dashboard/GPS visibility.
 
 Set `GPS_STALE_THRESHOLD_MINUTES=30` and `GPS_REPORT_MAX_GAP_MINUTES=90` in the backend environment to configure the GPS freshness and timeline gap thresholds. Vendor timestamps must include an explicit timezone; all report day boundaries use `Asia/Kolkata`.
 
@@ -43,7 +43,7 @@ node scripts/rebuildDailyGpsReports.js --from=2026-01-01 --to=2026-01-31
 
 The GPS cleanup script defaults to preview and may delete legacy manual-source records if run with `--execute`. Do not run that cleanup against production data.
 
-Provider-specific open zone sessions require a unique index containing both vehicle number and provider. For deployments that already created the old vehicle-only index, run the migration before enabling FleetX synchronization:
+Open zone sessions require a unique index containing both vehicle number and provider. For deployments that already created the old vehicle-only index, run the migration before enabling WheelsEye synchronization:
 
 ```powershell
 cd backend
@@ -79,6 +79,8 @@ JWT_SECRET=your_jwt_secret_key
 MONGODB_URI=mongodb+srv://<username>:<password>@sikka-fleet.hubg2m2.mongodb.net/?retryWrites=true&w=majority
 MONGODB_DB_NAME=sikka_fleet
 ```
+
+For frontend development, create `frontend/.env.local` from `frontend/.env.example`. Set `NEXT_PUBLIC_API_URL` to the backend API base URL, including `/api` (for example, `http://127.0.0.1:5000/api`). For a production build, configure it to the deployed API URL.
 
 ### 3. Run the Application
 From the project root:

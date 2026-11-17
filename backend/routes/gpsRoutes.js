@@ -3,11 +3,10 @@ const GpsSetting = require('../models/GpsSetting');
 const { verifyToken, checkPageAccess, requireRole } = require('../middleware/auth');
 const { testGpsConnection } = require('../services/gpsPollerService');
 const {
-  DEFAULT_FLEETX_URL,
   executeGpsSync,
   executeGpsSyncForBothProviders,
-  fetchFleetxTelemetry,
   getGpsProvider,
+  fetchFleetxTelemetry,
 } = require('../services/gpsSyncService');
 const { generateFleetReport } = require('../services/reportCalculationService');
 const { getFleetGpsSnapshot } = require('../services/gpsDataService');
@@ -23,13 +22,44 @@ const {
   maskGpsCredential,
 } = require('../utils/gpsCredentialCrypto');
 
-function getClientApiUrl(setting) {
+function getProviderEnvConfig(provider = 'WheelsEye GPS') {
+  const normalized = String(provider || '').toLowerCase();
+  if (normalized.includes('fleet')) {
+    const loginConfigured = Boolean(
+      process.env.FLEETX_LOGIN_URL?.trim() &&
+      process.env.FLEETX_USERNAME?.trim() &&
+      process.env.FLEETX_PASSWORD?.trim()
+    );
+    return {
+      envApiUrl: (process.env.FLEETX_API_URL || '').trim(),
+      envApiKey: (process.env.FLEETX_BEARER_TOKEN || process.env.FLEETX_API_KEY || process.env.FLEETX_BASIC_AUTH || '').trim() ||
+        (loginConfigured ? 'FleetX login credentials configured' : ''),
+      tokenKeys: ['accessToken', 'access_token', 'apiKey', 'api_key', 'token', 'key', 'secret'],
+      envApiKeyName: loginConfigured
+        ? 'FLEETX login credentials'
+        : 'FLEETX_API_KEY / FLEETX_BEARER_TOKEN / FLEETX_BASIC_AUTH',
+      envUrlSourceName: 'FLEETX_API_URL query',
+      savedSourceName: 'GPS settings',
+    };
+  }
+  return {
+    envApiUrl: (process.env.WHEELSEYE_API_URL || '').trim(),
+    envApiKey: ((process.env.WHEELSEYE_API_KEY || process.env.WHEELSEYE_ACCESS_TOKEN || '').trim()),
+    tokenKeys: ['accessToken', 'access_token', 'apiKey', 'api_key', 'token', 'key', 'secret'],
+    envApiKeyName: 'WHEELSEYE_API_KEY / WHEELSEYE_ACCESS_TOKEN',
+    envUrlSourceName: 'WHEELSEYE_API_URL query',
+    savedSourceName: 'GPS settings',
+  };
+}
+
+function getClientApiUrl(setting, provider = 'WheelsEye GPS') {
   if (!setting?.apiUrl) return '';
   let url = setting.apiUrl;
   if (setting.encryptedApiKey) {
     try {
       const parsed = new URL(url);
-      if (!parsed.searchParams.has('accessToken')) {
+      const envConfig = getProviderEnvConfig(provider);
+      if (!parsed.searchParams.has(envConfig.tokenKeys[0]) && !parsed.searchParams.has('accessToken')) {
         parsed.searchParams.set('accessToken', decryptGpsCredential(setting.encryptedApiKey));
         url = parsed.toString();
       }
@@ -40,20 +70,21 @@ function getClientApiUrl(setting) {
   return maskUrlSecret(url);
 }
 
-function getEffectiveGpsCredential(setting) {
-  const envApiKey = (process.env.WHEELSEYE_API_KEY || '').trim();
+function getEffectiveGpsCredential(setting, provider = 'WheelsEye GPS') {
+  const envConfig = getProviderEnvConfig(provider);
+  const envApiKey = envConfig.envApiKey;
   let envUrlToken = '';
   let savedUrlToken = '';
   try {
-    const url = new URL(process.env.WHEELSEYE_API_URL || '');
-    for (const key of ['accessToken', 'access_token', 'apiKey', 'api_key', 'token', 'key', 'secret']) {
+    const url = new URL(envConfig.envApiUrl || '');
+    for (const key of envConfig.tokenKeys) {
       envUrlToken = url.searchParams.get(key) || '';
       if (envUrlToken) break;
     }
   } catch (_) {}
   try {
     const url = new URL(setting?.apiUrl || '');
-    for (const key of ['accessToken', 'access_token', 'apiKey', 'api_key', 'token', 'key', 'secret']) {
+    for (const key of envConfig.tokenKeys) {
       savedUrlToken = url.searchParams.get(key) || '';
       if (savedUrlToken) break;
     }
@@ -62,11 +93,11 @@ function getEffectiveGpsCredential(setting) {
   return {
     credential: envApiKey || envUrlToken || savedCredential || savedUrlToken,
     source: envApiKey
-      ? 'WHEELSEYE_API_KEY'
+      ? envConfig.envApiKeyName
       : envUrlToken
-        ? 'WHEELSEYE_API_URL query'
+        ? envConfig.envUrlSourceName
         : savedCredential
-          ? 'GPS settings'
+          ? envConfig.savedSourceName
           : savedUrlToken
             ? 'GPS settings URL query'
           : 'none',
@@ -78,7 +109,8 @@ function isCredentialEncryptionError(error) {
 }
 
 function getProviderSettingQuery(provider) {
-  const providerPattern = new RegExp(provider === 'Fleetx' ? 'fleetx' : 'wheels.?eye', 'i');
+  const isFleetX = String(provider || '').toLowerCase().includes('fleet');
+  const providerPattern = isFleetX ? /fleetx|fleet/i : /wheels.?eye/i;
   return {
     archived: { $ne: true },
     $or: [{ provider: providerPattern }, { apiUrl: providerPattern }],
@@ -86,37 +118,22 @@ function getProviderSettingQuery(provider) {
 }
 
 function getProviderCredential(setting, provider) {
-  if (provider === 'Fleetx') {
-    const apiKey = (process.env.FLEETX_API_KEY || process.env.FLEETX_BEARER_TOKEN || '').trim() ||
-      decryptGpsCredential(setting?.encryptedApiKey || '').trim();
-    return {
-      credential: apiKey,
-      source: (process.env.FLEETX_API_KEY || '').trim()
-        ? 'FLEETX_API_KEY'
-        : (process.env.FLEETX_BEARER_TOKEN || '').trim()
-          ? 'FLEETX_BEARER_TOKEN'
-          : apiKey ? 'GPS settings' : 'none',
-    };
-  }
-  return getEffectiveGpsCredential(setting);
+  return getEffectiveGpsCredential(setting, provider);
 }
 
 function getProviderApiUrl(setting, provider) {
-  if (provider === 'Fleetx') {
-    return (process.env.FLEETX_API_URL || '').trim() ||
-      setting?.apiUrl ||
-      DEFAULT_FLEETX_URL;
-  }
-  return (process.env.WHEELSEYE_API_URL || '').trim() || getClientApiUrl(setting);
+  const envConfig = getProviderEnvConfig(provider);
+  return (envConfig.envApiUrl || '').trim() || getClientApiUrl(setting, provider);
 }
 
 function serializeProviderSetting(setting, provider) {
   const credential = getProviderCredential(setting, provider);
+  const environmentUrl = getProviderEnvConfig(provider).envApiUrl;
   return {
     _id: setting?._id,
     provider,
     apiUrl: maskUrlSecret(getProviderApiUrl(setting, provider)),
-    status: setting?.status || 'Active',
+    status: environmentUrl ? 'Active' : setting?.status || 'Active',
     connectionStatus: setting?.connectionStatus || 'Pending',
     lastSync: setting?.lastSync || null,
     lastSuccessAt: setting?.lastSuccessAt || null,
@@ -163,7 +180,7 @@ router.get('/', async (req, res) => {
       _id: setting?._id,
       provider: 'WheelsEye GPS',
       apiUrl: maskUrlSecret(effectiveUrl),
-      status: setting?.status || 'Active',
+      status: process.env.WHEELSEYE_API_URL?.trim() ? 'Active' : setting?.status || 'Active',
       connectionStatus: setting?.connectionStatus || 'Pending',
       lastSync: setting?.lastSync || null,
       lastSuccessAt: setting?.lastSuccessAt || null,
@@ -192,16 +209,23 @@ router.get('/', async (req, res) => {
 
 router.get('/providers', async (req, res) => {
   try {
-    const [wheelsEyeSetting, fleetxSetting] = await Promise.all([
-      GpsSetting.findOne(getProviderSettingQuery('WheelsEye GPS')).sort({ updatedAt: -1 }),
-      GpsSetting.findOne(getProviderSettingQuery('Fleetx')).sort({ updatedAt: -1 }),
-    ]);
-    res.json({
-      providers: [
-        serializeProviderSetting(wheelsEyeSetting, 'WheelsEye GPS'),
-        serializeProviderSetting(fleetxSetting, 'Fleetx'),
+    const providerSettings = await GpsSetting.find({
+      archived: { $ne: true },
+      $or: [
+        { provider: /wheels.?eye/i },
+        { provider: /fleetx|fleet/i },
+        { apiUrl: /wheelseye/i },
+        { apiUrl: /fleetx|fleet/i },
       ],
-    });
+    }).sort({ updatedAt: -1 });
+    const providers = [
+      'WheelsEye GPS',
+      'FleetX',
+    ].map((provider) => serializeProviderSetting(
+      providerSettings.find((item) => new RegExp(provider === 'WheelsEye GPS' ? 'wheels.?eye' : 'fleetx|fleet', 'i').test(item.provider || '') || new RegExp(provider === 'WheelsEye GPS' ? 'wheelseye' : 'fleetx|fleet', 'i').test(item.apiUrl || '')) || null,
+      provider
+    ));
+    res.json({ providers });
   } catch (error) {
     const encryptionError = isCredentialEncryptionError(error);
     res.status(encryptionError ? 503 : 500).json({
@@ -268,9 +292,12 @@ router.post('/providers/:provider/test-connection', gpsSyncLimiter, async (req, 
   try {
     const provider = getGpsProvider(req.params.provider);
     const setting = await GpsSetting.findOne(getProviderSettingQuery(provider)).sort({ updatedAt: -1 });
-    const result = provider === 'Fleetx'
+    const result = provider === 'FleetX'
       ? await fetchFleetxTelemetry(setting ? [setting] : [])
       : await testGpsConnection();
+    if (provider !== 'FleetX' && result.status !== 'Connected') {
+      return res.status(502).json(result);
+    }
     const now = new Date();
     await GpsSetting.findOneAndUpdate(
       getProviderSettingQuery(provider),
@@ -296,14 +323,15 @@ router.post('/providers/:provider/test-connection', gpsSyncLimiter, async (req, 
     const provider = (() => {
       try { return getGpsProvider(req.params.provider); } catch (_) { return 'GPS Provider'; }
     })();
-    const statusCode = error.fleetxStatus?.status || error.wheelsEyeStatus?.status || error.response?.status || 'REQUEST_FAILED';
+    const providerStatus = error.wheelsEyeStatus || error.fleetXStatus;
+    const statusCode = providerStatus?.status || error.response?.status || 'REQUEST_FAILED';
     await GpsSetting.findOneAndUpdate(
       getProviderSettingQuery(provider),
       {
         $set: {
           provider,
-          connectionStatus: error.fleetxStatus?.authFailed || error.wheelsEyeStatus?.authFailed ? 'AUTH_FAILED' : 'Connection Failed',
-          lastError: error.message || `${provider} request failed.`,
+          connectionStatus: providerStatus?.authFailed ? 'AUTH_FAILED' : 'Connection Failed',
+          lastError: providerStatus?.error || error.message || `${provider} request failed.`,
           lastErrorAt: new Date(),
           lastErrorCode: String(statusCode),
         },
@@ -315,7 +343,7 @@ router.post('/providers/:provider/test-connection', gpsSyncLimiter, async (req, 
       status: 'Connection Failed',
       provider,
       httpStatus: error.response?.status || null,
-      message: error.message || `${provider} connection failed.`,
+      message: providerStatus?.error || error.message || `${provider} connection failed.`,
     });
   }
 });
@@ -521,9 +549,9 @@ router.get('/live-vehicles', async (req, res) => {
   try {
     const { getReadableLocation } = require('../services/locationHelper');
 
-    const [setting, fleetxSetting] = await Promise.all([
+    const [wheelsEyeSetting, fleetXSetting] = await Promise.all([
       GpsSetting.findOne(getProviderSettingQuery('WheelsEye GPS')).sort({ updatedAt: -1 }),
-      GpsSetting.findOne(getProviderSettingQuery('Fleetx')).sort({ updatedAt: -1 }),
+      GpsSetting.findOne(getProviderSettingQuery('FleetX')).sort({ updatedAt: -1 }),
     ]);
     const snapshot = await getFleetGpsSnapshot();
     const liveFleet = snapshot.fleet.filter((item) =>
@@ -556,7 +584,7 @@ router.get('/live-vehicles', async (req, res) => {
         vehicleId: v._id,
         driverName: v.driverName || 'N/A',
         mobile: v.mobile || '',
-        deviceNumber: v.gpsDeviceId || 'N/A',
+        deviceNumber: location.deviceNumber || v.gpsDeviceId || 'N/A',
         vendorName: location.provider,
         provider: location.provider,
         vehicleType: v.fleetType || 'N/A',
@@ -566,9 +594,9 @@ router.get('/live-vehicles', async (req, res) => {
         longitude: location.longitude,
         speed: location.speed,
         ignition: location.ignition,
-        movementStatus: location.movementStatus || st.movementStatus || null,
+        movementStatus: location.movementStatus || null,
         dataCheck: false,
-        angle: null,
+        angle: location.angle,
         chargeOn: null,
         timestamp: gpsTime,
         systemSyncTimestamp: location.systemSyncTimestamp,
@@ -602,20 +630,20 @@ router.get('/live-vehicles', async (req, res) => {
 
     res.json({
       totalCount: liveVehicles.length,
-      provider: 'WheelsEye GPS & Fleetx',
-      apiUrl: setting ? maskUrlSecret(setting.apiUrl) : '',
-      lastSync: snapshot.lastUpdated || setting?.lastSync || null,
+      provider: 'Both GPS providers',
+      apiUrl: wheelsEyeSetting ? maskUrlSecret(wheelsEyeSetting.apiUrl) : '',
+      lastSync: snapshot.lastUpdated || null,
       wheelsEyeStatus: {
-        connectionStatus: setting?.connectionStatus || 'Pending',
-        lastError: setting?.lastError || '',
-        lastErrorCode: setting?.lastErrorCode || '',
-        lastSuccessAt: setting?.lastSuccessAt || null,
+        connectionStatus: wheelsEyeSetting?.connectionStatus || 'Pending',
+        lastError: wheelsEyeSetting?.lastError || '',
+        lastErrorCode: wheelsEyeSetting?.lastErrorCode || '',
+        lastSuccessAt: wheelsEyeSetting?.lastSuccessAt || null,
       },
-      fleetxStatus: {
-        connectionStatus: fleetxSetting?.connectionStatus || 'Pending',
-        lastError: fleetxSetting?.lastError || '',
-        lastErrorCode: fleetxSetting?.lastErrorCode || '',
-        lastSuccessAt: fleetxSetting?.lastSuccessAt || null,
+      fleetXStatus: {
+        connectionStatus: fleetXSetting?.connectionStatus || 'Pending',
+        lastError: fleetXSetting?.lastError || '',
+        lastErrorCode: fleetXSetting?.lastErrorCode || '',
+        lastSuccessAt: fleetXSetting?.lastSuccessAt || null,
       },
       vehicles: liveVehicles,
     });

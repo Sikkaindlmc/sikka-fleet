@@ -99,7 +99,7 @@ router.get('/logs', (req, res, next) => {
     }
 
     try {
-      filter.provider = new RegExp(getGpsProvider(req.query.provider || 'WheelsEye GPS') === 'Fleetx' ? 'fleetx' : 'wheels.?eye', 'i');
+      filter.provider = /wheels.?eye/i;
     } catch (error) {
       return res.status(400).json({ success: false, error: error.message });
     }
@@ -109,7 +109,7 @@ router.get('/logs', (req, res, next) => {
       .sort({ startedAt: -1 })
       .limit(limit);
     const setting = await GpsSetting.findOne({
-      provider: new RegExp(getGpsProvider(req.query.provider || 'WheelsEye GPS') === 'Fleetx' ? 'fleetx' : 'wheels.?eye', 'i'),
+      provider: /wheels.?eye/i,
       archived: { $ne: true },
     }).sort({ updatedAt: -1 });
 

@@ -17,11 +17,67 @@ const {
   MAX_GPS_GAP_MS,
   normalizeVehicleNumber,
   classifyGpsSample,
-  uniqueChronologicalSamples,
   latestStayBounds,
 } = require('./gpsTimelineService');
 
 const ZONE_PLANT_IDS = { DASNA: 'DASNA', SALT: 'Salt Plant', TEA: 'Tea Plant' };
+const DEFAULT_GPS_PROVIDER = 'WheelsEye GPS';
+
+function normalizeGpsProvider(provider) {
+  const value = String(provider || '').trim();
+  if (/fleetx|fleet/i.test(value)) return 'FleetX';
+  if (/wheels.?eye/i.test(value)) return DEFAULT_GPS_PROVIDER;
+  return value || DEFAULT_GPS_PROVIDER;
+}
+
+function providerKey(vehicleId, provider) {
+  return `${vehicleId}:${normalizeGpsProvider(provider)}`;
+}
+
+function latestProviderSample(samples) {
+  return samples.reduce((latest, sample) => {
+    if (!latest) return sample;
+    const sampleTime = new Date(sample.gpsTimestamp).getTime();
+    const latestTime = new Date(latest.gpsTimestamp).getTime();
+    if (sampleTime > latestTime) return sample;
+    if (sampleTime === latestTime &&
+        new Date(sample.syncTime || 0).getTime() > new Date(latest.syncTime || 0).getTime()) {
+      return sample;
+    }
+    return latest;
+  }, null);
+}
+
+function buildStatusSample(vehicle, status, provider) {
+  if (!status?.latest_gps_timestamp ||
+      !Number.isFinite(status.latitude) ||
+      !Number.isFinite(status.longitude)) {
+    return null;
+  }
+  return {
+    vehicleId: vehicle._id,
+    vehicleNumber: vehicle.vehicleNumber,
+    latitude: status.latitude,
+    longitude: status.longitude,
+    gpsTimestamp: status.latest_gps_timestamp,
+    syncTime: status.last_successful_sync_at || status.lastUpdatedAt,
+    speed: status.speed,
+    ignition: status.ignition,
+    movementStatus: status.movementStatus,
+    provider,
+    rawTelemetry: status.rawTelemetry,
+    syncType: status.lastSyncType || status.last_sync_source || null,
+  };
+}
+
+function getSampleMovementStatus(sample) {
+  const rawStatus = String(sample.movementStatus || sample.rawTelemetry?.movementStatus || '').toLowerCase();
+  if (/not\s+moving|stopped|idle|parked/.test(rawStatus)) return 'Stopped';
+  if (/moving|running|driving/.test(rawStatus)) return 'Moving';
+  if (sample.speed === null || sample.speed === undefined || sample.speed === '') return null;
+  const speed = Number(sample.speed);
+  return Number.isFinite(speed) ? (speed > 0 ? 'Moving' : 'Stopped') : null;
+}
 
 function isDashboardEligibleGpsVehicle(item) {
   return Boolean(item?.isRegistered === true &&
@@ -40,6 +96,12 @@ function buildProviderLocation(provider, sample, session, plants, now, health) {
       longitude: null,
       providerTimestamp: null,
       systemSyncTimestamp: null,
+      speed: null,
+      ignition: null,
+      movementStatus: null,
+      deviceNumber: null,
+      angle: null,
+      rawTelemetry: null,
       connectionStatus: health?.connectionStatus || 'Pending',
       lastSuccessfulSyncAt: health?.lastSuccessAt || null,
     };
@@ -90,7 +152,9 @@ function buildProviderLocation(provider, sample, session, plants, now, health) {
     longitude: sample.longitude,
     speed: sample.speed ?? null,
     ignition: sample.ignition ?? null,
-    movementStatus: sample.rawTelemetry?.movementStatus || null,
+    movementStatus: getSampleMovementStatus(sample),
+    deviceNumber: sample.deviceNumber || sample.rawTelemetry?.deviceNumber || null,
+    angle: sample.angle ?? sample.rawTelemetry?.angle ?? null,
     rawTelemetry: sample.rawTelemetry || null,
     syncType: sample.syncType || null,
     providerTimestamp: sample.gpsTimestamp,
@@ -124,35 +188,21 @@ function getLocationDiscrepancyMeters(providerLocations) {
 }
 
 async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } = {}) {
-  const [vehicles, plants, statuses, openSessions, fleetxOpenSessions, fleetxHistory, gpsSettings] = await Promise.all([
-    Vehicle.find(dashboardOnly ? { status: 'Active' } : {}).sort({ vehicleNumber: 1 }),
+  const [vehicles, plants, statuses, openSessions, gpsSettings] = await Promise.all([
+    Vehicle.find({ status: 'Active' }).sort({ vehicleNumber: 1 }),
     Plant.find({ status: 'Active' }).sort({ plantName: 1 }),
-    VehicleCurrentStatus.find({ archived: { $ne: true }, provider: /wheels.?eye/i }),
-    ZoneSession.find({ exitedAt: null, archived: { $ne: true }, provider: /wheels.?eye/i }),
-    ZoneSession.find({ exitedAt: null, archived: { $ne: true }, provider: /fleetx/i }),
-    GpsHistory.find({ provider: /fleetx/i, archived: { $ne: true } })
-      .sort({ gpsTimestamp: 1, syncTime: 1 }),
-    GpsSetting.find({
-      archived: { $ne: true },
-      $or: [{ provider: /wheels.?eye/i }, { provider: /fleetx/i }],
-    })
+    VehicleCurrentStatus.find({ archived: { $ne: true } }),
+    ZoneSession.find({ exitedAt: null, archived: { $ne: true } }),
+    GpsSetting.find({ archived: { $ne: true } })
       .select('provider status connectionStatus lastSuccessAt lastErrorAt lastErrorCode lastError consecutiveFailures'),
   ]);
   const history = await GpsHistory.find({
-    provider: /wheels.?eye/i,
     archived: { $ne: true },
   }).sort({ gpsTimestamp: 1, syncTime: 1 });
-  const historyByVehicleId = new Set();
-  const historyByVehicleNumber = new Set();
   const byVehicleId = new Map();
   const byVehicleNumber = new Map();
   for (const point of history) {
     const numberKey = normalizeVehicleNumber(point.vehicleNumberNormalized || point.vehicleNumber);
-    if (point.vehicleId) {
-      const key = point.vehicleId.toString();
-      historyByVehicleId.add(key);
-    }
-    historyByVehicleNumber.add(numberKey);
     if (!isVerifiedGpsSample(point)) continue;
     if (point.vehicleId) {
       const key = point.vehicleId.toString();
@@ -162,148 +212,110 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } =
     if (!byVehicleNumber.has(numberKey)) byVehicleNumber.set(numberKey, []);
     byVehicleNumber.get(numberKey).push(point);
   }
-  const statusByVehicleId = new Map(statuses.map((status) => [status.vehicleId.toString(), status]));
-  const sessionByVehicleId = new Map(openSessions
-    .filter((session) => session.vehicleId)
-    .map((session) => [session.vehicleId.toString(), session]));
-  const sessionByVehicleNumber = new Map(openSessions.map((session) => [
-    normalizeVehicleNumber(session.vehicleNumberNormalized || session.vehicleNumber),
-    session,
-  ]));
-  const fleetxSessionByVehicleId = new Map(fleetxOpenSessions
-    .filter((session) => session.vehicleId)
-    .map((session) => [session.vehicleId.toString(), session]));
-  const fleetxSessionByVehicleNumber = new Map(fleetxOpenSessions.map((session) => [
-    normalizeVehicleNumber(session.vehicleNumberNormalized || session.vehicleNumber),
-    session,
-  ]));
-  const fleetxByVehicleId = new Map();
-  const fleetxByVehicleNumber = new Map();
-  for (const point of fleetxHistory) {
-    const numberKey = normalizeVehicleNumber(point.vehicleNumberNormalized || point.vehicleNumber);
-    if (!isVerifiedGpsSample(point)) continue;
-    if (point.vehicleId) {
-      const key = point.vehicleId.toString();
-      if (!fleetxByVehicleId.has(key)) fleetxByVehicleId.set(key, []);
-      fleetxByVehicleId.get(key).push(point);
+  const statusesByVehicleId = new Map();
+  const statusByVehicleProvider = new Map();
+  for (const status of statuses) {
+    const vehicleId = status.vehicleId?.toString();
+    if (!vehicleId) continue;
+    const provider = normalizeGpsProvider(status.provider);
+    if (!statusesByVehicleId.has(vehicleId)) statusesByVehicleId.set(vehicleId, []);
+    statusesByVehicleId.get(vehicleId).push(status);
+    statusByVehicleProvider.set(providerKey(vehicleId, provider), status);
+  }
+  const sessionByVehicleProvider = new Map();
+  const sessionByNumberProvider = new Map();
+  for (const session of openSessions) {
+    const provider = normalizeGpsProvider(session.provider);
+    if (session.vehicleId) {
+      sessionByVehicleProvider.set(providerKey(session.vehicleId.toString(), provider), session);
     }
-    if (!fleetxByVehicleNumber.has(numberKey)) fleetxByVehicleNumber.set(numberKey, []);
-    fleetxByVehicleNumber.get(numberKey).push(point);
+    sessionByNumberProvider.set(
+      `${normalizeVehicleNumber(session.vehicleNumberNormalized || session.vehicleNumber)}:${provider}`,
+      session
+    );
   }
   const providerHealthByName = new Map(gpsSettings.map((setting) => [
-    /fleetx/i.test(setting.provider || '') ? 'Fleetx' : 'WheelsEye GPS',
+    normalizeGpsProvider(setting.provider || setting.apiUrl),
     setting,
   ]));
 
   const fleet = vehicles.map((vehicle) => {
     const vehicleNumberNormalized = normalizeVehicleNumber(vehicle.vehicleNumber);
-    const samples = byVehicleId.get(vehicle._id.toString()) || byVehicleNumber.get(vehicleNumberNormalized) || [];
-    const fleetxSamples = fleetxByVehicleId.get(vehicle._id.toString()) ||
-      fleetxByVehicleNumber.get(vehicleNumberNormalized) || [];
-    const latestFleetxSample = fleetxSamples[fleetxSamples.length - 1] || null;
-    const fleetxSession = fleetxSessionByVehicleId.get(vehicle._id.toString()) ||
-      fleetxSessionByVehicleNumber.get(vehicleNumberNormalized);
-    const fleetxLocation = buildProviderLocation(
-      'Fleetx',
-      latestFleetxSample,
-      fleetxSession,
-      plants,
-      now,
-      providerHealthByName.get('Fleetx')
-    );
-    const chronological = uniqueChronologicalSamples(samples, plants);
-    const latestPoint = chronological[chronological.length - 1];
-    let latestSample = latestPoint
-      ? samples
-          .filter((sample) => new Date(sample.gpsTimestamp).getTime() === latestPoint.time.getTime())
-          .sort((a, b) => new Date(b.syncTime).getTime() - new Date(a.syncTime).getTime())[0]
+    const vehicleId = vehicle._id.toString();
+    const sampleMap = new Map();
+    for (const sample of [
+      ...(byVehicleId.get(vehicleId) || []),
+      ...(byVehicleNumber.get(vehicleNumberNormalized) || []),
+    ]) {
+      const sampleId = sample._id?.toString() ||
+        `${normalizeGpsProvider(sample.provider)}:${sample.gpsTimestamp}:${sample.latitude}:${sample.longitude}`;
+      if (!sampleMap.has(sampleId)) sampleMap.set(sampleId, sample);
+    }
+    const vehicleSamples = [...sampleMap.values()];
+    const vehicleStatuses = statusesByVehicleId.get(vehicleId) || [];
+    const providerNames = new Set([
+      ...(vehicle.gpsProviders || []),
+      ...vehicleSamples.map((sample) => sample.provider),
+      ...vehicleStatuses.map((status) => status.provider),
+    ].map(normalizeGpsProvider));
+
+    let latestSample = latestProviderSample(vehicleSamples);
+    let sampleProvider = latestSample ? normalizeGpsProvider(latestSample.provider) : null;
+    let storedStatus = sampleProvider
+      ? statusByVehicleProvider.get(providerKey(vehicleId, sampleProvider))
       : null;
-    const storedStatus = statusByVehicleId.get(vehicle._id.toString());
-    const openSession = sessionByVehicleId.get(vehicle._id.toString()) ||
-      sessionByVehicleNumber.get(vehicleNumberNormalized);
-    if (!latestSample && latestFleetxSample) {
-      const location = fleetxLocation;
-      const gpsTimestamp = new Date(latestFleetxSample.gpsTimestamp);
-      const durationEnd = !location.isStale &&
-        location.connectionStatus === 'Connected' &&
-        (providerHealthByName.get('Fleetx')?.consecutiveFailures || 0) === 0
-        ? now.getTime()
-        : gpsTimestamp.getTime();
-      const stayHours = location.status === 'Inside' && location.entryDateTime
-        ? msToHHMM(durationEnd - new Date(location.entryDateTime).getTime())
-        : '00:00';
-      const wheelseyeLocation = buildProviderLocation(
-        'WheelsEye GPS',
-        null,
-        openSession,
-        plants,
-        now,
-        providerHealthByName.get('WheelsEye GPS')
-      );
-      const providerLocations = [wheelseyeLocation, location];
-      return {
-        vehicle,
-        storedStatus,
-        samples: fleetxSamples,
-        hasGps: true,
-        status: location.status,
-        plant: location.plantId ? { id: location.plantId, name: location.plantName } : null,
-        plantName: location.plantName,
-        distanceMeter: location.distanceMeter,
-        gpsTimestamp,
-        entryGpsTimestamp: location.entryDateTime,
-        statusDetectedAt: location.detectedAt,
-        outsideSince: location.status === 'Outside' ? fleetxSession?.enteredAt || null : null,
-        isStale: location.isStale,
-        gpsStatus: location.gpsStatus,
-        stayHours,
-        outsideHours: '00:00',
-        latitude: latestFleetxSample.latitude,
-        longitude: latestFleetxSample.longitude,
-        speed: latestFleetxSample.speed,
-        ignition: latestFleetxSample.ignition,
-        provider: 'Fleetx',
-        lastSyncType: latestFleetxSample.syncType || null,
-        rawTelemetry: latestFleetxSample.rawTelemetry,
-        providerUnavailable: location.connectionStatus !== 'Connected'
-          ? { provider: 'Fleetx', lastSuccessAt: location.lastSuccessfulSyncAt }
-          : null,
-        providerLocations,
-        locationDiscrepancyMeters: null,
-        isRegistered: true,
-      };
-    }
-    const hasHistory = historyByVehicleId.has(vehicle._id.toString()) ||
-      historyByVehicleNumber.has(vehicleNumberNormalized);
-    if (!latestSample && !hasHistory && storedStatus?.latest_gps_timestamp &&
-        Number.isFinite(storedStatus.latitude) && Number.isFinite(storedStatus.longitude)) {
-      latestSample = {
-        vehicleId: vehicle._id,
-        vehicleNumber: vehicle.vehicleNumber,
-        latitude: storedStatus.latitude,
-        longitude: storedStatus.longitude,
-        gpsTimestamp: storedStatus.latest_gps_timestamp,
-        speed: storedStatus.speed,
-        ignition: storedStatus.ignition,
-        provider: storedStatus.provider,
-        rawTelemetry: storedStatus.rawTelemetry,
-        syncType: storedStatus.lastSyncType || storedStatus.last_sync_source || null,
-      };
-    }
     if (!latestSample) {
-      const savedProvider = storedStatus?.provider;
-      const savedProviderHealth = savedProvider === 'WheelsEye GPS'
-        ? providerHealthByName.get('WheelsEye GPS')
-        : null;
-      const wheelseyeLocation = buildProviderLocation(
-        'WheelsEye GPS',
-        null,
-        openSession,
+      const fallbackStatus = vehicleStatuses
+        .filter((status) =>
+          status.latest_gps_timestamp &&
+          Number.isFinite(status.latitude) &&
+          Number.isFinite(status.longitude)
+        )
+        .sort((a, b) =>
+          new Date(b.latest_gps_timestamp).getTime() - new Date(a.latest_gps_timestamp).getTime()
+        )[0];
+      if (fallbackStatus) {
+        sampleProvider = normalizeGpsProvider(fallbackStatus.provider);
+        storedStatus = fallbackStatus;
+        latestSample = buildStatusSample(vehicle, fallbackStatus, sampleProvider);
+      }
+    }
+
+    if (sampleProvider) providerNames.add(sampleProvider);
+    const providerLocations = [...providerNames].map((provider) => {
+      const providerSamples = vehicleSamples.filter(
+        (sample) => normalizeGpsProvider(sample.provider) === provider
+      );
+      const providerStatus = statusByVehicleProvider.get(providerKey(vehicleId, provider));
+      const providerSample = latestProviderSample(providerSamples) ||
+        buildStatusSample(vehicle, providerStatus, provider);
+      const session = sessionByVehicleProvider.get(providerKey(vehicleId, provider)) ||
+        sessionByNumberProvider.get(`${vehicleNumberNormalized}:${provider}`);
+      return buildProviderLocation(
+        provider,
+        providerSample,
+        session,
         plants,
         now,
-        providerHealthByName.get('WheelsEye GPS')
+        providerHealthByName.get(provider)
       );
-      const providerLocations = [wheelseyeLocation, fleetxLocation];
+    });
+
+    const samples = sampleProvider
+      ? vehicleSamples.filter((sample) => normalizeGpsProvider(sample.provider) === sampleProvider)
+      : vehicleSamples;
+    const openSession = sampleProvider
+      ? sessionByVehicleProvider.get(providerKey(vehicleId, sampleProvider)) ||
+        sessionByNumberProvider.get(`${vehicleNumberNormalized}:${sampleProvider}`)
+      : null;
+    if (!latestSample) {
+      const unavailableProvider = [...providerNames].find((provider) => {
+        const health = providerHealthByName.get(provider);
+        return health && health.connectionStatus !== 'Connected';
+      });
+      const unavailableHealth = unavailableProvider
+        ? providerHealthByName.get(unavailableProvider)
+        : null;
       return {
         vehicle,
         storedStatus,
@@ -324,8 +336,8 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } =
         speed: null,
         ignition: null,
         provider: null,
-        providerUnavailable: savedProvider && savedProviderHealth && savedProviderHealth.connectionStatus !== 'Connected'
-          ? { provider: savedProvider, lastSuccessAt: savedProviderHealth.lastSuccessAt || null }
+        providerUnavailable: unavailableProvider
+          ? { provider: unavailableProvider, lastSuccessAt: unavailableHealth.lastSuccessAt || null }
           : null,
         providerLocations,
         locationDiscrepancyMeters: getLocationDiscrepancyMeters(providerLocations),
@@ -361,10 +373,7 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } =
       MAX_GPS_GAP_MS
     );
     const gpsTimestamp = new Date(latestSample.gpsTimestamp);
-    const sampleProvider = latestSample.provider || storedStatus?.provider || null;
-    const sampleProviderHealth = sampleProvider === 'WheelsEye GPS'
-      ? providerHealthByName.get('WheelsEye GPS')
-      : null;
+    const sampleProviderHealth = providerHealthByName.get(sampleProvider);
     const entryGpsTimestamp = sessionIsCurrent
       ? openSession.entryGpsTimestamp || openSession.enteredAt
       : bounds.entryGpsTimestamp;
@@ -388,15 +397,6 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } =
       ? msToHHMM(durationEnd - new Date(outsideSince).getTime())
       : '00:00';
 
-    const wheelseyeLocation = buildProviderLocation(
-      'WheelsEye GPS',
-      latestSample,
-      openSession,
-      plants,
-      now,
-      providerHealthByName.get('WheelsEye GPS')
-    );
-    const providerLocations = [wheelseyeLocation, fleetxLocation];
     return {
       vehicle,
       storedStatus,
@@ -432,103 +432,6 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } =
       isRegistered: true,
     };
   });
-
-  if (!dashboardOnly) {
-    const registeredNumbers = new Set(vehicles.map((vehicle) => normalizeVehicleNumber(vehicle.vehicleNumber)));
-    for (const [vehicleNumberNormalized, samples] of byVehicleNumber) {
-      if (registeredNumbers.has(vehicleNumberNormalized)) continue;
-      const latestSample = samples.reduce((latest, sample) => (
-        !latest || new Date(sample.gpsTimestamp) > new Date(latest.gpsTimestamp) ? sample : latest
-      ), null);
-      if (!latestSample) continue;
-
-      const evaluation = getVehiclePlantStatus(
-        {
-          latitude: latestSample.latitude,
-          longitude: latestSample.longitude,
-          gpsTimestamp: latestSample.gpsTimestamp,
-        },
-        plants,
-        { now, staleThresholdMs: STALE_THRESHOLD_MS }
-      );
-      const openSession = sessionByVehicleNumber.get(vehicleNumberNormalized);
-      const sessionIsCurrent = openSession &&
-        new Date(openSession.lastSeenAt).getTime() >= new Date(latestSample.gpsTimestamp).getTime();
-      const sessionZone = sessionIsCurrent ? openSession.zoneId : null;
-      const sessionPlantName = sessionZone && sessionZone !== 'OUTSIDE'
-        ? ZONE_PLANT_IDS[sessionZone]
-        : null;
-      const sessionPlant = sessionPlantName
-        ? plants.find((plant) => plant.plantName.toLowerCase().includes(sessionPlantName.toLowerCase()))
-        : null;
-      const isInside = sessionIsCurrent ? sessionZone !== 'OUTSIDE' : evaluation.isInside;
-      const plant = sessionIsCurrent
-        ? (isInside ? { id: openSession.plantId || sessionPlant?._id, name: sessionPlantName } : null)
-        : (evaluation.isInside ? { id: evaluation.plantId, name: evaluation.plantName } : null);
-      const entryGpsTimestamp = sessionIsCurrent
-        ? openSession.entryGpsTimestamp || openSession.enteredAt
-        : latestStayBounds(samples, plants, classifyGpsSample(latestSample, plants), MAX_GPS_GAP_MS).entryGpsTimestamp;
-      const statusDetectedAt = sessionIsCurrent
-        ? openSession.detectedAt || openSession.enteredAt
-        : (isInside
-            ? latestStayBounds(samples, plants, classifyGpsSample(latestSample, plants), MAX_GPS_GAP_MS).entryGpsTimestamp
-            : latestStayBounds(samples, plants, 'Outside', MAX_GPS_GAP_MS).outsideSince);
-      const providerHealth = providerHealthByName.get('WheelsEye GPS');
-      const durationEnd = !evaluation.isStale &&
-        providerHealth?.connectionStatus === 'Connected' &&
-        (providerHealth.consecutiveFailures || 0) === 0
-        ? now.getTime()
-        : new Date(latestSample.gpsTimestamp).getTime();
-      const stayHours = isInside && entryGpsTimestamp
-        ? msToHHMM(durationEnd - new Date(entryGpsTimestamp).getTime())
-        : '00:00';
-      const vehicleNumber = latestSample.vehicleNumber || vehicleNumberNormalized;
-
-      fleet.push({
-        vehicle: {
-          _id: `gps-unregistered-${vehicleNumberNormalized}`,
-          vehicleNumber,
-          driverName: 'Not registered',
-          mobile: '',
-          fleetType: 'Not registered',
-          gpsDeviceId: '',
-        },
-        storedStatus: null,
-        samples,
-        hasGps: true,
-        isRegistered: false,
-        status: isInside ? 'Inside' : 'Outside',
-        plant,
-        plantName: plant?.name || null,
-        distanceMeter: evaluation.distanceMeter,
-        gpsTimestamp: new Date(latestSample.gpsTimestamp),
-        entryGpsTimestamp,
-        statusDetectedAt,
-        outsideSince: sessionIsCurrent && sessionZone === 'OUTSIDE'
-          ? openSession.enteredAt
-          : latestStayBounds(samples, plants, 'Outside', MAX_GPS_GAP_MS).outsideSince,
-        isStale: evaluation.isStale,
-        gpsStatus: evaluation.gps_status,
-        stayHours: isInside ? stayHours : '00:00',
-        outsideHours: !isInside && sessionIsCurrent && openSession.zoneId === 'OUTSIDE'
-          ? msToHHMM(durationEnd - new Date(openSession.enteredAt).getTime())
-          : '00:00',
-        latitude: latestSample.latitude,
-        longitude: latestSample.longitude,
-        speed: latestSample.speed,
-        ignition: latestSample.ignition,
-        provider: latestSample.provider,
-        lastSyncType: latestSample.syncType || null,
-        rawTelemetry: latestSample.rawTelemetry,
-        providerUnavailable: providerHealthByName.get('WheelsEye GPS') &&
-          providerHealthByName.get('WheelsEye GPS').connectionStatus !== 'Connected'
-          ? { provider: 'WheelsEye GPS', lastSuccessAt: providerHealthByName.get('WheelsEye GPS').lastSuccessAt || null }
-          : null,
-        providerLocations: [],
-        locationDiscrepancyMeters: null,
-      });
-    }
-  }
 
   const widgetFleet = dashboardOnly ? fleet.filter(isDashboardEligibleGpsVehicle) : fleet;
   const plantWidgets = plants.map((plant) => ({

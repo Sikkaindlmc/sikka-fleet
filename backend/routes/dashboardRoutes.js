@@ -190,24 +190,21 @@ router.get('/summary', async (req, res) => {
     const syncStatus = latestSyncLog?.status || setting?.last_sync_status || 'IDLE';
     const providerSettings = await GpsSetting.find({
       archived: { $ne: true },
-      $or: [
-        { provider: /wheels.?eye/i },
-        { apiUrl: /wheelseye/i },
-        { provider: /fleetx/i },
-        { apiUrl: /fleetx/i },
-      ],
     }).select('provider status connectionStatus lastSuccessAt lastErrorAt lastErrorCode lastError consecutiveFailures last_sync_status next_scheduled_sync_at vehicles_processed vehicles_updated');
+    const providerMeta = [
+      { provider: 'WheelsEye GPS', matcher: /wheels.?eye/i },
+      { provider: 'FleetX', matcher: /fleetx|fleet/i },
+    ];
     const activeProvider = providerSettings.find((item) =>
       /wheels.?eye/i.test(item.provider || '') && item.status === 'Active'
-    ) || providerSettings.find((item) => /wheels.?eye/i.test(item.provider || ''));
-    const providerSyncHealth = await Promise.all(['WheelsEye GPS', 'Fleetx'].map(async (provider) => {
-      const providerPattern = new RegExp(provider === 'Fleetx' ? 'fleetx' : 'wheels.?eye', 'i');
+    ) || providerSettings.find((item) => /wheels.?eye/i.test(item.provider || '')) || providerSettings[0];
+    const providerSyncHealth = await Promise.all(providerMeta.map(async ({ provider, matcher }) => {
+      const setting = providerSettings.find((item) => matcher.test(item.provider || '') || matcher.test(item.apiUrl || ''));
       const [latest, successful, failed] = await Promise.all([
-        GpsSyncLog.findOne({ provider: providerPattern, archived: { $ne: true } }).sort({ startedAt: -1 }),
-        GpsSyncLog.findOne({ provider: providerPattern, status: 'SUCCESS', archived: { $ne: true } }).sort({ completedAt: -1 }),
-        GpsSyncLog.findOne({ provider: providerPattern, status: 'FAILED', archived: { $ne: true } }).sort({ completedAt: -1, startedAt: -1 }),
+        GpsSyncLog.findOne({ provider: matcher, archived: { $ne: true } }).sort({ startedAt: -1 }),
+        GpsSyncLog.findOne({ provider: matcher, status: 'SUCCESS', archived: { $ne: true } }).sort({ completedAt: -1 }),
+        GpsSyncLog.findOne({ provider: matcher, status: 'FAILED', archived: { $ne: true } }).sort({ completedAt: -1, startedAt: -1 }),
       ]);
-      const setting = providerSettings.find((item) => providerPattern.test(item.provider || ''));
       return {
         provider,
         status: setting?.connectionStatus || 'Not configured',

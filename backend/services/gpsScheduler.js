@@ -115,11 +115,14 @@ function startGpsScheduler() {
 
       // Check when last successful sync occurred from database
       const settings = await GpsSetting.find({
-        $or: [{ provider: /wheels.?eye/i }, { provider: /fleetx/i }],
         archived: { $ne: true },
+        $or: [{ provider: /wheels.?eye/i }, { provider: /fleetx|fleet/i }],
       }).sort({ updatedAt: -1 });
-      const staleProvider = ['wheels', 'fleetx'].some((providerName) => {
-        const setting = settings.find((item) => item.provider?.toLowerCase().includes(providerName));
+      const staleProvider = [
+        /wheels.?eye/i,
+        /fleetx|fleet/i,
+      ].some((matcher) => {
+        const setting = settings.find((item) => matcher.test(item.provider || ''));
         const lastSync = setting?.last_evaluated_timestamp || setting?.lastSync || null;
         const elapsed = lastSync ? now.getTime() - new Date(lastSync).getTime() : Infinity;
         return elapsed > 30 * 60 * 1000;
@@ -143,11 +146,14 @@ function startGpsScheduler() {
   (async () => {
     try {
       const settings = await GpsSetting.find({
-        $or: [{ provider: /wheels.?eye/i }, { provider: /fleetx/i }],
         archived: { $ne: true },
+        $or: [{ provider: /wheels.?eye/i }, { provider: /fleetx|fleet/i }],
       }).sort({ updatedAt: -1 });
-      const elapsedByProvider = ['wheels', 'fleetx'].map((providerName) => {
-        const setting = settings.find((item) => item.provider?.toLowerCase().includes(providerName));
+      const elapsedByProvider = [
+        /wheels.?eye/i,
+        /fleetx|fleet/i,
+      ].map((matcher) => {
+        const setting = settings.find((item) => matcher.test(item.provider || ''));
         const lastSync = setting?.last_evaluated_timestamp || setting?.lastSync || null;
         return lastSync ? Date.now() - new Date(lastSync).getTime() : Infinity;
       });

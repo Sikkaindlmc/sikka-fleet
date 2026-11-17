@@ -28,7 +28,7 @@ export default function BottomNav({ onOpenMobileNav }: BottomNavProps) {
   const primaryItems = [
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Plant', href: '/plants', icon: Building2 },
-    { name: 'Vehicles', href: '/vehicles', icon: Truck },
+    { name: 'Vehicles', href: '/vehicle-register', icon: Truck },
     { name: 'Drivers', href: '/drivers', icon: UserCheck },
     { name: 'GPS', href: '/gps', icon: Radio },
   ].filter((item) => hasPageAccess(item.name === 'Vehicles' ? 'Vehicle Register' : item.name === 'Drivers' ? 'Driver Registry' : item.name));
@@ -41,7 +41,11 @@ export default function BottomNav({ onOpenMobileNav }: BottomNavProps) {
       <div className="flex items-center justify-around max-w-lg mx-auto">
         {primaryItems.map((item) => {
           const Icon = item.icon;
-          const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(`${item.href}/`));
+          const isVehicleRegisterAlias = item.href === '/vehicle-register' &&
+            pathname.startsWith('/vehicles');
+          const isActive = pathname === item.href ||
+            (item.href !== '/dashboard' && pathname.startsWith(`${item.href}/`)) ||
+            isVehicleRegisterAlias;
 
           return (
             <Link

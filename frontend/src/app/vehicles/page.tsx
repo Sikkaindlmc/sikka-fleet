@@ -9,6 +9,9 @@ import VehicleIcon from '../../components/VehicleIcon';
 import NearestDriversModal, { NearestDriverItem } from '../../components/NearestDriversModal';
 import { apiRequest } from '../../lib/api';
 import { formatDateTime, clean10DigitPhone, normalizeVehicleNumber } from '../../lib/formatters';
+import { useAuth } from '../../lib/authContext';
+
+type ProviderFilter = 'All' | 'WheelsEye' | 'FleetX';
 
 interface VehicleRecord {
   _id: string;
@@ -24,14 +27,29 @@ interface VehicleRecord {
   assignedAt?: string | null;
   matchingDrivers?: NearestDriverItem[];
   gpsStatus?: 'WheelsEye' | 'No GPS (WheelsEye)';
+  gpsProviders?: string[];
   createdAt: string;
   updatedAt: string;
 }
 
+function getProviderLabels(vehicle: VehicleRecord): string[] {
+  const providers = new Set<string>();
+  for (const provider of vehicle.gpsProviders || []) {
+    if (/fleetx/i.test(provider)) providers.add('FleetX');
+    else if (/wheels.?eye/i.test(provider)) providers.add('WheelsEye');
+  }
+  if (vehicle.gpsStatus === 'WheelsEye') providers.add('WheelsEye');
+  return [...providers];
+}
+
 export default function VehicleRegisterPage() {
+  const { user } = useAuth();
   const [vehicles, setVehicles] = useState<VehicleRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSyncingProviders, setIsSyncingProviders] = useState(false);
   const [alert, setAlert] = useState<AlertState | null>(null);
+  const [providerFilter, setProviderFilter] = useState<ProviderFilter>('All');
+  const [vehicleSearch, setVehicleSearch] = useState('');
 
   // Modal states
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -79,6 +97,46 @@ export default function VehicleRegisterPage() {
   useEffect(() => {
     fetchVehicles();
   }, [fetchVehicles]);
+
+  const filteredVehicles = vehicles.filter((vehicle) => {
+    const matchesSearch = vehicle.vehicleNumber.toLowerCase().includes(vehicleSearch.trim().toLowerCase());
+    const matchesProvider = providerFilter === 'All' ||
+      getProviderLabels(vehicle).includes(providerFilter);
+    return matchesSearch && matchesProvider;
+  });
+
+  const handleProviderSync = async () => {
+    setIsSyncingProviders(true);
+    try {
+      const result = await apiRequest<{
+        message?: string;
+        providerResults?: Array<{ provider: string; success: boolean }>;
+      }>('/gps/trigger-sync', {
+        method: 'POST',
+        body: JSON.stringify({ provider: 'both' }),
+        timeoutMs: 120000,
+      });
+      const failedProviders = (result.providerResults || [])
+        .filter((providerResult) => !providerResult.success)
+        .map((providerResult) => providerResult.provider);
+      setAlert({
+        type: failedProviders.length ? 'error' : 'success',
+        message: failedProviders.length
+          ? `${result.message || 'Provider sync completed with errors'} Failed: ${failedProviders.join(', ')}.`
+          : result.message || 'Provider vehicle sync completed.',
+      });
+      await fetchVehicles();
+    } catch (err) {
+      setAlert({
+        type: 'error',
+        message: err instanceof Error
+          ? err.message
+          : 'Failed to sync provider vehicle registries.',
+      });
+    } finally {
+      setIsSyncingProviders(false);
+    }
+  };
 
   // Open Add Vehicle Modal
   const openCreateModal = () => {
@@ -311,14 +369,27 @@ export default function VehicleRegisterPage() {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={openCreateModal}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>+ Add Vehicle</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {user?.role === 'Admin' && (
+              <button
+                type="button"
+                onClick={handleProviderSync}
+                disabled={isSyncingProviders}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                <RefreshCw className={`w-4 h-4 ${isSyncingProviders ? 'animate-spin' : ''}`} />
+                <span>{isSyncingProviders ? 'Syncing providers...' : 'Sync GPS Providers'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={openCreateModal}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>+ Add Vehicle</span>
+            </button>
+          </div>
         </div>
 
         {/* Feedback Alert */}
@@ -328,7 +399,7 @@ export default function VehicleRegisterPage() {
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
           <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
             <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider">
-              Vehicle History ({vehicles.length})
+              Vehicle History ({filteredVehicles.length})
             </h2>
             <button
               type="button"
@@ -340,17 +411,49 @@ export default function VehicleRegisterPage() {
             </button>
           </div>
 
+          <div className="flex flex-col gap-3 border-b border-slate-100 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Filter vehicles by GPS provider">
+              {(['All', 'WheelsEye', 'FleetX'] as ProviderFilter[]).map((provider) => (
+                <button
+                  key={provider}
+                  type="button"
+                  onClick={() => setProviderFilter(provider)}
+                  aria-pressed={providerFilter === provider}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-bold transition ${
+                    providerFilter === provider
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {provider}
+                </button>
+              ))}
+            </div>
+            <input
+              type="search"
+              value={vehicleSearch}
+              onChange={(event) => setVehicleSearch(event.target.value)}
+              placeholder="Search vehicle number"
+              aria-label="Search vehicle number"
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-emerald-500 sm:max-w-xs"
+            />
+          </div>
+
           {isLoading ? (
             <div className="p-12 text-center text-slate-400">
               <RefreshCw className="w-7 h-7 animate-spin mx-auto mb-2 text-emerald-600" />
               <span className="text-xs font-semibold">Loading vehicle registry...</span>
             </div>
-          ) : vehicles.length === 0 ? (
+          ) : filteredVehicles.length === 0 ? (
             <div className="p-12 text-center text-slate-500">
               <Truck className="w-10 h-10 text-slate-300 mx-auto mb-2" />
-              <p className="text-sm font-semibold text-slate-700">No vehicles registered</p>
+              <p className="text-sm font-semibold text-slate-700">
+                {vehicles.length === 0 ? 'No vehicles registered' : 'No matching vehicles'}
+              </p>
               <p className="text-xs text-slate-400 mt-1">
-                Click &ldquo;+ Add Vehicle&rdquo; to enroll your first fleet vehicle.
+                {vehicles.length === 0
+                  ? 'Click Add Vehicle or sync GPS providers to enroll vehicles.'
+                  : 'Try a different search term or provider filter.'}
               </p>
             </div>
           ) : (
@@ -370,7 +473,7 @@ export default function VehicleRegisterPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
-                  {vehicles.map((v) => (
+                  {filteredVehicles.map((v) => (
                     <tr key={v._id} className="hover:bg-slate-50/70 transition">
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
@@ -378,13 +481,22 @@ export default function VehicleRegisterPage() {
                           <span className="font-extrabold text-slate-900 text-sm tracking-wide">
                             {v.vehicleNumber}
                           </span>
-                          <span className={`rounded-md px-1.5 py-0.5 text-[9px] font-bold ${
-                            v.gpsStatus === 'WheelsEye'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-slate-100 text-slate-600'
-                          }`}>
-                            {v.gpsStatus || 'No GPS (WheelsEye)'}
-                          </span>
+                          {getProviderLabels(v).length > 0 ? getProviderLabels(v).map((provider) => (
+                            <span
+                              key={provider}
+                              className={`rounded-md px-1.5 py-0.5 text-[9px] font-bold ${
+                                provider === 'WheelsEye'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-blue-100 text-blue-800'
+                              }`}
+                            >
+                              {provider}
+                            </span>
+                          )) : (
+                            <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-600">
+                              Not linked
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="px-6 py-4">

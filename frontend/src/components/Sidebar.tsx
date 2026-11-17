@@ -20,7 +20,7 @@ import { useAuth } from '../lib/authContext';
 export const NAV_ITEMS = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Plant', href: '/plants', icon: Building2 },
-  { name: 'Vehicle Register', href: '/vehicles', icon: Truck },
+  { name: 'Vehicle Register', href: '/vehicle-register', icon: Truck },
   { name: 'Driver Registry', href: '/drivers', icon: UserCheck },
   { name: 'GPS', href: '/gps', icon: Radio },
   { name: 'Report', href: '/reports', icon: FileSpreadsheet },
@@ -60,7 +60,11 @@ export default function Sidebar() {
         </div>
         {allowedNav.map((item) => {
           const Icon = item.icon;
-          const isActive = pathname === item.href || pathname.startsWith(`${item.href}/`);
+          const isVehicleRegisterAlias = item.href === '/vehicle-register' &&
+            pathname.startsWith('/vehicles');
+          const isActive = pathname === item.href ||
+            pathname.startsWith(`${item.href}/`) ||
+            isVehicleRegisterAlias;
 
           return (
             <Link

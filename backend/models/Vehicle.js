@@ -34,6 +34,13 @@ const vehicleSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    gpsProviders: {
+      type: [{
+        type: String,
+        enum: ['WheelsEye GPS', 'FleetX'],
+      }],
+      default: [],
+    },
     status: {
       type: String,
       enum: ['Active', 'Inactive'],

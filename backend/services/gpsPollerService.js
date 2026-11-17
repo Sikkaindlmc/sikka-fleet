@@ -22,7 +22,7 @@ async function testGpsConnection() {
   };
   const setting = await GpsSetting.findOne(settingQuery);
   const apiUrl = (process.env.WHEELSEYE_API_URL || '').trim() || setting?.apiUrl || DEFAULT_WHEELSEYE_URL;
-  const envToken = (process.env.WHEELSEYE_API_KEY || '').trim();
+  const envToken = (process.env.WHEELSEYE_API_KEY || process.env.WHEELSEYE_ACCESS_TOKEN || '').trim();
   let urlToken = '';
   try {
     const parsedUrl = new URL(apiUrl);
@@ -36,7 +36,7 @@ async function testGpsConnection() {
   const savedToken = decryptGpsCredential(setting?.encryptedApiKey || '').trim();
   const token = envToken || urlToken || savedToken;
   const credentialSource = envToken
-    ? 'WHEELSEYE_API_KEY'
+    ? 'WHEELSEYE_API_KEY or WHEELSEYE_ACCESS_TOKEN'
     : urlToken && process.env.WHEELSEYE_API_URL?.trim()
       ? 'WHEELSEYE_API_URL query'
       : urlToken

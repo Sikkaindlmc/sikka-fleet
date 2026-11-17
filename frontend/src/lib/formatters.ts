@@ -108,6 +108,29 @@ export function formatDistance(meters?: number | null): string {
   return `${(meters / 1000).toFixed(2)} km`;
 }
 
+export function shouldDisplayVehicleSpeed(
+  ignition: string | number | boolean | null | undefined,
+  speed: string | number | null | undefined,
+  movementStatus?: string | null
+): boolean {
+  const ignitionIsOn = ignition === true || /^(on|true|1|yes)$/i.test(String(ignition ?? ''));
+  const numericSpeed = speed === null || speed === undefined || speed === '' ? NaN : Number(speed);
+  return ignitionIsOn &&
+    Number.isFinite(numericSpeed) &&
+    numericSpeed > 0 &&
+    String(movementStatus || '').toLowerCase() !== 'stopped';
+}
+
+export function formatVehicleSpeed(
+  ignition: string | number | boolean | null | undefined,
+  speed: string | number | null | undefined,
+  movementStatus?: string | null
+): string {
+  return shouldDisplayVehicleSpeed(ignition, speed, movementStatus)
+    ? `${Number(speed)} km/h`
+    : 'N/A';
+}
+
 /**
  * Normalizes vehicle number (uppercase, no whitespace)
  */

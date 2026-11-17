@@ -43,7 +43,10 @@ export function getApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
     const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
     if (process.env.NODE_ENV === 'development' && isLocalHost) {
-      return 'http://127.0.0.1:5000/api';
+      const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+      return configuredApiUrl
+        ? configuredApiUrl.replace(/\/+$/, '')
+        : 'http://127.0.0.1:5000/api';
     }
 
     // 1. Check custom override in localStorage (if set by user)
@@ -164,7 +167,11 @@ async function executeFetch<T = any>(
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
 
   const config: RequestInit = {
     ...options,
@@ -194,7 +201,10 @@ async function executeFetch<T = any>(
       throw err;
     }
     if (err.name === 'AbortError') {
-      throw new ApiError('Request timed out. Please verify your internet connection.', 0);
+      throw new ApiError(
+        timedOut ? 'Request timed out. Please try again.' : 'Request was cancelled before it completed.',
+        timedOut ? 408 : 499
+      );
     }
     throw new ApiError(err.message || 'Network request failed', 0);
   }

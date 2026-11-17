@@ -1,6 +1,7 @@
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 require('dotenv').config();
+const { validateGpsEnvironment } = require('./config/gpsConfig');
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
@@ -27,6 +28,7 @@ const { generalApiLimiter } = require('./middleware/rateLimiter');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+validateGpsEnvironment();
 
 // Trust reverse proxies (Vercel, Cloudflare, mobile carrier CGNAT)
 app.set('trust proxy', 1);
