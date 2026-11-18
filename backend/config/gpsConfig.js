@@ -1,4 +1,5 @@
 const { isSafeExternalUrl } = require('../utils/security');
+const { DEFAULT_PROVIDER_URLS } = require('../utils/gpsProvider');
 
 function validateGpsUrl(name, value) {
   const trimmed = String(value || '').trim();
@@ -20,10 +21,7 @@ function validateGpsUrl(name, value) {
 
 function validateGpsEnvironment() {
   const checks = [
-    validateGpsUrl('WHEELSEYE_API_URL', process.env.WHEELSEYE_API_URL),
-    validateGpsUrl('FLEETX_API_URL', process.env.FLEETX_API_URL),
-    validateGpsUrl('FLEETX_LOGIN_URL', process.env.FLEETX_LOGIN_URL),
-    validateGpsUrl('FLEETX_VEHICLE_URL', process.env.FLEETX_VEHICLE_URL),
+    validateGpsUrl('WHEELSEYE_API_URL', process.env.WHEELSEYE_API_URL || DEFAULT_PROVIDER_URLS.wheelseye),
   ];
 
   const invalid = checks.filter((item) => !item.configured);

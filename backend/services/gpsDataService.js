@@ -13,7 +13,7 @@ const {
   msToHHMM,
 } = require('./geofenceService');
 const { GPS_STALE_THRESHOLD_MS: STALE_THRESHOLD_MS } = require('../config/gps');
-const { getAssignedGpsProvider, getGpsConnectionStatus } = require('../utils/gpsProvider');
+const { getGpsConnectionStatus } = require('../utils/gpsProvider');
 const {
   MAX_GPS_GAP_MS,
   normalizeVehicleNumber,
@@ -27,9 +27,8 @@ const DEFAULT_GPS_PROVIDER = 'WheelsEye GPS';
 
 function normalizeGpsProvider(provider) {
   const value = String(provider || '').trim();
-  if (/fleetx|fleet/i.test(value)) return 'FleetX';
   if (/wheels.?eye/i.test(value)) return DEFAULT_GPS_PROVIDER;
-  return value || DEFAULT_GPS_PROVIDER;
+  return '';
 }
 
 function providerKey(vehicleId, provider) {
@@ -200,11 +199,15 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } =
     Plant.find({ status: 'Active' }).sort({ plantName: 1 }),
     VehicleCurrentStatus.find({ archived: { $ne: true } }),
     ZoneSession.find({ exitedAt: null, archived: { $ne: true } }),
-    GpsSetting.find({ archived: { $ne: true } })
+    GpsSetting.find({
+      archived: { $ne: true },
+      $or: [{ provider: /wheels.?eye/i }, { apiUrl: /wheelseye/i }],
+    })
       .select('provider apiUrl status connectionStatus lastSync lastSuccessAt lastConnectionCheckAt lastErrorAt lastErrorCode lastError consecutiveFailures'),
   ]);
   const history = await GpsHistory.find({
     archived: { $ne: true },
+    provider: /wheels.?eye/i,
   }).sort({ gpsTimestamp: 1, syncTime: 1 });
   const byVehicleId = new Map();
   const byVehicleNumber = new Map();
@@ -258,7 +261,7 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } =
         `${normalizeGpsProvider(sample.provider)}:${sample.gpsTimestamp}:${sample.latitude}:${sample.longitude}`;
       if (!sampleMap.has(sampleId)) sampleMap.set(sampleId, sample);
     }
-    const assignedProvider = getAssignedGpsProvider(vehicle) === 'fleetx' ? 'FleetX' : DEFAULT_GPS_PROVIDER;
+    const assignedProvider = DEFAULT_GPS_PROVIDER;
     const vehicleSamples = [...sampleMap.values()].filter(
       (sample) => normalizeGpsProvider(sample.provider) === assignedProvider
     );

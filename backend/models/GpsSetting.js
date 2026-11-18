@@ -5,6 +5,7 @@ const gpsSettingSchema = new mongoose.Schema(
     provider: {
       type: String,
       required: [true, 'GPS provider name is required'],
+      enum: ['WheelsEye GPS'],
       trim: true,
       default: 'WheelsEye GPS',
     },
@@ -20,7 +21,7 @@ const gpsSettingSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['Active', 'Inactive'],
+      enum: ['Active'],
       default: 'Active',
     },
     connectionStatus: {

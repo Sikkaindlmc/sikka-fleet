@@ -4,7 +4,7 @@ const gpsCredentialAuditLogSchema = new mongoose.Schema(
   {
     provider: {
       type: String,
-      enum: ['WheelsEye GPS', 'FleetX'],
+      enum: ['WheelsEye GPS'],
       required: true,
     },
     changedFields: {

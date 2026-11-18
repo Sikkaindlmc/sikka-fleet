@@ -11,7 +11,6 @@ const VehicleLocation = require('./VehicleLocation');
 const PlanNotification = require('./PlanNotification');
 const PlantEntry = require('./PlantEntry');
 const PlantEntryEvent = require('./PlantEntryEvent');
-const GpsConfig = require('./GpsConfig');
 const GpsSetting = require('./GpsSetting');
 const GpsSyncLock = require('./GpsSyncLock');
 const GpsSyncLog = require('./GpsSyncLog');
@@ -43,7 +42,6 @@ module.exports = {
   GpsCredentialAuditLog,
   PlantEntry,
   PlantEntryEvent,
-  GpsConfig,
   GpsSetting,
   GpsSyncLock,
   GpsSyncLog,

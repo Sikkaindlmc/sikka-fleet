@@ -9,15 +9,91 @@ if (!process.env.MONGODB_URI && !process.env.MONGO_URI) {
 const mongoose = require('mongoose');
 // Register all models and schema relations
 require('../models');
+const { DEFAULT_PROVIDER_URLS } = require('../utils/gpsProvider');
+const { encryptGpsCredential } = require('../utils/gpsCredentialCrypto');
+
+async function ensureWheelsEyeSetting() {
+  const GpsSetting = mongoose.model('GpsSetting');
+  const query = {
+    archived: { $ne: true },
+    $or: [{ provider: /wheels.?eye/i }, { apiUrl: /wheelseye/i }],
+  };
+  await GpsSetting.deleteMany({
+    $nor: [{ provider: /wheels.?eye/i }, { apiUrl: /wheelseye/i }],
+  });
+  const legacyConfigExists = await mongoose.connection.db.listCollections({ name: 'gpsconfigs' }).hasNext();
+  if (legacyConfigExists) {
+    await mongoose.connection.db.collection('gpsconfigs').deleteMany({
+      provider: { $not: /wheels.?eye/i },
+    });
+  }
+  await mongoose.model('Vehicle').updateMany(
+    { $or: [{ gpsProvider: { $ne: 'wheelseye' } }, { gpsProviders: { $ne: ['WheelsEye GPS'] } }] },
+    { $set: { gpsProvider: 'wheelseye', gpsProviders: ['WheelsEye GPS'] } }
+  );
+  const setting = await GpsSetting.findOne(query).sort({ updatedAt: -1 });
+  if (!setting) {
+    let apiUrl = (process.env.WHEELSEYE_API_URL || DEFAULT_PROVIDER_URLS.wheelseye).trim();
+    let apiCredential = '';
+    try {
+      const parsedUrl = new URL(apiUrl);
+      for (const key of ['accessToken', 'access_token', 'apiKey', 'api_key', 'token', 'key', 'secret']) {
+        apiCredential = apiCredential || parsedUrl.searchParams.get(key) || '';
+        parsedUrl.searchParams.delete(key);
+      }
+      apiUrl = parsedUrl.toString();
+    } catch (error) {
+      throw new Error('Configured WheelsEye API URL is invalid.');
+    }
+    await GpsSetting.create({
+      provider: 'WheelsEye GPS',
+      apiUrl,
+      ...(apiCredential ? { encryptedApiKey: encryptGpsCredential(apiCredential) } : {}),
+      status: 'Active',
+      pollIntervalSeconds: 1800,
+    });
+    return;
+  }
+
+  const update = { provider: 'WheelsEye GPS', status: 'Active' };
+  let apiUrl = setting.apiUrl || DEFAULT_PROVIDER_URLS.wheelseye;
+  let apiCredential = '';
+  try {
+    const parsedUrl = new URL(apiUrl);
+    for (const key of ['accessToken', 'access_token', 'apiKey', 'api_key', 'token', 'key', 'secret']) {
+      apiCredential = apiCredential || parsedUrl.searchParams.get(key) || '';
+      parsedUrl.searchParams.delete(key);
+    }
+    apiUrl = parsedUrl.toString();
+  } catch (error) {
+    throw new Error('Saved WheelsEye API URL is invalid.');
+  }
+  update.apiUrl = apiUrl;
+  if (apiCredential && !setting.encryptedApiKey) {
+    update.encryptedApiKey = encryptGpsCredential(apiCredential);
+  }
+  await GpsSetting.updateOne(
+    { _id: setting._id },
+    {
+      $set: update,
+      $unset: {
+        encryptedUsername: '',
+        encryptedPassword: '',
+        encryptedBasicAuth: '',
+      },
+    }
+  );
+}
 
 const connectDB = async () => {
   // Reuse existing connection if available (for serverless environments like Vercel)
   if (mongoose.connection.readyState >= 1) {
+    await ensureWheelsEyeSetting();
     return mongoose.connection;
   }
 
   // Direct Atlas replica-set fallback if SRV DNS encounters network/proxy issues
-  const directAtlasURI = 'mongodb://sikkalmc_db_user:p15pS1cvdirZuW8p@ac-reo4oj8-shard-00-00.9vylwot.mongodb.net:27017,ac-reo4oj8-shard-00-01.9vylwot.mongodb.net:27017,ac-reo4oj8-shard-00-02.9vylwot.mongodb.net:27017/sikka_fleet?ssl=true&authSource=admin&replicaSet=atlas-5s2o5v-shard-0&retryWrites=true&w=majority';
+  const directAtlasURI = (process.env.MONGODB_DIRECT_URI || '').trim();
   const primaryURI = process.env.MONGODB_URI || process.env.MONGO_URI || directAtlasURI;
   const localURI = 'mongodb://127.0.0.1:27017/sikka_fleet';
   const dbName = process.env.MONGODB_DB_NAME || 'sikka_fleet';
@@ -31,13 +107,14 @@ const connectDB = async () => {
         autoIndex: true,
         serverSelectionTimeoutMS: 8000,
       });
+      await ensureWheelsEyeSetting();
       console.log(`[Database] MongoDB Atlas Connected: ${conn.connection.host}/${conn.connection.name}`);
       return conn;
     } catch (err) {
       console.warn(`[Database Warning] Atlas SRV connection failed (${err.message}).`);
       
       // If error was related to DNS or SRV lookup, try direct replica set endpoints
-      if (err.message && (err.message.includes('querySrv') || err.message.includes('ENOTFOUND') || err.message.includes('buffering timed out'))) {
+      if (directAtlasURI && err.message && (err.message.includes('querySrv') || err.message.includes('ENOTFOUND') || err.message.includes('buffering timed out'))) {
         try {
           console.log(`[Database] Attempting direct Atlas replica set connection fallback...`);
           const conn = await mongoose.connect(directAtlasURI, {
@@ -45,6 +122,7 @@ const connectDB = async () => {
             autoIndex: true,
             serverSelectionTimeoutMS: 8000,
           });
+          await ensureWheelsEyeSetting();
           console.log(`[Database] MongoDB Atlas Connected via direct replica set: ${conn.connection.host}/${conn.connection.name}`);
           return conn;
         } catch (directErr) {
@@ -63,6 +141,7 @@ const connectDB = async () => {
       autoIndex: true,
       serverSelectionTimeoutMS: 3000,
     });
+    await ensureWheelsEyeSetting();
     console.log(`[Database] Local MongoDB Connected: ${conn.connection.host}/${conn.connection.name}`);
     return conn;
   } catch (err) {

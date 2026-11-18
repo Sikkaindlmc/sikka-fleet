@@ -1,9 +1,7 @@
 const express = require('express');
 const {
   executeGpsSync,
-  executeGpsSyncForBothProviders,
   getAutoSyncStatus,
-  getGpsProvider,
 } = require('../services/gpsSyncService');
 const GpsSyncLog = require('../models/GpsSyncLog');
 const GpsSetting = require('../models/GpsSetting');
@@ -69,7 +67,7 @@ router.get('/status', (req, res, next) => {
   return verifyToken(req, res, next);
 }, async (req, res) => {
   try {
-    const status = await getAutoSyncStatus(req.query.provider || 'WheelsEye GPS');
+    const status = await getAutoSyncStatus();
     res.json(status);
   } catch (error) {
     console.error('[API /api/gps-sync/status Error]:', error);
@@ -132,21 +130,15 @@ async function handleTriggerSync(req, res) {
   try {
     const source = req.isCron ? 'AUTO' : 'GPS-AUTO';
     const triggerType = req.isCron ? 'WEBHOOK_CRON' : (typeof req.body?.triggerType === 'string' ? req.body.triggerType.slice(0, 50) : 'USER_TRIGGER');
-    const provider = typeof req.body?.provider === 'string' ? req.body.provider : 'WheelsEye GPS';
-
-    console.log(`[API /api/gps-sync/run] Triggered (Provider: ${req.isCron ? 'both' : provider}, Source: ${source}, Trigger: ${triggerType}, Caller: ${req.syncCaller})`);
+    console.log(`[API /api/gps-sync/run] Triggered (Provider: WheelsEye GPS, Source: ${source}, Trigger: ${triggerType}, Caller: ${req.syncCaller})`);
 
     const options = {
       source,
       triggerType,
       ...(req.isCron ? { slotKey: getCurrentIstSlotKey() } : {}),
     };
-    const result = req.isCron || provider.toLowerCase() === 'both'
-      ? await executeGpsSyncForBothProviders(options)
-      : await executeGpsSync({ ...options, provider: getGpsProvider(provider) });
-
-    const isBothProviders = req.isCron || provider.toLowerCase() === 'both';
-    res.status(result.success ? 200 : isBothProviders ? 207 : 502).json({
+    const result = await executeGpsSync(options);
+    res.status(result.success ? 200 : 502).json({
       success: result.success,
       message: result.message || `${result.provider} synchronization ${result.success ? 'completed' : 'failed'}.`,
       ...result,

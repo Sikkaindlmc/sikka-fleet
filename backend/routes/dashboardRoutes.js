@@ -26,7 +26,7 @@ const mongoose = require('mongoose');
 const PlanAuditLog = require('../models/PlanAuditLog');
 const { isValidObjectId, sanitizeText, maskUrlSecret } = require('../utils/security');
 const { isGpsSchedulerRunning } = require('../services/gpsScheduler');
-const { getAssignedGpsProvider, getGpsConnectionStatus } = require('../utils/gpsProvider');
+const { getGpsConnectionStatus } = require('../utils/gpsProvider');
 const {
   filterActivePlans,
   getPlanExpiresAt,
@@ -189,55 +189,23 @@ router.get('/summary', async (req, res) => {
     const lastEvaluated = lastSuccessful;
     const nextSync = getNextFixed30MinSlot(new Date());
     const syncStatus = latestSyncLog?.status || setting?.last_sync_status || 'IDLE';
-    const providerSettings = await GpsSetting.find({
-      archived: { $ne: true },
-    }).select('provider apiUrl status connectionStatus lastSync lastSuccessAt lastConnectionCheckAt lastErrorAt lastErrorCode lastError consecutiveFailures last_sync_status next_scheduled_sync_at vehicles_processed vehicles_updated');
-    const providerMeta = [
-      { provider: 'WheelsEye GPS', matcher: /wheels.?eye/i },
-      { provider: 'FleetX', matcher: /fleetx|fleet/i },
-    ];
-    const activeProvider = providerSettings.find((item) =>
-      /wheels.?eye/i.test(item.provider || '') && item.status === 'Active'
-    ) || providerSettings.find((item) => /wheels.?eye/i.test(item.provider || '')) || providerSettings[0];
-    const providerSyncHealth = await Promise.all(providerMeta.map(async ({ provider, matcher }) => {
-      const setting = providerSettings.find((item) => matcher.test(item.provider || '') || matcher.test(item.apiUrl || ''));
-      const [latest, successful, failed] = await Promise.all([
-        GpsSyncLog.findOne({ provider: matcher, archived: { $ne: true } }).sort({ startedAt: -1 }),
-        GpsSyncLog.findOne({ provider: matcher, status: 'SUCCESS', archived: { $ne: true } }).sort({ completedAt: -1 }),
-        GpsSyncLog.findOne({ provider: matcher, status: 'FAILED', archived: { $ne: true } }).sort({ completedAt: -1, startedAt: -1 }),
-      ]);
-      const lastSuccessfulSyncAt = successful?.completedAt ||
-        successful?.lastEvaluatedTimestamp ||
-        setting?.lastSuccessAt ||
-        null;
-      const status = getGpsConnectionStatus(setting, provider);
-      const expectedProvider = provider === 'FleetX' ? 'fleetx' : 'wheelseye';
-      const providerVehicles = snapshot.fleet.filter((item) =>
-        item.isRegistered &&
-        getAssignedGpsProvider(item.vehicle) === expectedProvider
-      );
-      return {
-        provider,
-        status,
-        lastSyncStatus: latest?.status || setting?.last_sync_status || 'IDLE',
-        lastSuccessfulSyncAt,
-        lastFailedSyncAt: failed?.completedAt || failed?.startedAt || setting?.lastErrorAt || null,
-        nextScheduledSyncAt: setting?.next_scheduled_sync_at || nextSync,
-        vehiclesProcessed: latest?.vehiclesProcessed ?? setting?.vehicles_processed ?? 0,
-        vehiclesUpdated: latest?.vehiclesUpdated ?? setting?.vehicles_updated ?? 0,
-        registeredVehicleCount: providerVehicles.length,
-        validGpsVehicleCount: providerVehicles.filter((item) =>
-          item.providerLocations?.some((location) =>
-            location.hasGps &&
-            (provider === 'FleetX'
-              ? /fleetx/i.test(String(location.provider || ''))
-              : /wheels.?eye/i.test(String(location.provider || '')))
-          )
-        ).length,
-        lastError: safeGpsErrorDetails(setting?.lastError || (latest?.status === 'FAILED' ? latest.errorMessage : '')),
-      };
-    }));
-    const schedulerMode = (process.env.GPS_SCHEDULER_MODE || '').trim().toLowerCase();
+    const activeProvider = setting;
+    const providerSyncHealth = [{
+      provider: 'WheelsEye GPS',
+      status: getGpsConnectionStatus(setting, 'WheelsEye GPS'),
+      lastSyncStatus: latestSyncLog?.status || setting?.last_sync_status || 'IDLE',
+      lastSuccessfulSyncAt: lastSuccessful,
+      lastFailedSyncAt: lastFailedSync?.completedAt || lastFailedSync?.startedAt || setting?.lastErrorAt || null,
+      nextScheduledSyncAt: setting?.next_scheduled_sync_at || nextSync,
+      vehiclesProcessed: latestSyncLog?.vehiclesProcessed ?? setting?.vehicles_processed ?? 0,
+      vehiclesUpdated: latestSyncLog?.vehiclesUpdated ?? setting?.vehicles_updated ?? 0,
+      registeredVehicleCount: snapshot.fleet.filter((item) => item.isRegistered).length,
+      validGpsVehicleCount: snapshot.fleet.filter((item) =>
+        item.isRegistered && item.providerLocations?.some((location) => location.hasGps)
+      ).length,
+      lastError: safeGpsErrorDetails(setting?.lastError || (latestSyncLog?.status === 'FAILED' ? latestSyncLog.errorMessage : '')),
+    }];
+    const schedulerMode = (process.env.GPS_SCHEDULER_MODE || 'github-actions').trim().toLowerCase();
     const schedulerStatus = schedulerMode === 'server'
       ? (isGpsSchedulerRunning() ? 'Running in backend' : 'Configured, not running')
       : schedulerMode === 'github-actions'
@@ -273,7 +241,7 @@ router.get('/summary', async (req, res) => {
       last_failed_sync_at: lastFailedSync?.completedAt || lastFailedSync?.startedAt || activeProvider?.lastErrorAt || null,
       latest_sync_vehicles_updated: latestSyncLog?.vehiclesUpdated || 0,
       gps_sync_health: {
-        schedulerMode: schedulerMode || 'unset',
+        schedulerMode,
         schedulerStatus,
         apiConnectionStatus: activeProvider?.connectionStatus || 'Not configured',
         lastSuccessfulSyncAt: lastSuccessful,

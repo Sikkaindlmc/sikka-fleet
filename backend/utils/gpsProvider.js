@@ -1,28 +1,20 @@
 const WHEELSEYE = 'wheelseye';
-const FLEETX = 'fleetx';
+const DEFAULT_PROVIDER_URLS = {
+  [WHEELSEYE]: 'https://api.wheelseye.com/currentLoc',
+};
 
 function normalizeGpsProvider(value, fallback = WHEELSEYE) {
   const normalized = String(value || '').toLowerCase().replace(/[^a-z]/g, '');
-  if (normalized.includes('fleetx') || normalized === 'fleet') return FLEETX;
   if (normalized.includes('wheels')) return WHEELSEYE;
   if (!normalized && fallback) return normalizeGpsProvider(fallback, '');
   return '';
 }
 
-function getAssignedGpsProvider(vehicle) {
-  const explicitProvider = normalizeGpsProvider(vehicle?.gpsProvider, '');
-  if (explicitProvider) return explicitProvider;
-
-  const observedProviders = (Array.isArray(vehicle?.gpsProviders) ? vehicle.gpsProviders : [])
-    .map((provider) => normalizeGpsProvider(provider, ''))
-    .filter(Boolean);
-  if (observedProviders.includes(FLEETX) && !observedProviders.includes(WHEELSEYE)) {
-    return FLEETX;
-  }
+function getAssignedGpsProvider() {
   return WHEELSEYE;
 }
 
-function getGpsConnectionStatus(setting, provider, now = Date.now()) {
+function getGpsConnectionStatus(setting, _provider, now = Date.now()) {
   if (setting?.connectionStatus === 'AUTH_FAILED') return 'AUTH_FAILED';
   if (setting?.connectionStatus === 'Connection Failed' && setting?.lastErrorAt) {
     return 'Connection Failed';
@@ -36,16 +28,13 @@ function getGpsConnectionStatus(setting, provider, now = Date.now()) {
     }
   }
 
-  const providerName = normalizeGpsProvider(provider, '');
-  const configuredUrl = providerName === FLEETX
-    ? process.env.FLEETX_API_URL || setting?.apiUrl
-    : process.env.WHEELSEYE_API_URL || setting?.apiUrl;
+  const configuredUrl = process.env.WHEELSEYE_API_URL || setting?.apiUrl || DEFAULT_PROVIDER_URLS[WHEELSEYE];
   return configuredUrl ? 'Pending' : 'Configuration Missing';
 }
 
 module.exports = {
   WHEELSEYE,
-  FLEETX,
+  DEFAULT_PROVIDER_URLS,
   normalizeGpsProvider,
   getAssignedGpsProvider,
   getGpsConnectionStatus,

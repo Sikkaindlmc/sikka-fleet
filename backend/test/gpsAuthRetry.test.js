@@ -4,10 +4,8 @@ const axios = require('axios');
 const {
   fetchWheelseyeTelemetryWithRetries,
   fetchWheelsEyeTelemetry,
-  fetchFleetxTelemetryWithRetries,
-  fetchFleetxVehicleTelemetry,
-  getFleetxVehicleUrl,
   findOpenProviderZoneSession,
+  normalizeWheelseyeItem,
   parseTelematicsTimestamp,
   selectLatestTelemetryByVehicle,
   acquireDistributedLock,
@@ -15,287 +13,6 @@ const {
 const { getCurrentIstSlotKey } = require('../services/gpsScheduler');
 const GpsSyncLock = require('../models/GpsSyncLock');
 const ZoneSession = require('../models/ZoneSession');
-
-test('FleetX login uses the configured multipart password grant and bearer token', async () => {
-  const originalPost = axios.post;
-  const originalGet = axios.get;
-  const originalEnv = {
-    FLEETX_LOGIN_URL: process.env.FLEETX_LOGIN_URL,
-    FLEETX_USERNAME: process.env.FLEETX_USERNAME,
-    FLEETX_PASSWORD: process.env.FLEETX_PASSWORD,
-    FLEETX_BASIC_AUTH: process.env.FLEETX_BASIC_AUTH,
-  };
-  let loginRequest;
-  let apiAuthorization;
-  process.env.FLEETX_LOGIN_URL = 'https://api.fleetx.io/api/v1/login';
-  process.env.FLEETX_USERNAME = 'fleetx-test-user';
-  process.env.FLEETX_PASSWORD = 'fleetx-test-password';
-  process.env.FLEETX_BASIC_AUTH = 'Basic test-authorization';
-  axios.post = async (url, body, config) => {
-    loginRequest = { url, body, config };
-    return { data: { access_token: 'fresh-test-token' } };
-  };
-  axios.get = async (_url, config) => {
-    apiAuthorization = config.headers.Authorization;
-    return { status: 200, data: { data: [] } };
-  };
-  try {
-    const result = await fetchFleetxTelemetryWithRetries(
-      'https://api.fleetx.io/api/v1/analytics/live'
-    );
-    assert.ok(loginRequest.body instanceof FormData);
-    assert.equal(loginRequest.body.get('username'), 'fleetx-test-user');
-    assert.equal(loginRequest.body.get('password'), 'fleetx-test-password');
-    assert.equal(loginRequest.body.get('grant_type'), 'password');
-    assert.equal(loginRequest.config.headers.Authorization, 'Basic test-authorization');
-    assert.equal(apiAuthorization, 'Bearer fresh-test-token');
-    assert.deepEqual(result.list, []);
-  } finally {
-    axios.post = originalPost;
-    axios.get = originalGet;
-    for (const [key, value] of Object.entries(originalEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
-});
-
-test('FleetX uses a fresh login token before fetching and refreshes it after unauthorized response', async () => {
-  const originalPost = axios.post;
-  const originalGet = axios.get;
-  const originalSetTimeout = global.setTimeout;
-  const originalEnv = {
-    FLEETX_LOGIN_URL: process.env.FLEETX_LOGIN_URL,
-    FLEETX_USERNAME: process.env.FLEETX_USERNAME,
-    FLEETX_PASSWORD: process.env.FLEETX_PASSWORD,
-    FLEETX_BASIC_AUTH: process.env.FLEETX_BASIC_AUTH,
-  };
-  const authHeaders = [];
-  let loginCount = 0;
-  let requestCount = 0;
-  process.env.FLEETX_LOGIN_URL = 'https://api.fleetx.io/api/v1/login';
-  process.env.FLEETX_USERNAME = 'fleetx-test-user';
-  process.env.FLEETX_PASSWORD = 'fleetx-test-password';
-  process.env.FLEETX_BASIC_AUTH = '';
-  global.setTimeout = (callback) => {
-    callback();
-    return 0;
-  };
-  axios.post = async () => {
-    loginCount += 1;
-    return { data: { access_token: `fresh-test-token-${loginCount}` } };
-  };
-  axios.get = async (_url, config) => {
-    requestCount += 1;
-    authHeaders.push(config.headers.Authorization);
-    if (requestCount === 1) {
-      const error = new Error('Unauthorized');
-      error.response = { status: 401 };
-      throw error;
-    }
-    return { status: 200, data: [] };
-  };
-  try {
-    await fetchFleetxTelemetryWithRetries(
-      'https://api.fleetx.io/api/v1/analytics/live',
-      3,
-      'expired-test-token'
-    );
-    assert.equal(requestCount, 2);
-    assert.equal(loginCount, 2);
-    assert.deepEqual(authHeaders, [
-      'Bearer fresh-test-token-1',
-      'Bearer fresh-test-token-2',
-    ]);
-  } finally {
-    axios.post = originalPost;
-    axios.get = originalGet;
-    global.setTimeout = originalSetTimeout;
-    for (const [key, value] of Object.entries(originalEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
-});
-
-test('FleetX coalesces simultaneous login requests', async () => {
-  const originalPost = axios.post;
-  const originalGet = axios.get;
-  const originalEnv = {
-    FLEETX_LOGIN_URL: process.env.FLEETX_LOGIN_URL,
-    FLEETX_USERNAME: process.env.FLEETX_USERNAME,
-    FLEETX_PASSWORD: process.env.FLEETX_PASSWORD,
-    FLEETX_BASIC_AUTH: process.env.FLEETX_BASIC_AUTH,
-  };
-  let loginCount = 0;
-  process.env.FLEETX_LOGIN_URL = 'https://api.fleetx.io/api/v1/login';
-  process.env.FLEETX_USERNAME = 'fleetx-test-user';
-  process.env.FLEETX_PASSWORD = 'fleetx-test-password';
-  process.env.FLEETX_BASIC_AUTH = '';
-  axios.post = async () => {
-    loginCount += 1;
-    await Promise.resolve();
-    return { data: { access_token: 'shared-test-token' } };
-  };
-  axios.get = async () => ({ status: 200, data: [] });
-  try {
-    await Promise.all([
-      fetchFleetxTelemetryWithRetries('https://api.fleetx.io/api/v1/analytics/live'),
-      fetchFleetxTelemetryWithRetries('https://api.fleetx.io/api/v1/analytics/live'),
-    ]);
-    assert.equal(loginCount, 1);
-  } finally {
-    axios.post = originalPost;
-    axios.get = originalGet;
-    for (const [key, value] of Object.entries(originalEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
-});
-
-test('FleetX retries an unauthorized request only once after refreshing the token', async () => {
-  const originalPost = axios.post;
-  const originalGet = axios.get;
-  const originalEnv = {
-    FLEETX_LOGIN_URL: process.env.FLEETX_LOGIN_URL,
-    FLEETX_USERNAME: process.env.FLEETX_USERNAME,
-    FLEETX_PASSWORD: process.env.FLEETX_PASSWORD,
-    FLEETX_BASIC_AUTH: process.env.FLEETX_BASIC_AUTH,
-  };
-  let loginCount = 0;
-  let requestCount = 0;
-  process.env.FLEETX_LOGIN_URL = 'https://api.fleetx.io/api/v1/login';
-  process.env.FLEETX_USERNAME = 'fleetx-test-user';
-  process.env.FLEETX_PASSWORD = 'fleetx-test-password';
-  process.env.FLEETX_BASIC_AUTH = '';
-  axios.post = async () => {
-    loginCount += 1;
-    return { data: { access_token: `refreshed-test-token-${loginCount}` } };
-  };
-  axios.get = async () => {
-    requestCount += 1;
-    const error = new Error('Unauthorized');
-    error.response = { status: 401 };
-    throw error;
-  };
-  try {
-    await assert.rejects(fetchFleetxTelemetryWithRetries(
-      'https://api.fleetx.io/api/v1/analytics/live',
-      3,
-      'expired-test-token'
-    ));
-    assert.equal(requestCount, 2);
-    assert.equal(loginCount, 2);
-  } finally {
-    axios.post = originalPost;
-    axios.get = originalGet;
-    for (const [key, value] of Object.entries(originalEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
-});
-
-test('FleetX falls back to the configured bearer token when login credentials are unavailable', async () => {
-  const originalPost = axios.post;
-  const originalGet = axios.get;
-  const originalEnv = {
-    FLEETX_LOGIN_URL: process.env.FLEETX_LOGIN_URL,
-    FLEETX_USERNAME: process.env.FLEETX_USERNAME,
-    FLEETX_PASSWORD: process.env.FLEETX_PASSWORD,
-  };
-  let apiAuthorization;
-  delete process.env.FLEETX_LOGIN_URL;
-  delete process.env.FLEETX_USERNAME;
-  delete process.env.FLEETX_PASSWORD;
-  axios.post = async () => {
-    throw new Error('Login should not be called without configured credentials.');
-  };
-  axios.get = async (_url, config) => {
-    apiAuthorization = config.headers.Authorization;
-    return { status: 200, data: [] };
-  };
-  try {
-    await fetchFleetxTelemetryWithRetries(
-      'https://api.fleetx.io/api/v1/analytics/live',
-      3,
-      'configured-static-token'
-    );
-    assert.equal(apiAuthorization, 'Bearer configured-static-token');
-  } finally {
-    axios.post = originalPost;
-    axios.get = originalGet;
-    for (const [key, value] of Object.entries(originalEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
-});
-
-test('FleetX vehicle endpoint appends an encoded vehicle number', () => {
-  const originalVehicleUrl = process.env.FLEETX_VEHICLE_URL;
-  process.env.FLEETX_VEHICLE_URL = 'https://api.fleetx.io/api/v1/analytics/live/byNumber';
-  try {
-    assert.equal(
-      getFleetxVehicleUrl('TN09 CV 0182'),
-      'https://api.fleetx.io/api/v1/analytics/live/byNumber/TN09%20CV%200182'
-    );
-  } finally {
-    if (originalVehicleUrl === undefined) delete process.env.FLEETX_VEHICLE_URL;
-    else process.env.FLEETX_VEHICLE_URL = originalVehicleUrl;
-  }
-});
-
-test('FleetX single-vehicle lookup uses the byNumber endpoint and normalizes telemetry', async () => {
-  const originalPost = axios.post;
-  const originalGet = axios.get;
-  const originalEnv = {
-    FLEETX_LOGIN_URL: process.env.FLEETX_LOGIN_URL,
-    FLEETX_USERNAME: process.env.FLEETX_USERNAME,
-    FLEETX_PASSWORD: process.env.FLEETX_PASSWORD,
-    FLEETX_BASIC_AUTH: process.env.FLEETX_BASIC_AUTH,
-    FLEETX_VEHICLE_URL: process.env.FLEETX_VEHICLE_URL,
-  };
-  let requestedUrl;
-  process.env.FLEETX_LOGIN_URL = 'https://api.fleetx.io/api/v1/login';
-  process.env.FLEETX_USERNAME = 'fleetx-test-user';
-  process.env.FLEETX_PASSWORD = 'fleetx-test-password';
-  process.env.FLEETX_BASIC_AUTH = '';
-  process.env.FLEETX_VEHICLE_URL = 'https://api.fleetx.io/api/v1/analytics/live/byNumber';
-  axios.post = async () => ({ data: { data: { token: 'vehicle-test-token' } } });
-  axios.get = async (url) => {
-    requestedUrl = url;
-    return {
-      status: 200,
-      data: {
-        data: {
-          vehicleNumber: 'TN09CV0182',
-          latitude: '13.08',
-          longitude: '80.27',
-          speed: '35',
-          lastUpdated: '2026-11-17T10:00:00Z',
-        },
-      },
-    };
-  };
-  try {
-    const result = await fetchFleetxVehicleTelemetry('TN09CV0182');
-    assert.match(requestedUrl, /\/byNumber\/TN09CV0182$/);
-    assert.equal(result.length, 1);
-    assert.equal(result[0].vehicleNumber, 'TN09CV0182');
-    assert.equal(result[0].latitude, 13.08);
-    assert.equal(result[0].longitude, 80.27);
-    assert.equal(result[0].speed, 35);
-  } finally {
-    axios.post = originalPost;
-    axios.get = originalGet;
-    for (const [key, value] of Object.entries(originalEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
-});
 
 test('GPS sync safely treats a missing ZoneSession as no open session', async () => {
   const originalFindOne = ZoneSession.findOne;
@@ -305,10 +22,10 @@ test('GPS sync safely treats a missing ZoneSession as no open session', async ()
     return { sort: async () => null };
   };
   try {
-    const session = await findOpenProviderZoneSession('up 14-aa 1001', 'FleetX');
+    const session = await findOpenProviderZoneSession('up 14-aa 1001');
     assert.equal(session, null);
     assert.equal(query.vehicleNumberNormalized, 'UP14AA1001');
-    assert.equal(query.provider, 'FleetX');
+    assert.equal(query.provider, 'WheelsEye GPS');
   } finally {
     ZoneSession.findOne = originalFindOne;
   }
@@ -370,6 +87,83 @@ test('WheelsEye telemetry is the only requested source and normalizes its return
     assert.deepEqual(requestedUrls.map((url) => new URL(url).hostname), ['wheels.example']);
   } finally {
     axios.get = originalGet;
+  }
+});
+
+test('WheelsEye currentLoc response aliases and default endpoint map into telemetry', async () => {
+  const originalGet = axios.get;
+  const originalEnv = {
+    WHEELSEYE_API_URL: process.env.WHEELSEYE_API_URL,
+    WHEELSEYE_API_KEY: process.env.WHEELSEYE_API_KEY,
+    WHEELSEYE_ACCESS_TOKEN: process.env.WHEELSEYE_ACCESS_TOKEN,
+  };
+  let requestedUrl;
+  delete process.env.WHEELSEYE_API_URL;
+  delete process.env.WHEELSEYE_API_KEY;
+  delete process.env.WHEELSEYE_ACCESS_TOKEN;
+  axios.get = async (url) => {
+    requestedUrl = new URL(url);
+    return {
+      status: 200,
+      data: [{
+        vehicleNo: 'tn 09-cv 0182',
+        lat: '13.08',
+        lon: '80.27',
+        speedKmph: '31',
+        gpsTime: '2026-11-17T10:00:00Z',
+      }],
+    };
+  };
+  try {
+    const result = await fetchWheelsEyeTelemetry([]);
+    assert.equal(requestedUrl.hostname, 'api.wheelseye.com');
+    assert.equal(requestedUrl.pathname, '/currentLoc');
+    assert.equal(result.vehicles.length, 1);
+    assert.equal(result.vehicles[0].vehicleNumber, 'TN09CV0182');
+    assert.equal(result.vehicles[0].latitude, 13.08);
+    assert.equal(result.vehicles[0].longitude, 80.27);
+    assert.equal(result.vehicles[0].speed, 31);
+    assert.equal(
+      normalizeWheelseyeItem({ vehicleNo: 'tn 09-cv 0182', lat: '13.08', lon: '80.27' }).vehicleNumber,
+      'TN09CV0182'
+    );
+  } finally {
+    axios.get = originalGet;
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('default WheelsEye endpoint remains active when a stale setting has no URL', async () => {
+  const originalGet = axios.get;
+  const originalEnv = {
+    WHEELSEYE_API_URL: process.env.WHEELSEYE_API_URL,
+    WHEELSEYE_API_KEY: process.env.WHEELSEYE_API_KEY,
+    WHEELSEYE_ACCESS_TOKEN: process.env.WHEELSEYE_ACCESS_TOKEN,
+  };
+  let requestedUrl;
+  delete process.env.WHEELSEYE_API_URL;
+  delete process.env.WHEELSEYE_API_KEY;
+  delete process.env.WHEELSEYE_ACCESS_TOKEN;
+  axios.get = async (url) => {
+    requestedUrl = new URL(url);
+    return { status: 200, data: [] };
+  };
+  try {
+    const result = await fetchWheelsEyeTelemetry([
+      { provider: 'WheelsEye GPS', status: 'Inactive', apiUrl: '' },
+    ]);
+    assert.equal(requestedUrl.hostname, 'api.wheelseye.com');
+    assert.equal(requestedUrl.pathname, '/currentLoc');
+    assert.equal(result.vehicles.length, 0);
+  } finally {
+    axios.get = originalGet;
+    for (const [key, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
 

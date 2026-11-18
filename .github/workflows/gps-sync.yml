@@ -1,4 +1,4 @@
-name: GPS 30-Minute Auto Sync
+name: WheelsEye GPS 30-Minute Auto Sync
 
 on:
   schedule:

@@ -36,17 +36,17 @@ const vehicleSchema = new mongoose.Schema(
     },
     gpsProvider: {
       type: String,
-      enum: ['wheelseye', 'fleetx'],
-      default: undefined,
+      enum: ['wheelseye'],
+      default: 'wheelseye',
       lowercase: true,
       trim: true,
     },
     gpsProviders: {
       type: [{
         type: String,
-        enum: ['WheelsEye GPS', 'FleetX'],
+        enum: ['WheelsEye GPS'],
       }],
-      default: [],
+      default: ['WheelsEye GPS'],
     },
     status: {
       type: String,

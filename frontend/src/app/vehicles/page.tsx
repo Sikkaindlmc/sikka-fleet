@@ -11,8 +11,6 @@ import { apiRequest } from '../../lib/api';
 import { formatDateTime, clean10DigitPhone, normalizeVehicleNumber } from '../../lib/formatters';
 import { useAuth } from '../../lib/authContext';
 
-type ProviderFilter = 'All' | 'WheelsEye' | 'FleetX';
-
 interface VehicleRecord {
   _id: string;
   vehicleNumber: string;
@@ -21,29 +19,16 @@ interface VehicleRecord {
   fleetType: 'Own Fleet' | 'Hired' | 'Rental';
   ownerName?: string;
   gpsDeviceId?: string;
-  gpsProvider?: 'wheelseye' | 'fleetx';
+  gpsProvider?: 'wheelseye';
   status: 'Active' | 'Inactive';
   assignedDriverId?: string | null;
   assignmentType?: 'MANUAL' | 'AUTO_GPS' | 'NONE';
   assignedAt?: string | null;
   matchingDrivers?: NearestDriverItem[];
-  gpsStatus?: 'WheelsEye' | 'FleetX' | 'No GPS' | 'No GPS (WheelsEye)';
+  gpsStatus?: 'WheelsEye' | 'No GPS';
   gpsProviders?: string[];
   createdAt: string;
   updatedAt: string;
-}
-
-function getProviderLabels(vehicle: VehicleRecord): string[] {
-  if (vehicle.gpsProvider) {
-    return [vehicle.gpsProvider === 'fleetx' ? 'FleetX' : 'WheelsEye'];
-  }
-  const providers = new Set<string>();
-  for (const provider of vehicle.gpsProviders || []) {
-    if (/fleetx/i.test(provider)) providers.add('FleetX');
-    else if (/wheels.?eye/i.test(provider)) providers.add('WheelsEye');
-  }
-  if (vehicle.gpsStatus === 'WheelsEye') providers.add('WheelsEye');
-  return [...providers];
 }
 
 export default function VehicleRegisterPage() {
@@ -52,7 +37,6 @@ export default function VehicleRegisterPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncingProviders, setIsSyncingProviders] = useState(false);
   const [alert, setAlert] = useState<AlertState | null>(null);
-  const [providerFilter, setProviderFilter] = useState<ProviderFilter>('All');
   const [vehicleSearch, setVehicleSearch] = useState('');
 
   // Modal states
@@ -78,7 +62,6 @@ export default function VehicleRegisterPage() {
     fleetType: 'Own Fleet' as 'Own Fleet' | 'Hired' | 'Rental',
     ownerName: '',
     gpsDeviceId: '',
-    gpsProvider: 'wheelseye' as 'wheelseye' | 'fleetx',
     status: 'Active' as 'Active' | 'Inactive',
   });
   const [formError, setFormError] = useState('');
@@ -103,32 +86,24 @@ export default function VehicleRegisterPage() {
     fetchVehicles();
   }, [fetchVehicles]);
 
-  const filteredVehicles = vehicles.filter((vehicle) => {
-    const matchesSearch = vehicle.vehicleNumber.toLowerCase().includes(vehicleSearch.trim().toLowerCase());
-    const matchesProvider = providerFilter === 'All' ||
-      getProviderLabels(vehicle).includes(providerFilter);
-    return matchesSearch && matchesProvider;
-  });
+  const filteredVehicles = vehicles.filter((vehicle) =>
+    vehicle.vehicleNumber.toLowerCase().includes(vehicleSearch.trim().toLowerCase())
+  );
 
   const handleProviderSync = async () => {
     setIsSyncingProviders(true);
     try {
       const result = await apiRequest<{
         message?: string;
-        providerResults?: Array<{ provider: string; success: boolean }>;
+        success?: boolean;
       }>('/gps/trigger-sync', {
         method: 'POST',
-        body: JSON.stringify({ provider: 'both' }),
+        body: JSON.stringify({ provider: 'WheelsEye GPS' }),
         timeoutMs: 120000,
       });
-      const failedProviders = (result.providerResults || [])
-        .filter((providerResult) => !providerResult.success)
-        .map((providerResult) => providerResult.provider);
       setAlert({
-        type: failedProviders.length ? 'error' : 'success',
-        message: failedProviders.length
-          ? `${result.message || 'Provider sync completed with errors'} Failed: ${failedProviders.join(', ')}.`
-          : result.message || 'Provider vehicle sync completed.',
+        type: result.success === false ? 'error' : 'success',
+        message: result.message || 'WheelsEye GPS sync completed.',
       });
       await fetchVehicles();
     } catch (err) {
@@ -152,7 +127,6 @@ export default function VehicleRegisterPage() {
       fleetType: 'Own Fleet',
       ownerName: '',
       gpsDeviceId: '',
-      gpsProvider: 'wheelseye',
       status: 'Active',
     });
     setFormError('');
@@ -172,7 +146,6 @@ export default function VehicleRegisterPage() {
       fleetType: vehicle.fleetType,
       ownerName: vehicle.ownerName || '',
       gpsDeviceId: vehicle.gpsDeviceId || '',
-      gpsProvider: vehicle.gpsProvider || (getProviderLabels(vehicle).includes('FleetX') ? 'fleetx' : 'wheelseye'),
       status: vehicle.status,
     });
     setFormError('');
@@ -294,7 +267,6 @@ export default function VehicleRegisterPage() {
           fleetType: formData.fleetType,
           ownerName: formData.ownerName.trim(),
           gpsDeviceId: formData.gpsDeviceId.trim() || formData.vehicleNumber.trim(),
-          gpsProvider: formData.gpsProvider,
           status: formData.status,
         }),
       });
@@ -345,7 +317,6 @@ export default function VehicleRegisterPage() {
           fleetType: formData.fleetType,
           ownerName: formData.ownerName.trim(),
           gpsDeviceId: formData.gpsDeviceId.trim(),
-          gpsProvider: formData.gpsProvider,
           status: formData.status,
         }),
       });
@@ -387,7 +358,7 @@ export default function VehicleRegisterPage() {
                 className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-bold rounded-xl transition cursor-pointer"
               >
                 <RefreshCw className={`w-4 h-4 ${isSyncingProviders ? 'animate-spin' : ''}`} />
-                <span>{isSyncingProviders ? 'Syncing providers...' : 'Sync GPS Providers'}</span>
+                <span>{isSyncingProviders ? 'Syncing WheelsEye...' : 'Sync WheelsEye GPS'}</span>
               </button>
             )}
             <button
@@ -421,23 +392,6 @@ export default function VehicleRegisterPage() {
           </div>
 
           <div className="flex flex-col gap-3 border-b border-slate-100 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-wrap gap-2" role="group" aria-label="Filter vehicles by GPS provider">
-              {(['All', 'WheelsEye', 'FleetX'] as ProviderFilter[]).map((provider) => (
-                <button
-                  key={provider}
-                  type="button"
-                  onClick={() => setProviderFilter(provider)}
-                  aria-pressed={providerFilter === provider}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-bold transition ${
-                    providerFilter === provider
-                      ? 'bg-emerald-100 text-emerald-800'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  {provider}
-                </button>
-              ))}
-            </div>
             <input
               type="search"
               value={vehicleSearch}
@@ -462,7 +416,7 @@ export default function VehicleRegisterPage() {
               <p className="text-xs text-slate-400 mt-1">
                 {vehicles.length === 0
                   ? 'Click Add Vehicle or sync GPS providers to enroll vehicles.'
-                  : 'Try a different search term or provider filter.'}
+                  : 'Try a different search term.'}
               </p>
             </div>
           ) : (
@@ -490,18 +444,13 @@ export default function VehicleRegisterPage() {
                           <span className="font-extrabold text-slate-900 text-sm tracking-wide">
                             {v.vehicleNumber}
                           </span>
-                          {getProviderLabels(v).length > 0 ? getProviderLabels(v).map((provider) => (
+                          {v.gpsStatus === 'WheelsEye' ? (
                             <span
-                              key={provider}
-                              className={`rounded-md px-1.5 py-0.5 text-[9px] font-bold ${
-                                provider === 'WheelsEye'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : 'bg-blue-100 text-blue-800'
-                              }`}
+                              className="rounded-md bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold text-emerald-800"
                             >
-                              {provider}
+                              WheelsEye
                             </span>
-                          )) : (
+                          ) : (
                             <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-600">
                               Not linked
                             </span>
@@ -697,22 +646,6 @@ export default function VehicleRegisterPage() {
               </select>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                GPS Provider *
-              </label>
-              <select
-                value={formData.gpsProvider}
-                onChange={(e) => setFormData({ ...formData, gpsProvider: e.target.value as 'wheelseye' | 'fleetx' })}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden bg-white"
-                disabled={isSubmitting}
-                required
-              >
-                <option value="wheelseye">WheelsEye</option>
-                <option value="fleetx">FleetX</option>
-              </select>
-            </div>
-
             {/* Conditional Owner Name */}
             {(formData.fleetType === 'Hired' || formData.fleetType === 'Rental') && (
               <div className="animate-in fade-in duration-150">
@@ -842,22 +775,6 @@ export default function VehicleRegisterPage() {
                 <option value="Own Fleet">Own Fleet</option>
                 <option value="Hired">Hired</option>
                 <option value="Rental">Rental</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                GPS Provider *
-              </label>
-              <select
-                value={formData.gpsProvider}
-                onChange={(e) => setFormData({ ...formData, gpsProvider: e.target.value as 'wheelseye' | 'fleetx' })}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden bg-white"
-                disabled={isSubmitting}
-                required
-              >
-                <option value="wheelseye">WheelsEye</option>
-                <option value="fleetx">FleetX</option>
               </select>
             </div>
 

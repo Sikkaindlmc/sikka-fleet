@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { executeGpsSyncForBothProviders, getNextFixed30MinSlotIST } = require('./gpsSyncService');
+const { executeGpsSync, getNextFixed30MinSlotIST } = require('./gpsSyncService');
 const GpsSetting = require('../models/GpsSetting');
 const PlanNotification = require('../models/PlanNotification');
 const { cleanupExpiredPlans } = require('../utils/planHelper');
@@ -44,13 +44,13 @@ async function runScheduledGpsSync(triggerType = 'GPS_AUTO_SYNC_30MIN', slotKey 
   console.log(`[GPS Scheduler IST] [${istString}] Triggering server-side 30-minute sync (Slot: ${currentSlot})...`);
 
   try {
-    const result = await executeGpsSyncForBothProviders({
+    const result = await executeGpsSync({
       source: 'AUTO',
       triggerType,
       slotKey,
     });
     if (!result.success) {
-      console.error('[GPS Scheduler] One or more provider synchronizations failed.', result.providerResults);
+      console.error('[GPS Scheduler] WheelsEye synchronization failed.', result.message);
     }
 
     // Auto-cleanup expired plans (Add Plan >12h, Next Trip Plan >24h)
@@ -116,22 +116,15 @@ function startGpsScheduler() {
       // Check when last successful sync occurred from database
       const settings = await GpsSetting.find({
         archived: { $ne: true },
-        $or: [{ provider: /wheels.?eye/i }, { provider: /fleetx|fleet/i }],
+        $or: [{ provider: /wheels.?eye/i }, { apiUrl: /wheelseye/i }],
       }).sort({ updatedAt: -1 });
-      const staleProvider = [
-        /wheels.?eye/i,
-        /fleetx|fleet/i,
-      ].some((matcher) => {
-        const setting = settings.find((item) => matcher.test(item.provider || ''));
-        const lastSync = setting?.last_evaluated_timestamp || setting?.lastSync || null;
-        const elapsed = lastSync ? now.getTime() - new Date(lastSync).getTime() : Infinity;
-        return elapsed > 30 * 60 * 1000;
-      });
-
-      const slotMissed = lastSlotAttempted !== currentSlot && staleProvider;
+      const setting = settings[0];
+      const lastSync = setting?.last_evaluated_timestamp || setting?.lastSync || null;
+      const elapsed = lastSync ? now.getTime() - new Date(lastSync).getTime() : Infinity;
+      const slotMissed = lastSlotAttempted !== currentSlot && elapsed > 30 * 60 * 1000;
 
       if (slotMissed) {
-        console.log(`[GPS Scheduler Heartbeat] Missed provider sync or boundary detected (Slot: ${currentSlot}). Catching up...`);
+        console.log(`[GPS Scheduler Heartbeat] Missed WheelsEye sync or boundary detected (Slot: ${currentSlot}). Catching up...`);
         lastSlotAttempted = currentSlot;
         await runScheduledGpsSync('AUTONOMOUS_HEARTBEAT_IST', currentSlot);
       }
@@ -147,19 +140,13 @@ function startGpsScheduler() {
     try {
       const settings = await GpsSetting.find({
         archived: { $ne: true },
-        $or: [{ provider: /wheels.?eye/i }, { provider: /fleetx|fleet/i }],
+        $or: [{ provider: /wheels.?eye/i }, { apiUrl: /wheelseye/i }],
       }).sort({ updatedAt: -1 });
-      const elapsedByProvider = [
-        /wheels.?eye/i,
-        /fleetx|fleet/i,
-      ].map((matcher) => {
-        const setting = settings.find((item) => matcher.test(item.provider || ''));
-        const lastSync = setting?.last_evaluated_timestamp || setting?.lastSync || null;
-        return lastSync ? Date.now() - new Date(lastSync).getTime() : Infinity;
-      });
-      const elapsedMs = Math.min(...elapsedByProvider);
+      const setting = settings[0];
+      const lastSync = setting?.last_evaluated_timestamp || setting?.lastSync || null;
+      const elapsedMs = lastSync ? Date.now() - new Date(lastSync).getTime() : Infinity;
 
-      if (elapsedByProvider.some((elapsed) => elapsed > 25 * 60 * 1000)) {
+      if (elapsedMs > 25 * 60 * 1000) {
         console.log(`[GPS Scheduler] Startup check: Telemetry data missing or >25m old. Executing initial sync...`);
         const slot = getCurrentIstSlotKey();
         lastSlotAttempted = slot;

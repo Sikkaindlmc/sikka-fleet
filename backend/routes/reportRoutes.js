@@ -18,14 +18,12 @@ router.use(verifyToken, checkPageAccess('Report'));
 // GET /api/reports/options - Retrieve selectable vehicles & drivers for filter dropdowns
 router.get('/options', async (req, res) => {
   try {
-    const [allVehicles, wheelsEyeVehicleIds, fleetXVehicleIds, drivers] = await Promise.all([
+    const [allVehicles, wheelsEyeVehicleIds, drivers] = await Promise.all([
       Vehicle.find().select('vehicleNumber status gpsProvider gpsProviders').sort({ vehicleNumber: 1 }),
       GpsHistory.distinct('vehicleId', { provider: /wheels.?eye/i, archived: { $ne: true } }),
-      GpsHistory.distinct('vehicleId', { provider: /fleetx|fleet/i, archived: { $ne: true } }),
       Driver.find().select('driverName dlNumber mobileNumber status').sort({ driverName: 1 }),
     ]);
-    const gpsVehicleIdSet = new Set([...wheelsEyeVehicleIds, ...fleetXVehicleIds]
-      .filter(Boolean).map((id) => id.toString()));
+    const gpsVehicleIdSet = new Set(wheelsEyeVehicleIds.filter(Boolean).map((id) => id.toString()));
     const vehicles = allVehicles.filter((vehicle) =>
       vehicle.status === 'Active' && gpsVehicleIdSet.has(vehicle._id.toString())
     );

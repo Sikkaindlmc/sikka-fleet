@@ -8,6 +8,7 @@ const {
   getAssignedGpsProvider,
   getGpsConnectionStatus,
 } = require('../utils/gpsProvider');
+const GpsSetting = require('../models/GpsSetting');
 
 test('provider vehicle discovery normalizes and deduplicates vehicle numbers', () => {
   const records = getProviderVehicleRegistryRecords([
@@ -32,22 +33,17 @@ test('provider vehicle discovery normalizes and deduplicates vehicle numbers', (
   ]);
 });
 
-test('assigned GPS provider controls which telemetry can update a vehicle', () => {
+test('WheelsEye GPS configuration defaults to active', () => {
+  const setting = new GpsSetting();
+  assert.equal(setting.provider, 'WheelsEye GPS');
+  assert.equal(setting.status, 'Active');
+});
+
+test('WheelsEye sync updates registered active vehicles and excludes inactive or unregistered vehicles', () => {
   const vehiclesByNumber = new Map([
-    ['UP14AA1001', {
-      status: 'Active',
-      gpsProvider: 'fleetx',
-      gpsProviders: ['WheelsEye GPS'],
-    }],
-    ['UP14BB2002', {
-      status: 'Active',
-      gpsProviders: ['FleetX'],
-    }],
-    ['UP14CC3003', {
-      status: 'Active',
-      gpsProvider: 'wheelseye',
-      gpsProviders: ['FleetX'],
-    }],
+    ['UP14AA1001', { status: 'Active' }],
+    ['UP14BB2002', { status: 'Inactive' }],
+    ['UP14CC3003', { status: 'Active' }],
   ]);
   const telemetry = [
     { vehicleNumber: 'UP14AA1001' },
@@ -56,27 +52,22 @@ test('assigned GPS provider controls which telemetry can update a vehicle', () =
     { vehicleNumber: 'UP14DD4004' },
   ];
 
-  assert.equal(getAssignedGpsProvider(vehiclesByNumber.get('UP14AA1001')), 'fleetx');
+  assert.equal(getAssignedGpsProvider(), 'wheelseye');
   assert.deepEqual(
-    filterTelemetryForActiveVehicles(telemetry, vehiclesByNumber, 'FleetX')
+    filterTelemetryForActiveVehicles(telemetry, vehiclesByNumber)
       .map((item) => item.vehicleNumber),
-    ['UP14AA1001', 'UP14BB2002']
-  );
-  assert.deepEqual(
-    filterTelemetryForActiveVehicles(telemetry, vehiclesByNumber, 'WheelsEye GPS')
-      .map((item) => item.vehicleNumber),
-    ['UP14CC3003']
+    ['UP14AA1001', 'UP14CC3003']
   );
 });
 
-test('GPS health never treats an unchecked or stale Connected setting as live', () => {
+test('GPS health reports defaults as pending and never treats unchecked or stale settings as live', () => {
   const originalUrl = process.env.WHEELSEYE_API_URL;
   delete process.env.WHEELSEYE_API_URL;
   try {
     const now = Date.parse('2026-11-17T12:00:00Z');
     assert.equal(
       getGpsConnectionStatus({ connectionStatus: 'Connected' }, 'WheelsEye GPS', now),
-      'Configuration Missing'
+      'Pending'
     );
     assert.equal(
       getGpsConnectionStatus({

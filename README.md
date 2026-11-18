@@ -7,7 +7,7 @@ Enterprise fleet management, plant geofencing, and telematics tracking system bu
 - **Dashboard**: Live plant geofencing monitoring with entry timestamps, distances, and Excel `.xls` export.
 - **Plant Management**: Add, configure, and monitor plants with custom circular geofence perimeters.
 - **Vehicle Register**: Manage fleet vehicles (Own Fleet, Hired, Rental) with custom driver attributions.
-- **GPS Telematics**: WheelsEye and FleetX integrations with 30-minute scheduled sync and dispatch planning.
+- **GPS Telematics**: WheelsEye integration with 30-minute scheduled sync and dispatch planning.
 - **User Management**: Role-based access control (Admin & Plant Operators) with plant-level permissions.
 - **MongoDB Atlas Integration**: Cloud MongoDB connection with automatic schema validation and indexes.
 
@@ -18,7 +18,7 @@ Enterprise fleet management, plant geofencing, and telematics tracking system bu
 - **Frontend**: Next.js 16 (App Router), React 19, Tailwind CSS, Lucide Icons
 - **Backend**: Node.js, Express 5, Mongoose 9, JWT Authentication
 - **Database**: MongoDB Atlas Cloud
-- **Telematics**: WheelsEye and FleetX GPS APIs
+- **Telematics**: WheelsEye GPS API
 
 ---
 
@@ -26,9 +26,9 @@ Enterprise fleet management, plant geofencing, and telematics tracking system bu
 
 ### GPS synchronization
 
-Each scheduled run synchronizes both WheelsEye and FleetX. The GitHub Actions workflow in `.github/workflows/gps-sync.yml` calls the shared GPS sync endpoint every 30 minutes; configure repository Actions secrets `BACKEND_URL` (backend origin, without `/api`) and `CRON_SECRET` (matching the backend environment variable), and enable Actions for the repository. The schedule runs at `:00` and `:30` UTC; these are also `:30` and `:00` IST because IST is UTC+05:30. For an always-on backend, set `GPS_SCHEDULER_MODE=server` to use the in-process scheduler instead. Configure only one scheduler.
+Each scheduled run synchronizes WheelsEye. The GitHub Actions workflow in `.github/workflows/gps-sync.yml` calls the shared GPS sync endpoint every 30 minutes; configure repository Actions secrets `BACKEND_URL` (backend origin, without `/api`) and `CRON_SECRET` (matching the backend environment variable), and enable Actions for the repository. The schedule runs at `:00` and `:30` UTC; these are also `:30` and `:00` IST because IST is UTC+05:30. For an always-on backend, set `GPS_SCHEDULER_MODE=server` to use the in-process scheduler instead. Configure only one scheduler.
 
-Configure WheelsEye with `WHEELSEYE_API_URL` and `WHEELSEYE_API_KEY`. Configure FleetX with `FLEETX_LOGIN_URL`, `FLEETX_API_URL`, `FLEETX_VEHICLE_URL`, `FLEETX_BASIC_AUTH`, `FLEETX_USERNAME`, and `FLEETX_PASSWORD`; the backend uses FleetX's password-grant login to obtain and refresh a bearer token. Keep real credentials in the ignored backend `.env` or deployment secrets, never in `.env.example`. Credentials saved through GPS Settings are stored encrypted. Vehicle Register status must be Active for new sync processing and current Dashboard/GPS visibility.
+Configure WheelsEye with `WHEELSEYE_API_URL` and `WHEELSEYE_API_KEY`. The backend initializes an active WheelsEye setting and keeps saved API credentials encrypted in the database; keep deployment credentials in the host's secret manager or ignored backend `.env`, never in `.env.example`. Vehicle Register status must be Active for new sync processing and current Dashboard/GPS visibility.
 
 Set `GPS_STALE_THRESHOLD_MINUTES=30` and `GPS_REPORT_MAX_GAP_MINUTES=90` in the backend environment to configure the GPS freshness and timeline gap thresholds. Vendor timestamps must include an explicit timezone; all report day boundaries use `Asia/Kolkata`.
 
@@ -52,7 +52,7 @@ node scripts/migrateProviderGpsIndexes.js
 
 Run the GPS timeline and sync tests with `npm test` from `backend`. The fleet report uses midpoint interpolation for status transitions, marks intervals beyond the configured maximum GPS gap as `No GPS Data`, and allocates every completed vehicle-day to exactly 24 hours.
 
-Each provider's GPS location, timestamps, synchronization history, and geofence result are kept separate. Geofence centers and radii are read from active Plant records.
+WheelsEye GPS locations, timestamps, synchronization history, and geofence results are stored for the fleet. Geofence centers and radii are read from active Plant records.
 
 For temporary telemetry diagnostics, set backend `GPS_RAW_SAMPLE_LOGGING=true`, run one sync, inspect the server logs, then set it back to `false`. It logs only a small sample per provider and redacts secret-like fields.
 

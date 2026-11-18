@@ -924,7 +924,7 @@ export default function DashboardPage() {
           <div className="flex items-center flex-wrap gap-2.5">
             <div className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 shadow-2xs">
               <span>GPS auto-sync:</span>
-              <span>WheelsEye + FleetX every 30 min · {gpsSyncHealth?.schedulerStatus || 'Checking status'}</span>
+              <span>WheelsEye GPS • Auto-sync every 30 min · {gpsSyncHealth?.schedulerStatus || 'Checking status'}</span>
             </div>
 
 
@@ -948,7 +948,7 @@ export default function DashboardPage() {
           {(gpsSyncHealth?.providers || []).map((provider) => (
             <div key={provider.provider} className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-xs">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-bold text-slate-800">{provider.provider} GPS</span>
+                <span className="text-xs font-bold text-slate-800">{provider.provider}</span>
                 <span className={`inline-flex items-center gap-1.5 text-[10px] font-bold ${
                   provider.status === 'Connected' ? 'text-emerald-700' : 'text-amber-700'
                 }`}>

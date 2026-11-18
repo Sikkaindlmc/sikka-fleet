@@ -557,16 +557,14 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
   const normalizedProvider = String(provider || 'all').toLowerCase() === 'all'
     ? 'all'
     : normalizeGpsProvider(provider, '');
-  if (!['all', 'wheelseye', 'fleetx'].includes(normalizedProvider)) {
-    throw new Error('GPS provider must be WheelsEye or FleetX.');
+  if (!['all', 'wheelseye'].includes(normalizedProvider)) {
+    throw new Error('GPS provider must be WheelsEye.');
   }
-  const [registeredVehicles, wheelsEyeVehicleIds, fleetXVehicleIds] = await Promise.all([
+  const [registeredVehicles, wheelsEyeVehicleIds] = await Promise.all([
     Vehicle.find({ status: 'Active' }).sort({ vehicleNumber: 1 }),
     GpsHistory.distinct('vehicleId', { provider: /wheels.?eye/i, archived: { $ne: true } }),
-    GpsHistory.distinct('vehicleId', { provider: /fleetx|fleet/i, archived: { $ne: true } }),
   ]);
-  const gpsVehicleIdSet = new Set([...wheelsEyeVehicleIds, ...fleetXVehicleIds]
-    .filter(Boolean).map((id) => id.toString()));
+  const gpsVehicleIdSet = new Set(wheelsEyeVehicleIds.filter(Boolean).map((id) => id.toString()));
   const vehicles = registeredVehicles.filter((vehicle) =>
     gpsVehicleIdSet.has(vehicle._id.toString()) &&
     (normalizedProvider === 'all' || getAssignedGpsProvider(vehicle) === normalizedProvider)
@@ -585,13 +583,13 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
   const [history, zoneSessions] = await Promise.all([
     GpsHistory.find({
       vehicleId: { $in: targetVehicles.map((vehicle) => vehicle._id) },
-      provider: /wheels.?eye|fleetx|fleet/i,
+      provider: /wheels.?eye/i,
       archived: { $ne: true },
       gpsTimestamp: { $gte: historyStart, $lte: historyEnd },
     }).sort({ gpsTimestamp: 1, syncTime: 1 }),
     ZoneSession.find({
       vehicleId: { $in: targetVehicles.map((vehicle) => vehicle._id) },
-      provider: /wheels.?eye|fleetx|fleet/i,
+      provider: /wheels.?eye/i,
       archived: { $ne: true },
       enteredAt: { $lte: historyEnd },
       $or: [{ exitedAt: null }, { exitedAt: { $gte: historyStart } }],
