@@ -193,22 +193,95 @@ function getLocationDiscrepancyMeters(providerLocations) {
   );
 }
 
-async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } = {}) {
-  const [vehicles, plants, statuses, openSessions, gpsSettings] = await Promise.all([
-    Vehicle.find({ status: 'Active' }).sort({ vehicleNumber: 1 }),
-    Plant.find({ status: 'Active' }).sort({ plantName: 1 }),
-    VehicleCurrentStatus.find({ archived: { $ne: true } }),
-    ZoneSession.find({ exitedAt: null, archived: { $ne: true } }),
-    GpsSetting.find({
+async function runDashboardSnapshotQueries(queries, logError = (message, error) => console.error(message, error)) {
+  const outcomes = await Promise.all(queries.map(async ({ name, warning, query, fallback }) => {
+    try {
+      return { value: await query(), warning: null };
+    } catch (error) {
+      logError(`[Dashboard Summary Data Warning] ${name} query failed:`, error);
+      return { value: fallback, warning };
+    }
+  }));
+
+  return {
+    results: outcomes.map((outcome) => outcome.value),
+    warnings: outcomes.map((outcome) => outcome.warning).filter(Boolean),
+  };
+}
+
+async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false, allowPartial = false } = {}) {
+  const snapshotQueries = [
+    {
+      name: 'active vehicles',
+      warning: 'Active vehicle data is temporarily unavailable.',
+      query: () => Vehicle.find({ status: 'Active' }).sort({ vehicleNumber: 1 }),
+      fallback: [],
+    },
+    {
+      name: 'active plants',
+      warning: 'Plant geofence data is temporarily unavailable.',
+      query: () => Plant.find({ status: 'Active' }).sort({ plantName: 1 }),
+      fallback: [],
+    },
+    {
+      name: 'current GPS statuses',
+      warning: 'Current GPS status data is temporarily unavailable.',
+      query: () => VehicleCurrentStatus.find({ archived: { $ne: true } }),
+      fallback: [],
+    },
+    {
+      name: 'open geofence sessions',
+      warning: 'Open geofence session data is temporarily unavailable.',
+      query: () => ZoneSession.find({ exitedAt: null, archived: { $ne: true } }),
+      fallback: [],
+    },
+    {
+      name: 'WheelsEye settings',
+      warning: 'WheelsEye provider status is temporarily unavailable.',
+      query: () => GpsSetting.find({
+        archived: { $ne: true },
+        $or: [{ provider: /wheels.?eye/i }, { apiUrl: /wheelseye/i }],
+      })
+        .select('provider apiUrl status connectionStatus lastSync lastSuccessAt lastConnectionCheckAt lastErrorAt lastErrorCode lastError consecutiveFailures'),
+      fallback: [],
+    },
+  ];
+
+  let vehicles;
+  let plants;
+  let statuses;
+  let openSessions;
+  let gpsSettings;
+  let dataWarnings = [];
+  if (allowPartial) {
+    const result = await runDashboardSnapshotQueries(snapshotQueries);
+    [vehicles, plants, statuses, openSessions, gpsSettings] = result.results;
+    dataWarnings = result.warnings;
+  } else {
+    [vehicles, plants, statuses, openSessions, gpsSettings] = await Promise.all(
+      snapshotQueries.map(({ query }) => query())
+    );
+  }
+
+  let history;
+  if (allowPartial) {
+    const historyResult = await runDashboardSnapshotQueries([{
+      name: 'WheelsEye GPS history',
+      warning: 'GPS history is temporarily unavailable; saved vehicle status is used where available.',
+      query: () => GpsHistory.find({
+        archived: { $ne: true },
+        provider: /wheels.?eye/i,
+      }).sort({ gpsTimestamp: 1, syncTime: 1 }),
+      fallback: [],
+    }]);
+    history = historyResult.results[0];
+    dataWarnings.push(...historyResult.warnings);
+  } else {
+    history = await GpsHistory.find({
       archived: { $ne: true },
-      $or: [{ provider: /wheels.?eye/i }, { apiUrl: /wheelseye/i }],
-    })
-      .select('provider apiUrl status connectionStatus lastSync lastSuccessAt lastConnectionCheckAt lastErrorAt lastErrorCode lastError consecutiveFailures'),
-  ]);
-  const history = await GpsHistory.find({
-    archived: { $ne: true },
-    provider: /wheels.?eye/i,
-  }).sort({ gpsTimestamp: 1, syncTime: 1 });
+      provider: /wheels.?eye/i,
+    }).sort({ gpsTimestamp: 1, syncTime: 1 });
+  }
   const byVehicleId = new Map();
   const byVehicleNumber = new Map();
   for (const point of history) {
@@ -445,7 +518,8 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } =
   });
 
   const widgetFleet = dashboardOnly ? fleet.filter(isDashboardEligibleGpsVehicle) : fleet;
-  const plantWidgets = plants.map((plant) => ({
+  const geofenceDataUnavailable = dataWarnings.includes('Plant geofence data is temporarily unavailable.');
+  const plantWidgets = geofenceDataUnavailable ? [] : plants.map((plant) => ({
     id: plant._id,
     name: plant.plantName,
     location: plant.location,
@@ -454,7 +528,9 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } =
     longitude: plant.longitude,
     vehicles: widgetFleet.filter((item) => item.status === 'Inside' && item.plant?.id?.toString() === plant._id.toString()),
   }));
-  const outsideVehicles = widgetFleet.filter((item) => item.status === 'Outside');
+  const outsideVehicles = geofenceDataUnavailable
+    ? []
+    : widgetFleet.filter((item) => item.status === 'Outside');
 
   return {
     plants,
@@ -476,6 +552,7 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false } =
       lastErrorCode: setting.lastErrorCode,
       consecutiveFailures: setting.consecutiveFailures,
     })),
+    dataWarnings,
   };
 }
 
@@ -537,4 +614,5 @@ module.exports = {
   isVerifiedGpsSample,
   getFleetGpsSnapshot,
   rebuildPlantStays,
+  runDashboardSnapshotQueries,
 };

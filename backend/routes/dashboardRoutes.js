@@ -119,7 +119,8 @@ router.get('/summary', async (req, res) => {
       });
     }
 
-    const snapshot = await getFleetGpsSnapshot({ dashboardOnly: true });
+    const snapshot = await getFleetGpsSnapshot({ dashboardOnly: true, allowPartial: true });
+    const summaryWarnings = [...(snapshot.dataWarnings || [])];
     const allowedPlantIds = req.user.accessPlants && req.user.accessPlants.length > 0
       ? new Set(req.user.accessPlants.map((plant) => (plant._id ? plant._id.toString() : plant.toString())))
       : null;
@@ -164,24 +165,57 @@ router.get('/summary', async (req, res) => {
         : null,
     }));
 
-    const setting = await GpsSetting.findOne({
-      archived: { $ne: true },
-      $or: [{ provider: /wheels.?eye/i }, { apiUrl: /wheelseye/i }],
-    }).sort({ updatedAt: -1 });
-    const lastSuccessfulSync = await GpsSyncLog.findOne({
-      status: 'SUCCESS',
-      provider: /wheels.?eye/i,
-      archived: { $ne: true },
-    }).sort({ completedAt: -1 });
-    const latestSyncLog = await GpsSyncLog.findOne({
-      provider: /wheels.?eye/i,
-      archived: { $ne: true },
-    }).sort({ startedAt: -1 });
-    const lastFailedSync = await GpsSyncLog.findOne({
-      status: 'FAILED',
-      provider: /wheels.?eye/i,
-      archived: { $ne: true },
-    }).sort({ completedAt: -1, startedAt: -1 });
+    const summaryMetadataQueries = [
+      {
+        name: 'WheelsEye provider settings',
+        warning: 'WheelsEye provider status is temporarily unavailable.',
+        fallback: null,
+        query: () => GpsSetting.findOne({
+          archived: { $ne: true },
+          $or: [{ provider: /wheels.?eye/i }, { apiUrl: /wheelseye/i }],
+        }).sort({ updatedAt: -1 }),
+      },
+      {
+        name: 'last successful GPS sync',
+        warning: 'The last successful GPS sync time is temporarily unavailable.',
+        fallback: null,
+        query: () => GpsSyncLog.findOne({
+          status: 'SUCCESS',
+          provider: /wheels.?eye/i,
+          archived: { $ne: true },
+        }).sort({ completedAt: -1 }),
+      },
+      {
+        name: 'latest GPS sync',
+        warning: 'The latest GPS sync status is temporarily unavailable.',
+        fallback: null,
+        query: () => GpsSyncLog.findOne({
+          provider: /wheels.?eye/i,
+          archived: { $ne: true },
+        }).sort({ startedAt: -1 }),
+      },
+      {
+        name: 'failed GPS sync',
+        warning: 'The last failed GPS sync time is temporarily unavailable.',
+        fallback: null,
+        query: () => GpsSyncLog.findOne({
+          status: 'FAILED',
+          provider: /wheels.?eye/i,
+          archived: { $ne: true },
+        }).sort({ completedAt: -1, startedAt: -1 }),
+      },
+    ];
+    const metadataResults = await Promise.allSettled(
+      summaryMetadataQueries.map(({ query }) => Promise.resolve().then(query))
+    );
+    const metadataValues = metadataResults.map((result, index) => {
+      if (result.status === 'fulfilled') return result.value;
+      const failedQuery = summaryMetadataQueries[index];
+      console.error(`[Dashboard Summary Data Warning] ${failedQuery.name} query failed:`, result.reason);
+      summaryWarnings.push(failedQuery.warning);
+      return failedQuery.fallback;
+    });
+    const [setting, lastSuccessfulSync, latestSyncLog, lastFailedSync] = metadataValues;
     const lastSuccessful = lastSuccessfulSync?.completedAt ||
       lastSuccessfulSync?.lastEvaluatedTimestamp ||
       setting?.last_evaluated_timestamp ||
@@ -243,7 +277,9 @@ router.get('/summary', async (req, res) => {
       gps_sync_health: {
         schedulerMode,
         schedulerStatus,
-        apiConnectionStatus: activeProvider?.connectionStatus || 'Not configured',
+        apiConnectionStatus: summaryWarnings.includes('WheelsEye provider status is temporarily unavailable.')
+          ? 'Unavailable'
+          : activeProvider?.connectionStatus || 'Not configured',
         lastSuccessfulSyncAt: lastSuccessful,
         lastFailedSyncAt: lastFailedSync?.completedAt || lastFailedSync?.startedAt || activeProvider?.lastErrorAt || null,
         latestSyncStatus: syncStatus,
@@ -251,17 +287,21 @@ router.get('/summary', async (req, res) => {
         lastApiError: lastErrorDetails,
         nextScheduledSyncAt: nextSync,
       },
-      providerHealth: providerSettings.map((item) => ({
-        provider: item.provider,
-        active: item.status === 'Active',
-        status: getGpsConnectionStatus(item, item.provider),
-        lastSuccessAt: item.lastSuccessAt,
-        lastErrorAt: item.lastErrorAt,
-        lastErrorCode: item.lastErrorCode,
-        lastError: safeGpsErrorDetails(item.lastError),
-        consecutiveFailures: item.consecutiveFailures,
-      })),
+      providerHealth: setting
+        ? [{
+            provider: setting.provider,
+            active: setting.status === 'Active',
+            status: getGpsConnectionStatus(setting, setting.provider),
+            lastSuccessAt: setting.lastSuccessAt,
+            lastErrorAt: setting.lastErrorAt,
+            lastErrorCode: setting.lastErrorCode,
+            lastError: safeGpsErrorDetails(setting.lastError),
+            consecutiveFailures: setting.consecutiveFailures,
+          }]
+        : [],
       gpsProviderSyncHealth: providerSyncHealth,
+      summaryStatus: summaryWarnings.length ? 'degraded' : 'ok',
+      summaryWarnings: [...new Set(summaryWarnings)],
       autoSync: {
         status: schedulerStatus,
         intervalMinutes: 30,

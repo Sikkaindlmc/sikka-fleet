@@ -551,13 +551,27 @@ export default function DashboardPage() {
         next_scheduled_sync_at?: string;
         gps_sync_health?: GpsSyncHealth;
         gpsProviderSyncHealth?: GpsSyncHealth['providers'];
+        summaryWarnings?: string[];
       }>('/dashboard/summary');
 
-      setAlert((current) =>
-        current?.type === 'error' && current.message.startsWith(LOCAL_API_UNREACHABLE_PREFIX)
-          ? null
-          : current
-      );
+      if (data.summaryWarnings?.length) {
+        setAlert({
+          type: 'info',
+          message: `Dashboard data is partially unavailable: ${data.summaryWarnings.join(' ')}`,
+        });
+      } else {
+        const summaryErrorPrefixes = [
+          LOCAL_API_UNREACHABLE_PREFIX,
+          'Failed to generate dashboard summary.',
+          'Failed to load fleet monitoring summary.',
+        ];
+        setAlert((current) =>
+          current?.type === 'error' &&
+          summaryErrorPrefixes.some((prefix) => current.message.startsWith(prefix))
+            ? null
+            : current
+        );
+      }
       setPlantWidgets(data.plantWidgets || []);
       setOutsideWidget(data.outsideWidget);
       setTotalActiveVehicles(data.totalActiveVehicles || 0);
