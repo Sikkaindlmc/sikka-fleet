@@ -22,15 +22,26 @@ function isVehicleAssignedToProvider(vehicle, provider) {
   const expected = normalizeGpsProvider(provider, '');
   if (!expected) return false;
 
-  const primary = String(vehicle?.gps_provider || vehicle?.gpsProvider || '').trim();
+  const isDefault = (field) =>
+    typeof vehicle?.$isDefault === 'function' && vehicle.$isDefault(field);
+  const primary = isDefault('gps_provider') ? '' : String(vehicle?.gps_provider || '').trim();
   if (/^both$/i.test(primary)) return true;
   const normalizedPrimary = normalizeGpsProvider(primary, '');
   if (normalizedPrimary) return normalizedPrimary === expected;
 
-  const configuredProviders = Array.isArray(vehicle?.gpsProviders) ? vehicle.gpsProviders : [];
-  if (configuredProviders.length) {
-    return configuredProviders.some((entry) => normalizeGpsProvider(entry, '') === expected);
-  }
+  const legacy = isDefault('gpsProvider') ? '' : String(vehicle?.gpsProvider || '').trim();
+  const normalizedLegacy = normalizeGpsProvider(legacy, '');
+  if (normalizedLegacy) return normalizedLegacy === expected;
+
+  const configuredProviders = isDefault('gpsProviders')
+    ? []
+    : Array.isArray(vehicle?.gpsProviders)
+      ? vehicle.gpsProviders
+      : [];
+  const normalizedConfigured = configuredProviders
+    .map((value) => normalizeGpsProvider(value, ''))
+    .filter(Boolean);
+  if (normalizedConfigured.length) return normalizedConfigured.includes(expected);
   return expected === WHEELSEYE;
 }
 

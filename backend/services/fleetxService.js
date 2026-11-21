@@ -1,13 +1,18 @@
 const axios = require('axios');
 const FormData = require('form-data');
 
-const DEFAULT_FLEETX_BASE_URL =
-  process.env.FLEETX_API_BASE_URL ||
-  process.env.FLEETX_BASE_URL ||
-  'https://api.fleetx.io';
-const DEFAULT_FLEETX_BASIC_AUTH = (process.env.FLEETX_BASIC_AUTH || '').trim();
-const DEFAULT_FLEETX_USERNAME = (process.env.FLEETX_USERNAME || '').trim();
-const DEFAULT_FLEETX_PASSWORD = (process.env.FLEETX_PASSWORD || '').trim();
+function getFleetxConfig() {
+  return {
+    baseUrl: (
+      [process.env.FLEETX_API_BASE_URL, process.env.FLEETX_BASE_URL]
+        .map((value) => String(value || '').trim())
+        .find(Boolean) || 'https://api.fleetx.io'
+    ).replace(/\/$/, ''),
+    basicAuth: String(process.env.FLEETX_BASIC_AUTH || '').trim(),
+    username: String(process.env.FLEETX_USERNAME || '').trim(),
+    password: String(process.env.FLEETX_PASSWORD || '').trim(),
+  };
+}
 
 let cachedToken = null;
 let tokenExpiresAt = null;
@@ -54,8 +59,17 @@ function parseOptionalNumber(value) {
  * Re-uses cached token if valid; otherwise fetches a fresh one.
  */
 async function getFleetxToken(forceRefresh = false) {
-  if (!DEFAULT_FLEETX_USERNAME || !DEFAULT_FLEETX_PASSWORD || !DEFAULT_FLEETX_BASIC_AUTH) {
-    throw new Error('FleetX credentials are not configured.');
+  const config = getFleetxConfig();
+  for (const [name, value] of [
+    ['FLEETX_USERNAME', config.username],
+    ['FLEETX_PASSWORD', config.password],
+    ['FLEETX_BASIC_AUTH', config.basicAuth],
+  ]) {
+    if (!value) {
+      const error = new Error(`Missing FleetX environment setting: ${name}`);
+      error.code = `MISSING_ENV_${name}`;
+      throw error;
+    }
   }
   const now = Date.now();
   if (!forceRefresh && cachedToken && tokenExpiresAt && now < tokenExpiresAt - 60000) {
@@ -64,16 +78,16 @@ async function getFleetxToken(forceRefresh = false) {
   if (tokenLoginPromise) return tokenLoginPromise;
 
   tokenLoginPromise = (async () => {
-    const loginUrl = `${DEFAULT_FLEETX_BASE_URL}/api/v1/login`;
+    const loginUrl = `${config.baseUrl}/api/v1/login`;
     const form = new FormData();
-    form.append('username', DEFAULT_FLEETX_USERNAME);
-    form.append('password', DEFAULT_FLEETX_PASSWORD);
+    form.append('username', config.username);
+    form.append('password', config.password);
     form.append('grant_type', 'password');
 
     const headers = {
-      Authorization: DEFAULT_FLEETX_BASIC_AUTH.startsWith('Basic ')
-        ? DEFAULT_FLEETX_BASIC_AUTH
-        : `Basic ${DEFAULT_FLEETX_BASIC_AUTH}`,
+      Authorization: config.basicAuth.startsWith('Basic ')
+        ? config.basicAuth
+        : `Basic ${config.basicAuth}`,
       ...form.getHeaders(),
     };
 
@@ -102,7 +116,10 @@ async function getFleetxToken(forceRefresh = false) {
       tokenExpiresAt = null;
       const errorCode = getSafeFleetxErrorCode(err);
       console.error(`[FleetX Auth Error]: ${errorCode}`);
-      throw new Error(`FleetX Authentication Failed: ${errorCode}`);
+      const authError = new Error(`FleetX login failed: ${errorCode}`);
+      authError.code = 'LOGIN_FAILED';
+      authError.reasonCode = errorCode;
+      throw authError;
     } finally {
       tokenLoginPromise = null;
     }
@@ -181,7 +198,7 @@ function normalizeFleetxVehicle(item) {
  */
 async function fetchFleetxLiveTelemetry() {
   let token = await getFleetxToken();
-  const liveUrl = `${DEFAULT_FLEETX_BASE_URL}/api/v1/analytics/live`;
+  const liveUrl = `${getFleetxConfig().baseUrl}/api/v1/analytics/live`;
 
   try {
     const response = await axios.get(liveUrl, {
@@ -202,13 +219,21 @@ async function fetchFleetxLiveTelemetry() {
     if (err.response?.status === 401) {
       console.warn('[FleetX API] 401 Unauthorized received. Re-authenticating...');
       token = await getFleetxToken(true);
-      const retryResponse = await axios.get(liveUrl, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json',
-        },
-        timeout: 15000,
-      });
+      let retryResponse;
+      try {
+        retryResponse = await axios.get(liveUrl, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+          timeout: 15000,
+        });
+      } catch (retryError) {
+        const errorCode = getSafeFleetxErrorCode(retryError);
+        const liveError = new Error(`FleetX live API error: ${errorCode}`);
+        liveError.code = errorCode;
+        throw liveError;
+      }
       const list = retryResponse.data?.vehicles
         || retryResponse.data?.data?.vehicles
         || (Array.isArray(retryResponse.data?.data) ? retryResponse.data.data : null)
@@ -216,7 +241,10 @@ async function fetchFleetxLiveTelemetry() {
       return list.map(normalizeFleetxVehicle).filter(Boolean);
     }
 
-    throw new Error(`FleetX Live API error: ${getSafeFleetxErrorCode(err)}`);
+    const errorCode = getSafeFleetxErrorCode(err);
+    const liveError = new Error(`FleetX live API error: ${errorCode}`);
+    liveError.code = errorCode;
+    throw liveError;
   }
 }
 
@@ -227,7 +255,7 @@ async function fetchFleetxVehicleByNumber(vehicleNumber) {
   if (!vehicleNumber) return null;
   const cleanNumber = normalizeFleetxVehicleNumber(vehicleNumber);
   let token = await getFleetxToken();
-  const url = `${DEFAULT_FLEETX_BASE_URL}/api/v1/analytics/live/byNumber/${encodeURIComponent(cleanNumber)}`;
+  const url = `${getFleetxConfig().baseUrl}/api/v1/analytics/live/byNumber/${encodeURIComponent(cleanNumber)}`;
 
   try {
     const response = await axios.get(url, {
@@ -253,7 +281,10 @@ async function fetchFleetxVehicleByNumber(vehicleNumber) {
       const data = retryResponse.data?.vehicle || retryResponse.data?.data || retryResponse.data;
       return normalizeFleetxVehicle(data);
     }
-    return null;
+    const errorCode = getSafeFleetxErrorCode(err);
+    const liveError = new Error(`FleetX live API error: ${errorCode}`);
+    liveError.code = errorCode;
+    throw liveError;
   }
 }
 
@@ -264,7 +295,7 @@ async function fetchFleetxHistory({ vehicleId, from, to }) {
   }
 
   let token = await getFleetxToken();
-  const url = `${DEFAULT_FLEETX_BASE_URL}/api/v2/trips/merged`;
+  const url = `${getFleetxConfig().baseUrl}/api/v2/trips/merged`;
 
   const params = {
     from: Number(from),

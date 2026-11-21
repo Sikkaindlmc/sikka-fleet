@@ -45,6 +45,16 @@ test('provider assignment keeps the two GPS integrations independent', () => {
   assert.equal(isVehicleAssignedToProvider({ gps_provider: 'FLEETX' }, 'FLEETX'), true);
   assert.equal(isVehicleAssignedToProvider({ gps_provider: 'BOTH' }, 'WHEELSEYE'), true);
   assert.equal(isVehicleAssignedToProvider({ gps_provider: 'BOTH' }, 'FLEETX'), true);
+  assert.equal(isVehicleAssignedToProvider({
+    gps_provider: 'FLEETX',
+    gpsProvider: 'wheelseye',
+    gpsProviders: ['WheelsEye GPS'],
+  }, 'WHEELSEYE'), false);
+  assert.equal(isVehicleAssignedToProvider({
+    gps_provider: 'WHEELSEYE',
+    gpsProvider: 'fleetx',
+    $isDefault: (field) => field === 'gps_provider',
+  }, 'FLEETX'), true);
 });
 
 test('WheelsEye sync updates registered active vehicles and excludes inactive or unregistered vehicles', () => {

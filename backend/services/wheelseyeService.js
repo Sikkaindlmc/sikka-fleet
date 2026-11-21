@@ -4,10 +4,33 @@ const DEFAULT_WHEELSEYE_URL =
   process.env.WHEELSEYE_API_URL ||
   'https://api.wheelseye.com/currentLoc';
 
-const DEFAULT_WHEELSEYE_TOKEN =
-  process.env.WHEELSEYE_ACCESS_TOKEN ||
-  process.env.WHEELSEYE_API_KEY ||
-  '';
+function getWheelseyeToken() {
+  return [process.env.WHEELSEYE_ACCESS_TOKEN, process.env.WHEELSEYE_API_KEY]
+    .map((value) => String(value || '').trim())
+    .find(Boolean) || '';
+}
+
+function getWheelseyeUrl() {
+  const configuredUrl = String(process.env.WHEELSEYE_API_URL || '').trim();
+  const url = new URL(
+    configuredUrl && !configuredUrl.includes('••••')
+      ? configuredUrl
+      : DEFAULT_WHEELSEYE_URL
+  );
+  const token = getWheelseyeToken();
+  if (token) {
+    for (const key of ['accessToken', 'access_token', 'apiKey', 'api_key', 'token', 'key', 'secret']) {
+      url.searchParams.delete(key);
+    }
+    url.searchParams.set('accessToken', token);
+  }
+  if (!url.searchParams.get('accessToken')) {
+    const error = new Error('WheelsEye access token is not configured.');
+    error.code = 'MISSING_ENV_WHEELSEYE_ACCESS_TOKEN';
+    throw error;
+  }
+  return url.toString();
+}
 
 /**
  * Normalizes a raw WheelsEye vehicle telemetry object.
@@ -55,10 +78,7 @@ function normalizeWheelseyeVehicle(item) {
  * Fetches real-time telemetry for all vehicles from WheelsEye.
  */
 async function fetchWheelseyeLiveTelemetry() {
-  const url =
-    process.env.WHEELSEYE_API_URL && !process.env.WHEELSEYE_API_URL.includes('••••')
-      ? process.env.WHEELSEYE_API_URL
-      : `https://api.wheelseye.com/currentLoc?accessToken=${DEFAULT_WHEELSEYE_TOKEN}`;
+  const url = getWheelseyeUrl();
 
   console.log(`[WheelsEye API] Fetching telemetry from WheelsEye...`);
 
@@ -82,4 +102,5 @@ module.exports = {
   fetchWheelseyeLiveTelemetry,
   normalizeWheelseyeVehicle,
   DEFAULT_WHEELSEYE_URL,
+  getWheelseyeUrl,
 };

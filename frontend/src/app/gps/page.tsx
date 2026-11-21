@@ -177,6 +177,7 @@ function GpsPageContent() {
       validGpsVehicleCount?: number;
     } | null;
   }>({ wheelsEye: null, fleetx: null });
+  const [missingEnvironment, setMissingEnvironment] = useState<string[]>([]);
 
   // Auto-focus searched vehicle when vehicleParam arrives
   useEffect(() => {
@@ -285,6 +286,7 @@ function GpsPageContent() {
         lastSync: string;
         wheelsEyeStatus: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'>;
         fleetxStatus: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'>;
+        missingEnvironment?: string[];
         vehicles: LiveVehicleItem[];
       }>('/gps/live-vehicles');
 
@@ -299,6 +301,7 @@ function GpsPageContent() {
         wheelsEye: res.wheelsEyeStatus || null,
         fleetx: res.fleetxStatus || null,
       });
+      setMissingEnvironment(res.missingEnvironment || []);
       setSetting((current) => current ? {
         ...current,
         ...res.wheelsEyeStatus,
@@ -641,6 +644,11 @@ function GpsPageContent() {
           )}
         </div>
         <AlertBanner alert={alert} onDismiss={() => setAlert(null)} />
+        {missingEnvironment.map((name) => (
+          <div key={name} role="alert" className="mb-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-900">
+            Server setting missing: {name}
+          </div>
+        ))}
         {setting && setting.connectionStatus === 'Sync Failed' && (
           <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-900">
             WheelsEye request failed ({setting.lastErrorCode || setting.connectionStatus}).

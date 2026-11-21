@@ -73,6 +73,7 @@ export default function SikkaAiPanel() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState('');
+  const [iconLoadFailed, setIconLoadFailed] = useState(false);
   const quickQuestions = user?.role === 'Driver'
     ? ['Show my location and plant status.']
     : QUICK_QUESTIONS;
@@ -153,7 +154,19 @@ export default function SikkaAiPanel() {
         aria-controls="sikka-ai-chat"
         className="inline-flex h-10 w-10 items-center justify-center overflow-hidden rounded-full border border-indigo-200 bg-indigo-50 shadow-sm transition hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-indigo-300"
       >
-        <Image src="/sikka-ai-icon.png" alt="" width={32} height={32} className="h-8 w-8 object-contain" />
+        {iconLoadFailed ? (
+          <span aria-hidden="true" className="text-xs font-black text-indigo-700">AI</span>
+        ) : (
+          <Image
+            src="/sikka-ai-icon.png"
+            alt=""
+            width={32}
+            height={32}
+            unoptimized
+            onError={() => setIconLoadFailed(true)}
+            className="h-8 w-8 object-contain"
+          />
+        )}
       </button>
 
       {isOpen && typeof document !== 'undefined' && createPortal(
@@ -172,7 +185,19 @@ export default function SikkaAiPanel() {
         >
           <div className="flex shrink-0 items-center gap-3 border-b border-indigo-100 bg-gradient-to-r from-indigo-50 to-white px-4 py-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-indigo-50">
-              <Image src="/sikka-ai-icon.png" alt="" width={40} height={40} className="h-10 w-10 object-contain" />
+              {iconLoadFailed ? (
+                <span aria-hidden="true" className="text-xs font-black text-indigo-700">AI</span>
+              ) : (
+                <Image
+                  src="/sikka-ai-icon.png"
+                  alt=""
+                  width={40}
+                  height={40}
+                  unoptimized
+                  onError={() => setIconLoadFailed(true)}
+                  className="h-10 w-10 object-contain"
+                />
+              )}
             </div>
             <div className="min-w-0 flex-1">
               <h2 className="text-sm font-extrabold text-slate-900">SIKKA AI</h2>

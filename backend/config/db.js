@@ -1,6 +1,6 @@
 const path = require('path');
 // Ensure environment variables are loaded
-if (!process.env.MONGODB_URI && !process.env.MONGO_URI) {
+if (![process.env.MONGODB_URI, process.env.MONGO_URI].some((value) => String(value || '').trim())) {
   require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
   require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
   require('dotenv').config();
@@ -122,10 +122,12 @@ const connectDB = async () => {
   }
 
   // Direct Atlas replica-set fallback if SRV DNS encounters network/proxy issues
-  const directAtlasURI = (process.env.MONGODB_DIRECT_URI || '').trim();
-  const primaryURI = process.env.MONGODB_URI || process.env.MONGO_URI || directAtlasURI;
+  const directAtlasURI = String(process.env.MONGODB_DIRECT_URI || '').trim();
+  const primaryURI = [process.env.MONGODB_URI, process.env.MONGO_URI, directAtlasURI]
+    .map((value) => String(value || '').trim())
+    .find(Boolean) || '';
   const localURI = 'mongodb://127.0.0.1:27017/sikka_fleet';
-  const dbName = process.env.MONGODB_DB_NAME || 'sikka_fleet';
+  const dbName = String(process.env.MONGODB_DB_NAME || '').trim() || 'sikka_fleet';
 
   // 1. Try Primary MongoDB URI (MongoDB Atlas SRV or direct replica set)
   if (primaryURI && !primaryURI.includes('127.0.0.1') && !primaryURI.includes('localhost')) {

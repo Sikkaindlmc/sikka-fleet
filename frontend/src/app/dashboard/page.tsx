@@ -220,6 +220,7 @@ interface OutsideVehicle {
   last_sync_source?: string | null;
   gpsProviderLocations?: PlantVehicle['gpsProviderLocations'];
   locationDiscrepancyMeters?: number | null;
+  locationSource?: 'address' | 'plant' | 'coordinates' | 'unavailable';
   lastLocationTime?: string;
   speed?: string | number | null;
   ignition?: string | number | boolean | null;
@@ -1489,7 +1490,6 @@ export default function DashboardPage() {
                     <th className="px-5 py-3">Last GPS Updated / Sync Type</th>
                     <th className="px-5 py-3">Outside Hour</th>
                     <th className="px-5 py-3">Status</th>
-                    <th className="px-5 py-3">Driver Name-Mobile</th>
                     <th className="px-5 py-3">Next Trip Plan</th>
                     <th className="px-5 py-3 text-center">GPS</th>
                   </tr>
@@ -1497,8 +1497,13 @@ export default function DashboardPage() {
                 <tbody className="divide-y divide-slate-100 bg-white font-medium">
                   {outsideVehicles.map((v) => {
                     const plantOutTime = v.plantOutDateTime || null;
-                    const lastGpsTime = v.latest_gps_timestamp || null;
-                    const outPlantName = v.lastOutPlantName || 'N/A';
+                    const lastGpsTime = v.latest_gps_timestamp || v.lastLocationDateTime || null;
+                    const outPlantName = v.lastOutPlantName && plantOutTime
+                      ? v.lastOutPlantName
+                      : 'No plant exit recorded';
+                    const lastGpsTimeMs = lastGpsTime ? new Date(lastGpsTime).getTime() : NaN;
+                    const isLastGpsOlderThanHour = Number.isFinite(lastGpsTimeMs) &&
+                      Date.now() - lastGpsTimeMs > 60 * 60 * 1000;
 
                     return (
                       <tr key={v.id} className="hover:bg-slate-50/70 transition">
@@ -1551,9 +1556,16 @@ export default function DashboardPage() {
 
                         {/* 2. Last Out Plant Name */}
                         <td className="px-5 py-3.5 whitespace-nowrap">
-                          <span className="font-bold text-slate-800">
-                            {outPlantName}
-                          </span>
+                          {outPlantName === 'No plant exit recorded' ? (
+                            <span className="font-medium text-slate-500">{outPlantName}</span>
+                          ) : (
+                            <>
+                              <span className="font-bold text-slate-800">{outPlantName}</span>
+                              <span className="block text-[10px] font-medium text-slate-500">
+                                left {formatDateTime(plantOutTime)}
+                              </span>
+                            </>
+                          )}
                         </td>
 
                         {/* 3. Plant Out Date Time */}
@@ -1592,26 +1604,6 @@ export default function DashboardPage() {
                           <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
                             Outside
                           </span>
-                        </td>
-
-                        {/* 6. Driver Name-Mobile (Requirement 24.2 - 24.6) */}
-                        <td className="px-5 py-3.5">
-                          <NearestDriverCell
-                            driverName={v.driverName}
-                            mobile={v.mobile}
-                            driverDistance={v.driverDistance}
-                            multipleDrivers={v.multipleDrivers}
-                            nearestDrivers={v.nearestDrivers}
-                            locationStale={v.locationStale}
-                            vehicleNumber={v.vehicleNumber}
-                            onViewMultiple={(drivers) => {
-                              setSelectedNearestDrivers(drivers);
-                              setSelectedVehicleNumberForDrivers(v.vehicleNumber);
-                              setSelectedVehicleIdForDrivers(v.id);
-                              setDriversModalTitle(`Matching Drivers for ${v.vehicleNumber}`);
-                              setIsDriversModalOpen(true);
-                            }}
-                          />
                         </td>
 
                         {/* Next Trip Plan (Add Button / Latest Plan with Popup Icon & Notification Icon / Edit option) */}
@@ -1698,20 +1690,41 @@ export default function DashboardPage() {
                           })()}
                         </td>
 
-                        {/* 7. GPS: [ Track Now ] (Requirement 24.7) */}
-                        <td className="px-5 py-3.5 text-center whitespace-nowrap">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActiveModal(null);
-                              router.push(`/gps?vehicle=${encodeURIComponent(v.vehicleNumber)}`);
-                            }}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
-                            title={`Track live location for ${v.vehicleNumber}`}
-                          >
-                            <Navigation className="w-3.5 h-3.5" />
-                            <span>Track Now</span>
-                          </button>
+                        {/* GPS: Track Now and the latest GPS location */}
+                        <td className="px-5 py-3.5 text-center">
+                          <div className="flex min-w-[170px] flex-col items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveModal(null);
+                                router.push(`/gps?vehicle=${encodeURIComponent(v.vehicleNumber)}`);
+                              }}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+                              title={`Track live location for ${v.vehicleNumber}`}
+                            >
+                              <Navigation className="w-3.5 h-3.5" />
+                              <span>Track Now</span>
+                            </button>
+                            <span
+                              className={`max-w-[220px] whitespace-normal text-[10px] leading-snug ${
+                                v.locationSource === 'coordinates'
+                                  ? 'text-slate-400'
+                                  : 'font-medium text-slate-700'
+                              }`}
+                              title={v.readableLocation || 'Location unavailable'}
+                            >
+                              {v.readableLocation || 'Location unavailable'}
+                            </span>
+                            <span className={`text-[10px] ${
+                              isLastGpsOlderThanHour
+                                ? 'font-semibold text-amber-700'
+                                : 'text-slate-500'
+                            }`}>
+                              {lastGpsTime
+                                ? `${isLastGpsOlderThanHour ? 'Last seen' : 'Last GPS update'} ${formatDateTime(lastGpsTime)}`
+                                : 'Last GPS update unavailable'}
+                            </span>
+                          </div>
                         </td>
                       </tr>
                     );

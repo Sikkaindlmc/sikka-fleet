@@ -19,6 +19,7 @@ const {
   getPlantRadiusMeters,
 } = require('../services/geofenceService');
 const { getReadableLocation } = require('../services/locationHelper');
+const { reverseGeocodeForVehicle } = require('../services/reverseGeocodeService');
 const { resolveMovementStatus } = require('../services/telemetryValues');
 const { getNextFixed30MinSlot } = require('../services/gpsCronWorker');
 const { getFleetGpsSnapshot } = require('../services/gpsDataService');
@@ -954,19 +955,63 @@ router.get('/outside/vehicles', async (req, res) => {
       return res.status(403).json({ error: 'Access Denied: Drivers cannot view company fleet vehicles.' });
     }
 
-    const { getReadableLocation } = require('../services/locationHelper');
     const snapshot = await getFleetGpsSnapshot({ dashboardOnly: true });
-    const vehicles = snapshot.outsideVehicles.map((item) => {
+    const vehicles = await Promise.all(snapshot.outsideVehicles.map(async (item) => {
       const vehicle = item.vehicle;
       const status = item.storedStatus;
+      const lastExitPlantName = typeof status?.lastExitPlantName === 'string'
+        ? status.lastExitPlantName.trim()
+        : '';
+      const lastExitDateTime = status?.lastExitDateTime || status?.lastExitGpsTimestamp || null;
+      const hasRecordedExit = Boolean(lastExitPlantName && lastExitDateTime);
+      let readableLocation = 'Location unavailable';
+      let locationSource = 'unavailable';
+      const hasCoordinates = Number.isFinite(item.latitude) &&
+        Number.isFinite(item.longitude) &&
+        !(item.latitude === 0 && item.longitude === 0);
+
+      if (hasCoordinates) {
+        try {
+          const reverseGeocodedAddress = await reverseGeocodeForVehicle(
+            vehicle._id || vehicle.vehicleNumber,
+            item.latitude,
+            item.longitude
+          );
+          if (reverseGeocodedAddress) {
+            readableLocation = reverseGeocodedAddress;
+            locationSource = 'address';
+          }
+        } catch (error) {
+          console.warn(
+            '[Dashboard Outside Reverse Geocode Warning]:',
+            error?.code || error?.response?.status || error?.name || 'LOOKUP_FAILED'
+          );
+        }
+
+        if (locationSource === 'unavailable') {
+          const nearestPlantLocation = getReadableLocation(
+            item.latitude,
+            item.longitude,
+            snapshot.plants
+          );
+          if (!/^location unavailable$/i.test(nearestPlantLocation)) {
+            readableLocation = nearestPlantLocation;
+            locationSource = 'plant';
+          } else {
+            readableLocation = `${item.latitude.toFixed(5)}, ${item.longitude.toFixed(5)}`;
+            locationSource = 'coordinates';
+          }
+        }
+      }
+
       return {
         id: vehicle._id || `gps-unregistered-${vehicle.vehicleNumber}`,
         vehicleId: vehicle._id,
         vehicleNumber: vehicle.vehicleNumber,
         registrationStatus: item.isRegistered ? 'Registered' : 'Not registered',
-        lastOutPlantName: null,
+        lastOutPlantName: hasRecordedExit ? lastExitPlantName : null,
         outsideSince: item.statusDetectedAt,
-        plantOutDateTime: item.statusDetectedAt,
+        plantOutDateTime: hasRecordedExit ? lastExitDateTime : null,
         lastLocationDateTime: item.gpsTimestamp,
         outsideHours: item.outsideHours,
         status: 'Outside',
@@ -976,9 +1021,8 @@ router.get('/outside/vehicles', async (req, res) => {
         ignition: item.ignition,
         movementStatus: status?.movementStatus || null,
         dataCheck: false,
-        readableLocation: item.latitude !== null && item.longitude !== null
-          ? item.address || getReadableLocation(item.latitude, item.longitude, snapshot.plants)
-          : 'N/A',
+        readableLocation,
+        locationSource,
         latest_gps_timestamp: item.gpsTimestamp,
         gps_status: item.gpsStatus,
         gpsProviderLocations: item.providerLocations || [],
@@ -988,7 +1032,7 @@ router.get('/outside/vehicles', async (req, res) => {
         ownerName: vehicle.ownerName,
         plans: filterActivePlans(status?.plans, 'Next Trip Plan'),
       };
-    });
+    }));
 
     // Attach nearest drivers within 100m based on GPS distance (Requirements 24.2 - 24.6)
     const vehiclesWithDrivers = await attachNearestDriversToVehicles(vehicles);

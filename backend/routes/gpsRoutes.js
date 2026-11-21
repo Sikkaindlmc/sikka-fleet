@@ -26,6 +26,7 @@ const {
   maskGpsCredential,
 } = require('../utils/gpsCredentialCrypto');
 const { normalizeVehicleNumber } = require('../services/gpsTimelineService');
+const { getMissingRequiredEnvironment } = require('../config/gpsConfig');
 
 function getSafeSyncErrorCode(error) {
   const status = Number(error?.response?.status);
@@ -628,11 +629,11 @@ router.get('/live-vehicles', async (req, res) => {
     const fleetxConnectionStatus = fleetxCredentialsConfigured
       ? getGpsConnectionStatus(fleetxSetting, 'FleetX')
       : 'Disconnected';
-
     res.json({
       totalCount: liveVehicles.length,
       provider: 'WheelsEye GPS',
       lastSync: snapshot.lastUpdated || null,
+      missingEnvironment: getMissingRequiredEnvironment(),
       wheelsEyeStatus: {
         connectionStatus: getProviderConnectionStatus(wheelsEyeSetting),
         lastSyncStatus: wheelsEyeSetting?.last_sync_status || 'IDLE',

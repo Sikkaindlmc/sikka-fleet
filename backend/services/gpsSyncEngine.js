@@ -17,6 +17,7 @@ const { runGpsSyncExclusive } = require('./gpsSyncCoordinator');
 const { isVehicleAssignedToProvider } = require('../utils/gpsProvider');
 const { evaluateGeofenceConfirmation } = require('./geofenceConfirmation');
 const { getZoneId, reconcileZoneSession } = require('./zoneSessionService');
+const { getMissingProviderEnvironment } = require('../config/gpsConfig');
 
 function normalizeNumber(num) {
   return String(num || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -33,8 +34,31 @@ function getSafeErrorCode(error) {
   if (Number.isInteger(status) && status >= 100 && status <= 599) return `HTTP_${status}`;
   const code = String(error?.code || '').toUpperCase();
   if (/^[A-Z0-9_]{2,40}$/.test(code)) return code;
-  if (/timeout/i.test(String(error?.message || ''))) return 'REQUEST_TIMEOUT';
+  const message = String(error?.message || '');
+  if (/missing env:\s*([A-Z0-9_]+)/i.test(message)) {
+    return `MISSING_ENV_${message.match(/missing env:\s*([A-Z0-9_]+)/i)[1].toUpperCase()}`;
+  }
+  if (/login failed|authentication failed/i.test(message)) return 'LOGIN_FAILED';
+  if (/no vehicles/i.test(message)) return 'NO_VEHICLES';
+  if (/vehicle not matched|vehicle not returned/i.test(message)) return 'VEHICLE_NOT_MATCHED';
+  if (/timeout/i.test(message)) return 'REQUEST_TIMEOUT';
   return 'SYNC_FAILED';
+}
+
+function getProviderErrorMessage(provider, errorCode) {
+  if (String(errorCode).startsWith('MISSING_ENV_')) {
+    return `Server setting missing: ${errorCode.slice('MISSING_ENV_'.length)}`;
+  }
+  if (provider === 'WHEELSEYE' && errorCode === 'HTTP_401') {
+    return 'WheelsEye token invalid or expired - update it in server settings';
+  }
+  if (provider === 'FLEETX') {
+    if (errorCode === 'LOGIN_FAILED') return 'FleetX login failed';
+    if (errorCode === 'NO_VEHICLES') return 'No vehicles returned by FleetX';
+    if (errorCode === 'VEHICLE_NOT_MATCHED') return 'Vehicle not matched in FleetX telemetry';
+    if (/^HTTP_\d{3}$/.test(errorCode)) return `FleetX live API returned ${errorCode}`;
+  }
+  return errorCode;
 }
 
 function recordFailure(failureReasons, code) {
@@ -142,6 +166,12 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
   let fetchError = null;
 
   try {
+    const missingEnvironment = getMissingProviderEnvironment(targetProvider);
+    if (missingEnvironment.length) {
+      const missingError = new Error(`Missing env: ${missingEnvironment[0]}`);
+      missingError.code = `MISSING_ENV_${missingEnvironment[0]}`;
+      throw missingError;
+    }
     if (targetProvider === 'FLEETX') {
       telemetryItems = await fetchFleetxLiveTelemetry();
     } else {
@@ -150,6 +180,10 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
   } catch (err) {
     fetchError = err;
     console.error(`[GPS Sync Engine] Telemetry fetch failed for ${targetProvider}: ${getSafeErrorCode(err)}`);
+  }
+  if (!fetchError && telemetryItems.length === 0) {
+    fetchError = new Error('No vehicles returned by provider.');
+    fetchError.code = 'NO_VEHICLES';
   }
   const receivedCount = Array.isArray(telemetryItems) ? telemetryItems.length : 0;
 
@@ -205,7 +239,7 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
       const errorCode = fetchError
         ? getSafeErrorCode(fetchError)
         : !telemetry
-          ? 'VEHICLE_NOT_RETURNED'
+          ? 'VEHICLE_NOT_MATCHED'
           : 'INVALID_COORDINATES';
       recordFailure(failureReasons, errorCode);
 
@@ -537,7 +571,11 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
           last_evaluated_timestamp: completedAt,
           last_sync_status: overallStatus,
           last_sync_source: isAuto ? 'GPS-AUTO' : 'MANUAL',
-          lastError: fetchError ? getSafeErrorCode(fetchError) : failedCount ? Object.keys(failureReasons).join(',') : '',
+          lastError: fetchError
+            ? getProviderErrorMessage(targetProvider, getSafeErrorCode(fetchError))
+            : failedCount
+              ? getProviderErrorMessage(targetProvider, Object.keys(failureReasons)[0])
+              : '',
           lastErrorCode: fetchError ? getSafeErrorCode(fetchError) : failedCount ? Object.keys(failureReasons)[0] : '',
           connectionStatus: fetchError ? 'Connection Failed' : 'Connected',
           ...(fetchError ? {} : { lastSuccessAt: completedAt }),
@@ -692,11 +730,11 @@ async function getProviderTelematicsOverview() {
   };
 
   const wheelseyeVehicles = allVehicles
-    .filter((v) => (v.gps_provider || v.gpsProvider || 'WHEELSEYE').toUpperCase() === 'WHEELSEYE')
+    .filter((v) => isVehicleAssignedToProvider(v, 'WHEELSEYE'))
     .map(formatVehicleItem);
 
   const fleetxVehicles = allVehicles
-    .filter((v) => (v.gps_provider || v.gpsProvider || '').toUpperCase() === 'FLEETX')
+    .filter((v) => isVehicleAssignedToProvider(v, 'FLEETX'))
     .map(formatVehicleItem);
 
   // Load last sync times from GpsSetting
