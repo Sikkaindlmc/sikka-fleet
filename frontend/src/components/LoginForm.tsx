@@ -11,12 +11,9 @@ import {
   ArrowRight,
   ShieldCheck,
   Truck,
-  MapPin,
   Navigation,
-  Settings,
 } from 'lucide-react';
 import { useAuth } from '../lib/authContext';
-import { getApiBaseUrl, PRODUCTION_API_URL, BACKUP_CLOUD_API_URL, CLOUD_API_URL, isPrivateOrLanUrl } from '../lib/api';
 
 interface LoginFormProps {
   redirectUrl?: string;
@@ -34,53 +31,10 @@ export default function LoginForm({
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
-  const [showServerSettings, setShowServerSettings] = useState(false);
-  const [serverUrlInput, setServerUrlInput] = useState('');
 
   const { login } = useAuth();
   const router = useRouter();
   const usernameInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('sikka_fleet_server_url') || '';
-      if (isPrivateOrLanUrl(stored)) {
-        localStorage.setItem('sikka_fleet_server_url', CLOUD_API_URL);
-        setServerUrlInput(CLOUD_API_URL);
-      } else {
-        setServerUrlInput(stored || getApiBaseUrl());
-      }
-    }
-  }, []);
-
-  const handleSaveServerUrl = () => {
-    if (typeof window !== 'undefined') {
-      const trimmed = serverUrlInput.trim().replace(/\/+$/, '');
-      if (trimmed) {
-        localStorage.setItem('sikka_fleet_server_url', trimmed);
-        setServerUrlInput(trimmed);
-      } else {
-        localStorage.removeItem('sikka_fleet_server_url');
-        setServerUrlInput(PRODUCTION_API_URL);
-      }
-      setShowServerSettings(false);
-    }
-  };
-
-  const handleResetServerUrl = () => {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('sikka_fleet_server_url');
-      setServerUrlInput(PRODUCTION_API_URL);
-      setShowServerSettings(false);
-    }
-  };
-
-  const handleSelectPreset = (url: string) => {
-    if (typeof window !== 'undefined') {
-      setServerUrlInput(url);
-      localStorage.setItem('sikka_fleet_server_url', url);
-    }
-  };
 
   // Auto-focus username field once form is ready
   useEffect(() => {
@@ -345,77 +299,6 @@ export default function LoginForm({
           </button>
         </div>
 
-        {/* Mobile Server Connection Settings */}
-        <div className="pt-3 border-t border-slate-100 text-center">
-          <button
-            type="button"
-            onClick={() => setShowServerSettings(!showServerSettings)}
-            className="text-[11px] font-semibold text-slate-400 hover:text-emerald-600 transition inline-flex items-center gap-1.5 cursor-pointer"
-          >
-            <Settings className="w-3.5 h-3.5" />
-            <span>{showServerSettings ? 'Hide Server Settings' : 'Configure Server URL (Mobile)'}</span>
-          </button>
-
-          {showServerSettings && (
-            <div className="mt-2.5 p-3.5 bg-slate-50 border border-slate-200/90 rounded-2xl text-left text-xs space-y-2.5 animate-in fade-in duration-150">
-              <div className="flex items-center justify-between">
-                <label className="block text-[11px] font-bold text-slate-700">
-                  Backend Server API URL:
-                </label>
-                <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                  Cloud HTTPS Active
-                </span>
-              </div>
-              <input
-                type="url"
-                value={serverUrlInput}
-                onChange={(e) => setServerUrlInput(e.target.value)}
-                placeholder="https://fleet.sikkaind.com/api"
-                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-              <div className="pt-0.5 space-y-1.5">
-                <button
-                  type="button"
-                  onClick={() => handleSelectPreset(PRODUCTION_API_URL)}
-                  className={`w-full py-1.5 px-2 rounded-xl text-[10px] font-bold border transition text-left ${
-                    serverUrlInput === PRODUCTION_API_URL
-                      ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                  }`}
-                >
-                  🌐 Official Domain (fleet.sikkaind.com)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSelectPreset(BACKUP_CLOUD_API_URL)}
-                  className={`w-full py-1.5 px-2 rounded-xl text-[10px] font-semibold border transition text-left truncate ${
-                    serverUrlInput === BACKUP_CLOUD_API_URL
-                      ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
-                  }`}
-                >
-                  ☁️ Backup Cloud (sikka-fleet.vercel.app)
-                </button>
-              </div>
-              <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
-                <button
-                  type="button"
-                  onClick={handleSaveServerUrl}
-                  className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold rounded-xl text-[11px] cursor-pointer shadow-xs"
-                >
-                  Save URL
-                </button>
-                <button
-                  type="button"
-                  onClick={handleResetServerUrl}
-                  className="text-[11px] font-medium text-slate-400 hover:text-slate-600 cursor-pointer"
-                >
-                  Reset Default
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
       </form>
     </div>
   );

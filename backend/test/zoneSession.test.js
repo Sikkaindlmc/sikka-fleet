@@ -83,6 +83,18 @@ test('preserves a provider transition timestamp separately from sync detection t
   assert.equal(result.session.providerTransitionTimestamp.toISOString(), '2026-11-16T09:58:00.000Z');
 });
 
+test('confirmed geofence transitions retain the first candidate fix time and current last-seen time', () => {
+  const outside = applyFixToOpenSession(null, fix('OUTSIDE', '2026-11-16T10:00:00Z'));
+  const transition = applyFixToOpenSession(outside.session, {
+    ...fix('SALT', '2026-11-16T10:20:00Z', 'salt-id', '2026-11-16T10:25:00Z'),
+    transitionGpsTimestamp: new Date('2026-11-16T10:10:00Z'),
+  });
+
+  assert.equal(transition.closeAt.toISOString(), '2026-11-16T10:10:00.000Z');
+  assert.equal(transition.session.enteredAt.toISOString(), '2026-11-16T10:10:00.000Z');
+  assert.equal(transition.session.lastSeenAt.toISOString(), '2026-11-16T10:20:00.000Z');
+});
+
 test('reconstructs a missing session from persisted status without resetting its entry time', () => {
   const priorStatus = {
     vehicleId: 'vehicle-1',

@@ -3,7 +3,7 @@
 import React, { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { X, LogOut, ShieldCheck, User } from 'lucide-react';
+import { X, LogOut, ShieldCheck, User, Settings } from 'lucide-react';
 import { NAV_ITEMS } from './Sidebar';
 import { useAuth } from '../lib/authContext';
 
@@ -92,6 +92,20 @@ export default function MobileNav({ isOpen, onClose }: MobileNavProps) {
               </Link>
             );
           })}
+          {user?.role === 'Admin' && (
+            <Link
+              href="/admin/server-settings"
+              onClick={onClose}
+              className={`flex items-center gap-3.5 px-3.5 py-3 rounded-xl text-sm font-semibold transition ${
+                pathname === '/admin/server-settings'
+                  ? 'bg-emerald-500 text-slate-950 font-bold shadow-md shadow-emerald-500/20'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+              }`}
+            >
+              <Settings className="w-5 h-5 text-slate-400" />
+              <span className="flex-1">Server Settings</span>
+            </Link>
+          )}
         </nav>
 
         {/* User profile & Logout */}

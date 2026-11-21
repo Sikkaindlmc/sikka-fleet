@@ -54,6 +54,8 @@ const DEFAULT_PAGES = [
  */
 pageSchema.statics.ensureDefaultPages = async function () {
   try {
+    await this.deleteOne({ pageName: 'CCTV' });
+
     for (const defPage of DEFAULT_PAGES) {
       await this.findOneAndUpdate(
         { pageName: defPage.pageName },

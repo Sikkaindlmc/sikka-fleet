@@ -13,9 +13,18 @@ const { getVehiclePlantStatus, calculateStayDuration } = require('./geofenceServ
 const { getReadableLocation } = require('./locationHelper');
 const { updateVehicleCurrentStatus } = require('./vehicleCurrentStatusService');
 const { runGpsSyncExclusive } = require('./gpsSyncCoordinator');
+const { isVehicleAssignedToProvider } = require('../utils/gpsProvider');
+const { evaluateGeofenceConfirmation } = require('./geofenceConfirmation');
+const { getZoneId, reconcileZoneSession } = require('./zoneSessionService');
 
 function normalizeNumber(num) {
   return (num || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function getProviderSettingQuery(provider) {
+  return provider === 'FLEETX'
+    ? { $or: [{ provider: /fleetx/i }, { apiUrl: /fleetx/i }] }
+    : { $or: [{ provider: /wheels/i }, { apiUrl: /wheelseye/i }] };
 }
 
 /**
@@ -52,8 +61,35 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
     vehicleQuery.status = 'Active';
   }
 
-  const registeredVehicles = await Vehicle.find(vehicleQuery);
+  const registeredVehicles = (await Vehicle.find(vehicleQuery))
+    .filter((vehicle) => isVehicleAssignedToProvider(vehicle, targetProvider));
   const activePlants = await Plant.find({ status: 'Active' });
+  const providerName = targetProvider === 'FLEETX' ? 'FleetX' : 'WheelsEye GPS';
+  const providerSettingQuery = getProviderSettingQuery(targetProvider);
+
+  try {
+    await GpsSetting.findOneAndUpdate(
+      providerSettingQuery,
+      {
+        $set: {
+          provider: providerName,
+          lastSync: startedAt,
+          last_evaluated_timestamp: startedAt,
+          last_sync_status: 'RUNNING',
+          last_sync_source: isAuto ? 'GPS-AUTO' : 'MANUAL',
+          connectionStatus: 'Syncing',
+        },
+        $setOnInsert: {
+          apiUrl: targetProvider === 'FLEETX'
+            ? process.env.FLEETX_API_BASE_URL || 'https://api.fleetx.io'
+            : process.env.WHEELSEYE_API_URL || 'https://api.wheelseye.com/currentLoc',
+        },
+      },
+      { upsert: true, setDefaultsOnInsert: true }
+    );
+  } catch (settingError) {
+    console.warn(`[GPS Sync Engine] Could not mark ${targetProvider} as syncing:`, settingError.message);
+  }
 
   let telemetryItems = [];
   let fetchError = null;
@@ -94,6 +130,14 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
 
     const providerName = targetProvider === 'FLEETX' ? 'FleetX' : 'WheelsEye GPS';
     const curStatus = await VehicleCurrentStatus.findOne({ vehicleId: vehicle._id });
+    const previousProviderFix = await GpsHistory.findOne({
+      vehicleId: vehicle._id,
+      provider: providerName,
+      archived: { $ne: true },
+    })
+      .select('latitude longitude gpsTimestamp geofence_status candidateGeofenceStatus candidatePlantId plantId statusEligible')
+      .sort({ gpsTimestamp: -1 })
+      .lean();
 
     if (fetchError || !telemetry || telemetry.latitude === null || telemetry.longitude === null) {
       failedCount++;
@@ -130,12 +174,13 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
       continue;
     }
 
-    const latestStoredTimestamp = curStatus?.latest_gps_timestamp
+    const sameProviderStatusTime = curStatus?.provider === providerName && curStatus.latest_gps_timestamp
       ? new Date(curStatus.latest_gps_timestamp)
-      : vehicle.gps_last_updated_at
-        ? new Date(vehicle.gps_last_updated_at)
-        : null;
-    if (latestStoredTimestamp && !Number.isNaN(latestStoredTimestamp.getTime()) && gpsTimestamp < latestStoredTimestamp) {
+      : null;
+    const latestStoredTimestamp = previousProviderFix?.gpsTimestamp
+      ? new Date(previousProviderFix.gpsTimestamp)
+      : sameProviderStatusTime;
+    if (latestStoredTimestamp && !Number.isNaN(latestStoredTimestamp.getTime()) && gpsTimestamp <= latestStoredTimestamp) {
       continue;
     }
 
@@ -152,39 +197,90 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
       { now }
     );
 
-    const isInside = plantEval.isInside;
-    const plantId = plantEval.plantId;
-    const plantName = isInside ? plantEval.plantName : '';
-    const geofenceStatus = isInside ? 'INSIDE' : 'OUTSIDE';
+    const candidateGeofenceStatus = plantEval.isStale
+      ? 'UNKNOWN'
+      : plantEval.isInside ? 'INSIDE' : 'OUTSIDE';
+    const confirmation = evaluateGeofenceConfirmation({
+      currentStatus: curStatus,
+      previousFix: previousProviderFix,
+      candidateStatus: candidateGeofenceStatus,
+      candidatePlantId: plantEval.isInside ? plantEval.plantId : null,
+      gpsTimestamp,
+    });
+    const geofenceStatus = confirmation.status;
+    const isInside = geofenceStatus === 'INSIDE';
+    const plantId = isInside ? confirmation.plantId : null;
+    const confirmedPlant = isInside
+      ? activePlants.find((plant) => plant._id.toString() === plantId?.toString())
+      : null;
+    const plantName = confirmedPlant?.plantName ||
+      (isInside && curStatus?.currentPlantId?.toString() === plantId?.toString()
+        ? curStatus.current_plant
+        : '');
+    const transitionTime = confirmation.transitionGpsTimestamp || gpsTimestamp;
 
-    let entryDateTime = prevEntryTime;
-    if (isInside) {
-      const wasOutside = !curStatus || curStatus.status === 'Outside' || !curStatus.currentPlantId;
-      const changedPlant =
-        curStatus &&
-        curStatus.currentPlantId &&
-        curStatus.currentPlantId.toString() !== (plantId ? plantId.toString() : '');
-
-      if (wasOutside || changedPlant) {
-        entryDateTime = gpsTimestamp;
-        await PlantEntry.create({
-          vehicleId: vehicle._id,
-          vehicleNumber: vehicle.vehicleNumber,
-          plantId,
-          plantName,
-          entryDateTime,
-          latitude: lat,
-          longitude: lon,
-          distanceMeter: plantEval.distanceMeter,
-        });
-      }
-    } else {
-      if (curStatus && curStatus.status === 'Inside' && curStatus.currentPlantId) {
-        const prevPlant = await Plant.findById(curStatus.currentPlantId);
+    let entryDateTime = isInside ? prevEntryTime : null;
+    if (confirmation.transition === 'ENTRY' || confirmation.transition === 'PLANT_CHANGE') {
+      entryDateTime = transitionTime;
+      if (confirmation.transition === 'PLANT_CHANGE' && curStatus?.currentPlantId) {
+        const prevPlant = activePlants.find((plant) => plant._id.toString() === curStatus.currentPlantId.toString());
         prevExitPlant = prevPlant ? prevPlant.plantName : curStatus.current_plant;
-        prevExitTime = gpsTimestamp;
+        prevExitTime = transitionTime;
       }
+
+      const eventMinute = Math.floor(transitionTime.getTime() / 60000);
+      const transitionKey = `${vehicle._id}:${plantId}:${eventMinute}`;
+      const entryFix = previousProviderFix?.gpsTimestamp &&
+        new Date(previousProviderFix.gpsTimestamp).getTime() === transitionTime.getTime()
+        ? previousProviderFix
+        : { latitude: lat, longitude: lon };
+      await PlantEntry.updateOne(
+        { transitionKey },
+        {
+          $setOnInsert: {
+            vehicleId: vehicle._id,
+            vehicleNumber: vehicle.vehicleNumber,
+            plantId,
+            plantName,
+            entryDateTime,
+            detectedAt: now,
+            gpsTimestamp: transitionTime,
+            syncTime: now,
+            syncId,
+            syncType: isAuto ? 'AUTO' : 'MANUAL',
+            latitude: entryFix.latitude,
+            longitude: entryFix.longitude,
+            distanceMeter: plantEval.distanceMeter,
+            plantRadiusMeters: plantEval.plantRadiusMeters,
+            transitionKey,
+          },
+        },
+        { upsert: true }
+      );
+    }
+
+    if (confirmation.transition === 'EXIT') {
+      const prevPlant = curStatus?.currentPlantId
+        ? activePlants.find((plant) => plant._id.toString() === curStatus.currentPlantId.toString())
+        : null;
+      prevExitPlant = prevPlant ? prevPlant.plantName : curStatus?.current_plant;
+      prevExitTime = transitionTime;
       entryDateTime = null;
+    }
+
+    if (geofenceStatus !== 'UNKNOWN') {
+      await reconcileZoneSession({
+        vehicleId: vehicle._id,
+        vehicleNumber: vehicle.vehicleNumber,
+        zoneId: geofenceStatus === 'INSIDE' ? getZoneId(plantName, plantId) : 'OUTSIDE',
+        plantId,
+        gpsTimestamp,
+        transitionGpsTimestamp: confirmation.transitionGpsTimestamp,
+        syncTime: now,
+        provider: providerName,
+        syncId,
+        syncType: isAuto ? 'AUTO' : 'MANUAL',
+      }, curStatus);
     }
 
     const calculatedStay = isInside
@@ -275,6 +371,9 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
           syncId,
           syncType: isAuto ? 'AUTO' : 'MANUAL',
           geofence_status: geofenceStatus,
+          candidateGeofenceStatus,
+          candidatePlantId: plantEval.isInside ? plantEval.plantId : null,
+          statusEligible: !plantEval.isStale,
           plantId: plantId,
           plantName,
           distanceMeter: plantEval.distanceMeter,
@@ -338,6 +437,7 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
           connectionStatus: fetchError ? 'Connection Failed' : 'Connected',
           ...(fetchError ? {} : { lastSuccessAt: completedAt }),
           ...(fetchError ? { lastErrorAt: completedAt } : { lastErrorAt: null }),
+          lastConnectionCheckAt: completedAt,
           vehicles_processed: registeredVehicles.length,
           vehicles_updated: successCount,
         },
@@ -357,6 +457,7 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
     failedCount,
     errorMessage: fetchError ? fetchError.message : null,
     durationMs,
+    lastSuccessfulSyncAt: fetchError ? null : completedAt,
   };
 }
 
@@ -366,6 +467,21 @@ function syncProviderGps(options = {}) {
     () => runProviderGpsSync(options),
     `${provider.toUpperCase()}_GPS_SYNC`
   );
+}
+
+async function syncBothGpsProviders({ mode = 'MANUAL', caller = 'Admin' } = {}) {
+  const [wheelsEye, fleetx] = await Promise.allSettled([
+    syncProviderGps({ provider: 'WHEELSEYE', mode, caller }),
+    syncProviderGps({ provider: 'FLEETX', mode, caller }),
+  ]);
+  return {
+    wheelseye: wheelsEye.status === 'fulfilled'
+      ? wheelsEye.value
+      : { success: false, errorMessage: wheelsEye.reason?.message || 'WheelsEye sync failed.' },
+    fleetx: fleetx.status === 'fulfilled'
+      ? fleetx.value
+      : { success: false, errorMessage: fleetx.reason?.message || 'FleetX sync failed.' },
+  };
 }
 
 /**
@@ -502,5 +618,6 @@ async function getProviderTelematicsOverview() {
 
 module.exports = {
   syncProviderGps,
+  syncBothGpsProviders,
   getProviderTelematicsOverview,
 };

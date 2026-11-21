@@ -42,17 +42,22 @@ export function isPrivateOrLanUrl(url: string): boolean {
 export function getApiBaseUrl(): string {
   if (typeof window !== 'undefined') {
     const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const customUrl = localStorage.getItem('sikka_fleet_server_url')?.trim();
+    if (customUrl && !isPrivateOrLanUrl(customUrl)) {
+      return customUrl.replace(/\/+$/, '');
+    }
+    if (customUrl && isPrivateOrLanUrl(customUrl)) {
+      const isLocalDevelopmentUrl = process.env.NODE_ENV === 'development' && isLocalHost &&
+        /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?(?:\/|$)/i.test(customUrl);
+      if (isLocalDevelopmentUrl) return customUrl.replace(/\/+$/, '');
+      localStorage.removeItem('sikka_fleet_server_url');
+    }
+
     if (process.env.NODE_ENV === 'development' && isLocalHost) {
       const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
       return configuredApiUrl
         ? configuredApiUrl.replace(/\/+$/, '')
         : 'http://127.0.0.1:5000/api';
-    }
-
-    // 1. Check custom override in localStorage (if set by user)
-    const customUrl = localStorage.getItem('sikka_fleet_server_url');
-    if (customUrl && customUrl.trim()) {
-      return customUrl.trim().replace(/\/+$/, '');
     }
 
     // 2. Check NEXT_PUBLIC_API_URL environment variable if set

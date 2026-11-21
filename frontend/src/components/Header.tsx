@@ -3,6 +3,7 @@
 import React from 'react';
 import { Menu, User, LogOut, Shield } from 'lucide-react';
 import { useAuth } from '../lib/authContext';
+import SikkaAiPanel from './SikkaAiPanel';
 
 interface HeaderProps {
   onOpenMobileNav: () => void;
@@ -13,7 +14,7 @@ export default function Header({ onOpenMobileNav, title }: HeaderProps) {
   const { user, logout } = useAuth();
 
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between h-16 px-4 sm:px-6 bg-white/95 backdrop-blur-md border-b border-slate-200/80 shadow-xs">
+    <header className="sticky top-0 z-[60] flex items-center justify-between h-16 px-4 sm:px-6 bg-white/95 backdrop-blur-md border-b border-slate-200/80 shadow-xs">
       <div className="flex items-center gap-3">
         <button
           type="button"
@@ -42,6 +43,7 @@ export default function Header({ onOpenMobileNav, title }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-3 sm:gap-4">
+        {user && <SikkaAiPanel />}
         {/* User Badge */}
         <div className="flex items-center gap-2.5 pl-3 py-1 pr-2 rounded-full bg-slate-50 border border-slate-200/70">
           <div className="w-7 h-7 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs">

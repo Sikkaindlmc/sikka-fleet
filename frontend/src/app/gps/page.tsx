@@ -125,7 +125,8 @@ interface GpsSettingData {
   provider: string;
   apiUrl: string;
   status: 'Active' | 'Inactive';
-  connectionStatus: 'Connected' | 'Connection Failed' | 'Pending' | 'AUTH_FAILED' | 'Configuration Missing' | 'Disconnected';
+  connectionStatus: 'Connected' | 'Disconnected' | 'Syncing' | 'Sync Failed';
+  lastSyncStatus?: string;
   lastSync?: string | null;
   lastError?: string | null;
   lastSuccessAt?: string | null;
@@ -354,7 +355,7 @@ function GpsPageContent() {
   }, []);
 
   useEffect(() => {
-    fetchGpsSetting();
+    if (user?.role === 'Admin') fetchGpsSetting();
     fetchLiveVehicles(false);
 
     // Live refresh every 20 minutes (1,200,000 ms)
@@ -363,7 +364,7 @@ function GpsPageContent() {
     }, 20 * 60 * 1000);
 
     return () => clearInterval(interval);
-  }, [fetchGpsSetting, fetchLiveVehicles]);
+  }, [fetchGpsSetting, fetchLiveVehicles, user?.role]);
 
   // Handle Save Configuration
   const handleSaveConfig = async (e: React.FormEvent) => {
@@ -609,24 +610,26 @@ function GpsPageContent() {
             </span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('settings')}
-            className={`flex items-center gap-2 px-4 py-3 text-xs font-bold border-b-2 transition cursor-pointer ${
-              activeTab === 'settings'
-                ? 'border-emerald-500 text-slate-900 bg-emerald-50/50'
-                : 'border-transparent text-slate-500 hover:text-slate-900 hover:border-slate-300'
-            }`}
-          >
-            <Settings className="w-4 h-4 text-slate-600" />
-            <span>Settings</span>
-            {vehicleIcon && (
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            )}
-          </button>
+          {user?.role === 'Admin' && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('settings')}
+              className={`flex items-center gap-2 px-4 py-3 text-xs font-bold border-b-2 transition cursor-pointer ${
+                activeTab === 'settings'
+                  ? 'border-emerald-500 text-slate-900 bg-emerald-50/50'
+                  : 'border-transparent text-slate-500 hover:text-slate-900 hover:border-slate-300'
+              }`}
+            >
+              <Settings className="w-4 h-4 text-slate-600" />
+              <span>Settings</span>
+              {vehicleIcon && (
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              )}
+            </button>
+          )}
         </div>
         <AlertBanner alert={alert} onDismiss={() => setAlert(null)} />
-        {setting && ['Connection Failed', 'AUTH_FAILED'].includes(setting.connectionStatus) && (
+        {setting && setting.connectionStatus === 'Sync Failed' && (
           <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-900">
             WheelsEye request failed ({setting.lastErrorCode || setting.connectionStatus}).
             {setting.lastSuccessAt
@@ -826,8 +829,16 @@ function GpsPageContent() {
                 <div className="inline-flex items-center gap-2 text-xs font-bold text-slate-700">
                   <Globe className="w-3.5 h-3.5 text-blue-600" />
                   <span>WheelsEye GPS</span>
-                  <span className={setting?.connectionStatus === 'Connected' ? 'text-emerald-700' : 'text-amber-700'}>
-                    {setting?.connectionStatus === 'Connected' ? 'Connected' : setting?.lastErrorCode || 'Pending'}
+                  <span className={
+                    setting?.connectionStatus === 'Connected'
+                      ? 'text-emerald-700'
+                      : setting?.connectionStatus === 'Sync Failed'
+                        ? 'text-rose-700'
+                        : setting?.connectionStatus === 'Syncing'
+                          ? 'text-blue-700'
+                          : 'text-amber-700'
+                  }>
+                    {setting?.connectionStatus || 'Disconnected'}
                   </span>
                 </div>
 
@@ -950,14 +961,16 @@ function GpsPageContent() {
                   <span>{isLiveLoading ? 'Refreshing...' : 'Refresh Telemetry'}</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('settings')}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                  <span>Settings &amp; Vehicle Icon</span>
-                </button>
+                {user?.role === 'Admin' && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('settings')}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    <span>Settings &amp; Vehicle Icon</span>
+                  </button>
+                )}
               </div>
             </div>
 

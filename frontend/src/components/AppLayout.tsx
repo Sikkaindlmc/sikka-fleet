@@ -14,12 +14,14 @@ interface AppLayoutProps {
   children: React.ReactNode;
   pageTitle: string;
   requiredPage?: string;
+  requiredRole?: string;
 }
 
 export default function AppLayout({
   children,
   pageTitle,
   requiredPage,
+  requiredRole,
 }: AppLayoutProps) {
   const { user, isLoading, hasPageAccess } = useAuth();
   const router = useRouter();
@@ -52,7 +54,7 @@ export default function AppLayout({
   }
 
   // Enforce page authorization
-  if (requiredPage && !hasPageAccess(requiredPage)) {
+  if ((requiredRole && user.role !== requiredRole) || (requiredPage && !hasPageAccess(requiredPage))) {
     return (
       <div className="flex h-screen bg-slate-100 overflow-hidden">
         <Sidebar />
@@ -66,7 +68,7 @@ export default function AppLayout({
               </div>
               <h2 className="text-xl font-bold text-slate-900 mb-2">Access Restricted</h2>
               <p className="text-sm text-slate-600 mb-6">
-                You do not have administrative permission to view the <strong className="text-slate-800">{requiredPage}</strong> page. Please contact your system administrator to adjust your permissions.
+                You are not authorized to view this page. Contact your system administrator if you need access.
               </p>
               <button
                 type="button"

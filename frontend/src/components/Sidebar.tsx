@@ -14,6 +14,7 @@ import {
   User,
   UserCheck,
   FileSpreadsheet,
+  Settings,
 } from 'lucide-react';
 import { useAuth } from '../lib/authContext';
 
@@ -85,6 +86,19 @@ export default function Sidebar() {
             </Link>
           );
         })}
+        {user?.role === 'Admin' && (
+          <Link
+            href="/admin/server-settings"
+            className={`flex items-center gap-3.5 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all duration-150 ${
+              pathname === '/admin/server-settings'
+                ? 'bg-emerald-500 text-slate-950 font-bold shadow-md shadow-emerald-500/25'
+                : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <Settings className="w-5 h-5 text-slate-400" />
+            <span className="flex-1">Server Settings</span>
+          </Link>
+        )}
       </nav>
 
       {/* User Information & Logout */}

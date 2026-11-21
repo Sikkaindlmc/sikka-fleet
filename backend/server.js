@@ -21,6 +21,7 @@ const userRoutes = require('./routes/userRoutes');
 const driverRoutes = require('./routes/driverRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
+const sikkaAiRoutes = require('./routes/sikkaAiRoutes');
 
 const helmet = require('helmet');
 const mongoSanitize = require('./middleware/mongoSanitize');
@@ -126,6 +127,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/sikka-ai', sikkaAiRoutes);
 
 // Centralized Error Handling Middleware
 app.use((err, req, res, next) => {

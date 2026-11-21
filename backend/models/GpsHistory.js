@@ -22,6 +22,8 @@ const gpsHistorySchema = new mongoose.Schema(
     statusEligible: { type: Boolean, default: undefined },
     providerTransitionTimestamp: { type: Date, default: null },
     geofence_status: { type: String, enum: ['INSIDE', 'OUTSIDE', 'UNKNOWN'], default: 'UNKNOWN' },
+    candidateGeofenceStatus: { type: String, enum: ['INSIDE', 'OUTSIDE', 'UNKNOWN'], default: null },
+    candidatePlantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plant', default: null },
     plantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Plant', default: null },
     plantName: { type: String, default: '' },
     distanceMeter: { type: Number, default: null },

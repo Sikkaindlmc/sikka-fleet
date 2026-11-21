@@ -24,6 +24,8 @@ const PlantStay = require('./PlantStay');
 const ZoneSession = require('./ZoneSession');
 const DailyGpsReport = require('./DailyGpsReport');
 const GpsCredentialAuditLog = require('./GpsCredentialAuditLog');
+const SikkaAiAuditLog = require('./SikkaAiAuditLog');
+const SikkaAiSyncCooldown = require('./SikkaAiSyncCooldown');
 
 module.exports = {
   User,
@@ -40,6 +42,8 @@ module.exports = {
   ZoneSession,
   DailyGpsReport,
   GpsCredentialAuditLog,
+  SikkaAiAuditLog,
+  SikkaAiSyncCooldown,
   PlantEntry,
   PlantEntryEvent,
   GpsSetting,

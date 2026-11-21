@@ -70,6 +70,10 @@ const plantEntrySchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+    transitionKey: {
+      type: String,
+      default: '',
+    },
   },
   {
     collection: 'plantEntries',
@@ -80,5 +84,13 @@ const plantEntrySchema = new mongoose.Schema(
 // Indexes recommended in Section 15
 plantEntrySchema.index({ plantId: 1, entryDateTime: -1 });
 plantEntrySchema.index({ vehicleId: 1, entryDateTime: -1 });
+plantEntrySchema.index(
+  { transitionKey: 1 },
+  {
+    unique: true,
+    name: 'unique_plant_entry_transition_key',
+    partialFilterExpression: { transitionKey: { $type: 'string', $gt: '' } },
+  }
+);
 
 module.exports = mongoose.model('PlantEntry', plantEntrySchema);

@@ -4,13 +4,13 @@ const Vehicle = require('../models/Vehicle');
 const GpsCredentialAuditLog = require('../models/GpsCredentialAuditLog');
 const { verifyToken, checkPageAccess, requireRole } = require('../middleware/auth');
 const { testGpsConnection } = require('../services/gpsPollerService');
-const { executeGpsSync } = require('../services/gpsSyncService');
 const { generateFleetReport } = require('../services/reportCalculationService');
 const { getFleetGpsSnapshot } = require('../services/gpsDataService');
 const { filterActivePlans } = require('../utils/planHelper');
 const {
   getGpsConnectionStatus,
   DEFAULT_PROVIDER_URLS,
+  isVehicleAssignedToProvider,
 } = require('../utils/gpsProvider');
 
 const router = express.Router();
@@ -114,7 +114,7 @@ router.get('/', async (req, res) => {
     res.json({
       _id: setting?._id,
       provider: 'WheelsEye GPS',
-      apiUrl: maskUrlSecret(effectiveUrl),
+      ...(req.user.role === 'Admin' ? { apiUrl: maskUrlSecret(effectiveUrl) } : {}),
       status: 'Active',
       connectionStatus: getProviderConnectionStatus(setting),
       lastSync: setting?.lastSync || null,
@@ -124,9 +124,13 @@ router.get('/', async (req, res) => {
       lastError: setting?.lastError || '',
       consecutiveFailures: setting?.consecutiveFailures || 0,
       pollIntervalSeconds: setting?.pollIntervalSeconds || 1800,
-      hasApiKey: Boolean(effectiveCredential.credential),
-      maskedApiKey: maskGpsCredential(effectiveCredential.credential),
-      credentialSource: effectiveCredential.source,
+      ...(req.user.role === 'Admin'
+        ? {
+            hasApiKey: Boolean(effectiveCredential.credential),
+            maskedApiKey: maskGpsCredential(effectiveCredential.credential),
+            credentialSource: effectiveCredential.source,
+          }
+        : {}),
       vehicleIcon: setting?.vehicleIcon || '',
       vehicleIconUpdatedAt: setting?.vehicleIconUpdatedAt || null,
       createdAt: setting?.createdAt,
@@ -135,7 +139,7 @@ router.get('/', async (req, res) => {
   } catch (error) {
     const encryptionError = isCredentialEncryptionError(error);
     res.status(encryptionError ? 503 : 500).json({
-      error: encryptionError
+      error: encryptionError && req.user.role === 'Admin'
         ? 'GPS credential encryption is not configured correctly. Set GPS_CREDENTIAL_ENCRYPTION_KEY to a valid 32-byte key.'
         : 'GPS service temporarily unavailable.',
     });
@@ -311,7 +315,7 @@ router.post('/', requireRole('Admin'), async (req, res) => {
 });
 
 // POST /api/gps/test-connection - Test WheelsEye connection
-router.post('/test-connection', gpsSyncLimiter, async (req, res) => {
+router.post('/test-connection', gpsSyncLimiter, requireRole('Admin'), async (req, res) => {
   try {
     const result = await testGpsConnection();
     res.status(result.status === 'Connected' ? 200 : 502).json(result);
@@ -397,6 +401,23 @@ router.post('/sync/:provider', gpsSyncLimiter, requireRole('Admin'), async (req,
       return res.status(400).json({ error: 'Provider must be WheelsEye, FleetX, or All.' });
     }
 
+    const conflictingJob = [...gpsSyncJobs.values()].find((existingJob) =>
+      existingJob.status === 'RUNNING' &&
+      (
+        existingJob.provider === 'ALL' ||
+        normalizedProvider === 'ALL' ||
+        existingJob.provider === normalizedProvider
+      )
+    );
+    if (conflictingJob) {
+      return res.status(202).json({
+        success: true,
+        jobId: conflictingJob.jobId,
+        status: 'RUNNING',
+        message: 'A matching GPS synchronization is already in progress.',
+      });
+    }
+
     const jobId = `gps_sync_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const job = {
       jobId,
@@ -422,6 +443,7 @@ router.post('/sync/:provider', gpsSyncLimiter, requireRole('Admin'), async (req,
           job.fleetx = fleetx.status === 'fulfilled'
             ? { status: fleetx.value.success ? 'SUCCESS' : 'FAILED', ...fleetx.value }
             : { status: 'FAILED', success: false, error: fleetx.reason?.message };
+          job.success = Boolean(job.wheelseye.success || job.fleetx.success);
         } else {
           const result = await syncProviderGps({
             provider: normalizedProvider,
@@ -430,6 +452,7 @@ router.post('/sync/:provider', gpsSyncLimiter, requireRole('Admin'), async (req,
           });
           const providerKey = normalizedProvider === 'FLEETX' ? 'fleetx' : 'wheelseye';
           job[providerKey] = { status: result.success ? 'SUCCESS' : 'FAILED', ...result };
+          job.success = Boolean(result.success);
         }
         job.status = 'COMPLETED';
       } catch (error) {
@@ -458,12 +481,15 @@ router.post('/sync/:provider', gpsSyncLimiter, requireRole('Admin'), async (req,
 // POST /api/gps/trigger-sync - On-demand GPS sync trigger
 router.post('/trigger-sync', gpsSyncLimiter, requireRole('Admin'), async (req, res) => {
   try {
-    const result = await executeGpsSync({
-      source: 'GPS-AUTO',
-      triggerType: 'USER_TRIGGER',
+    const { syncBothGpsProviders } = require('../services/gpsSyncEngine');
+    const result = await syncBothGpsProviders({
+      mode: 'MANUAL',
+      caller: req.user?.username || 'Admin',
     });
-    res.status(result.success ? 200 : 502).json({
-      message: result.message || `${result.provider} synchronization ${result.success ? 'completed' : 'failed'}.`,
+    const success = Boolean(result.wheelseye.success || result.fleetx.success);
+    res.status(success ? 200 : 502).json({
+      success,
+      message: 'Independent GPS synchronization completed.',
       ...result,
     });
   } catch (error) {
@@ -487,7 +513,7 @@ router.get('/live-vehicles', async (req, res) => {
         archived: { $ne: true },
         $or: [{ provider: /fleetx/i }, { apiUrl: /fleetx/i }],
       }).sort({ updatedAt: -1 }),
-      Vehicle.find({ status: 'Active' }).select('_id').lean(),
+      Vehicle.find({ status: 'Active' }).select('_id gps_provider gpsProvider gpsProviders').lean(),
     ]);
     const snapshot = await getFleetGpsSnapshot();
     const liveFleet = snapshot.fleet.filter((item) =>
@@ -563,31 +589,24 @@ router.get('/live-vehicles', async (req, res) => {
           };
         });
     });
-    const getWheelsEyeCounts = () => {
+    const getProviderCounts = (provider) => {
+      const assignedVehicles = registeredVehicles.filter((vehicle) =>
+        isVehicleAssignedToProvider(vehicle, provider)
+      );
+      const assignedIds = new Set(assignedVehicles.map((vehicle) => vehicle._id.toString()));
       const locatedVehicleIds = new Set(liveVehicles
         .filter((vehicle) =>
-          vehicle.provider === 'WheelsEye GPS' &&
+          assignedIds.has(vehicle.vehicleId.toString()) &&
+          (provider === 'FLEETX'
+            ? /fleetx/i.test(vehicle.provider)
+            : /wheels.?eye/i.test(vehicle.provider)) &&
           vehicle.hasGps &&
           Number.isFinite(vehicle.latitude) &&
           Number.isFinite(vehicle.longitude)
         )
         .map((vehicle) => vehicle.vehicleId.toString()));
       return {
-        registeredVehicleCount: registeredVehicles.length,
-        validGpsVehicleCount: locatedVehicleIds.size,
-      };
-    };
-    const getFleetxCounts = () => {
-      const locatedVehicleIds = new Set(liveVehicles
-        .filter((vehicle) =>
-          vehicle.provider === 'FleetX' &&
-          vehicle.hasGps &&
-          Number.isFinite(vehicle.latitude) &&
-          Number.isFinite(vehicle.longitude)
-        )
-        .map((vehicle) => vehicle.vehicleId.toString()));
-      return {
-        registeredVehicleCount: registeredVehicles.length,
+        registeredVehicleCount: assignedVehicles.length,
         validGpsVehicleCount: locatedVehicleIds.size,
       };
     };
@@ -596,34 +615,29 @@ router.get('/live-vehicles', async (req, res) => {
       (process.env.FLEETX_USERNAME || '').trim() &&
       (process.env.FLEETX_PASSWORD || '').trim()
     );
-    const fleetxConnectionStatus = !fleetxCredentialsConfigured
-      ? 'Configuration Missing'
-      : fleetxSetting?.connectionStatus === 'AUTH_FAILED'
-        ? 'AUTH_FAILED'
-        : fleetxSetting?.connectionStatus === 'Connection Failed'
-          ? 'Disconnected'
-          : fleetxSetting?.lastSuccessAt || fleetxSetting?.lastSync
-            ? 'Connected'
-            : 'Pending';
+    const fleetxConnectionStatus = fleetxCredentialsConfigured
+      ? getGpsConnectionStatus(fleetxSetting, 'FleetX')
+      : 'Disconnected';
 
     res.json({
       totalCount: liveVehicles.length,
       provider: 'WheelsEye GPS',
-      apiUrl: wheelsEyeSetting ? maskUrlSecret(wheelsEyeSetting.apiUrl) : '',
       lastSync: snapshot.lastUpdated || null,
       wheelsEyeStatus: {
         connectionStatus: getProviderConnectionStatus(wheelsEyeSetting),
+        lastSyncStatus: wheelsEyeSetting?.last_sync_status || 'IDLE',
         lastError: wheelsEyeSetting?.lastError || '',
         lastErrorCode: wheelsEyeSetting?.lastErrorCode || '',
         lastSuccessAt: wheelsEyeSetting?.lastSuccessAt || null,
-        ...getWheelsEyeCounts(),
+        ...getProviderCounts('WHEELSEYE'),
       },
       fleetxStatus: {
         connectionStatus: fleetxConnectionStatus,
+        lastSyncStatus: fleetxSetting?.last_sync_status || 'IDLE',
         lastError: fleetxSetting?.lastError || '',
         lastErrorCode: fleetxSetting?.lastErrorCode || '',
         lastSuccessAt: fleetxSetting?.lastSuccessAt || null,
-        ...getFleetxCounts(),
+        ...getProviderCounts('FLEETX'),
       },
       vehicles: liveVehicles,
     });

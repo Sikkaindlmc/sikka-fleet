@@ -10,15 +10,18 @@ jobs:
   sync-gps:
     name: Sync WheelsEye and FleetX GPS
     runs-on: ubuntu-latest
+    concurrency:
+      group: sikka-gps-sync
+      cancel-in-progress: false
     env:
-      BACKEND_URL: ${{ secrets.BACKEND_URL }}
+      BACKEND_URL: ${{ vars.BACKEND_URL || 'https://fleet.sikkaind.com' }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
     steps:
       - name: Trigger 30-Min GPS Telemetry Synchronization
         run: |
           set -euo pipefail
-          if [[ -z "$BACKEND_URL" || -z "$CRON_SECRET" ]]; then
-            echo "::error::Set BACKEND_URL and CRON_SECRET in the repository Actions secrets."
+          if [[ -z "$CRON_SECRET" ]]; then
+            echo "::error::Set CRON_SECRET in the repository Actions secrets."
             exit 1
           fi
           echo "Triggering shared GPS sync endpoint."

@@ -24,6 +24,12 @@ function applyFixToOpenSession(openSession, fix) {
   const providerTransitionTimestamp = parsedTransitionTime && !Number.isNaN(parsedTransitionTime.getTime())
     ? parsedTransitionTime
     : null;
+  const parsedZoneTransitionTime = fix.transitionGpsTimestamp ? new Date(fix.transitionGpsTimestamp) : null;
+  const zoneTransitionTime = parsedZoneTransitionTime &&
+    !Number.isNaN(parsedZoneTransitionTime.getTime()) &&
+    parsedZoneTransitionTime <= gpsTime
+    ? parsedZoneTransitionTime
+    : gpsTime;
   if (openSession && gpsTime <= new Date(openSession.lastSeenAt)) {
     return { action: 'unchanged', session: openSession };
   }
@@ -41,7 +47,7 @@ function applyFixToOpenSession(openSession, fix) {
   }
   return {
     action: openSession ? 'transition' : 'open',
-    closeAt: openSession ? gpsTime : null,
+    closeAt: openSession ? zoneTransitionTime : null,
     exitDetectedAt: openSession ? syncTime : null,
     providerExitTransitionTimestamp: openSession ? providerTransitionTimestamp : null,
     session: {
@@ -50,8 +56,8 @@ function applyFixToOpenSession(openSession, fix) {
       vehicleNumberNormalized: normalizedNumber,
       zoneId: fix.zoneId,
       plantId: fix.plantId || null,
-      enteredAt: gpsTime,
-      entryGpsTimestamp: gpsTime,
+      enteredAt: zoneTransitionTime,
+      entryGpsTimestamp: zoneTransitionTime,
       detectedAt: syncTime,
       providerTransitionTimestamp,
       lastSeenAt: gpsTime,

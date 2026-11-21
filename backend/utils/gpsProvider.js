@@ -18,25 +18,56 @@ function getAssignedGpsProvider(vehicle) {
   return provider.includes('fleet') ? FLEETX : WHEELSEYE;
 }
 
+function isVehicleAssignedToProvider(vehicle, provider) {
+  const expected = normalizeGpsProvider(provider, '');
+  if (!expected) return false;
+
+  const primary = String(vehicle?.gps_provider || vehicle?.gpsProvider || '').trim();
+  if (/^both$/i.test(primary)) return true;
+  const normalizedPrimary = normalizeGpsProvider(primary, '');
+  if (normalizedPrimary) return normalizedPrimary === expected;
+
+  const configuredProviders = Array.isArray(vehicle?.gpsProviders) ? vehicle.gpsProviders : [];
+  if (configuredProviders.length) {
+    return configuredProviders.some((entry) => normalizeGpsProvider(entry, '') === expected);
+  }
+  return expected === WHEELSEYE;
+}
+
 function getGpsConnectionStatus(setting, provider, now = Date.now()) {
-  if (setting?.connectionStatus === 'AUTH_FAILED') return 'AUTH_FAILED';
-  if (setting?.connectionStatus === 'Connection Failed' && setting?.lastErrorAt) {
-    return 'Connection Failed';
+  const startedAt = setting?.lastSync ? new Date(setting.lastSync).getTime() : NaN;
+  if (setting?.last_sync_status === 'RUNNING') {
+    return Number.isFinite(startedAt) && now - startedAt <= 10 * 60 * 1000
+      ? 'Syncing'
+      : 'Disconnected';
   }
 
-  if (setting?.connectionStatus === 'Connected') {
-    const lastCheck = setting.lastConnectionCheckAt || setting.lastSuccessAt || setting.lastSync;
-    const checkedAt = lastCheck ? new Date(lastCheck).getTime() : NaN;
-    if (Number.isFinite(checkedAt)) {
-      return now - checkedAt <= 60 * 60 * 1000 ? 'Connected' : 'Disconnected';
-    }
+  const lastSuccess = setting?.lastSuccessAt
+    ? new Date(setting.lastSuccessAt).getTime()
+    : setting?.connectionStatus === 'Connected'
+      ? new Date(setting.lastConnectionCheckAt || setting.lastSync || 0).getTime()
+    : setting?.last_sync_status === 'SUCCESS' || setting?.last_sync_status === 'PARTIAL'
+      ? new Date(setting.lastSync || setting.lastConnectionCheckAt || 0).getTime()
+      : NaN;
+  const lastError = setting?.lastErrorAt ? new Date(setting.lastErrorAt).getTime() : NaN;
+  if (
+    setting?.connectionStatus === 'AUTH_FAILED' ||
+    setting?.last_sync_status === 'FAILED' ||
+    setting?.connectionStatus === 'Connection Failed' && (!Number.isFinite(lastSuccess) || lastError >= lastSuccess)
+  ) {
+    return 'Sync Failed';
   }
 
-  const normalizedProvider = normalizeGpsProvider(provider);
-  const configuredUrl = normalizedProvider === FLEETX
-    ? process.env.FLEETX_API_BASE_URL || setting?.apiUrl || DEFAULT_PROVIDER_URLS[FLEETX]
-    : process.env.WHEELSEYE_API_URL || setting?.apiUrl || DEFAULT_PROVIDER_URLS[WHEELSEYE];
-  return configuredUrl ? 'Pending' : 'Configuration Missing';
+  if (
+    Number.isFinite(lastSuccess) &&
+    lastSuccess <= now &&
+    now - lastSuccess <= 60 * 60 * 1000 &&
+    (!Number.isFinite(lastError) || lastSuccess > lastError)
+  ) {
+    return 'Connected';
+  }
+
+  return 'Disconnected';
 }
 
 module.exports = {
@@ -45,5 +76,6 @@ module.exports = {
   DEFAULT_PROVIDER_URLS,
   normalizeGpsProvider,
   getAssignedGpsProvider,
+  isVehicleAssignedToProvider,
   getGpsConnectionStatus,
 };

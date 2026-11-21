@@ -7,6 +7,7 @@ const {
 const {
   getAssignedGpsProvider,
   getGpsConnectionStatus,
+  isVehicleAssignedToProvider,
 } = require('../utils/gpsProvider');
 const GpsSetting = require('../models/GpsSetting');
 
@@ -39,6 +40,13 @@ test('WheelsEye GPS configuration defaults to active', () => {
   assert.equal(setting.status, 'Active');
 });
 
+test('provider assignment keeps the two GPS integrations independent', () => {
+  assert.equal(isVehicleAssignedToProvider({ gps_provider: 'FLEETX' }, 'WHEELSEYE'), false);
+  assert.equal(isVehicleAssignedToProvider({ gps_provider: 'FLEETX' }, 'FLEETX'), true);
+  assert.equal(isVehicleAssignedToProvider({ gps_provider: 'BOTH' }, 'WHEELSEYE'), true);
+  assert.equal(isVehicleAssignedToProvider({ gps_provider: 'BOTH' }, 'FLEETX'), true);
+});
+
 test('WheelsEye sync updates registered active vehicles and excludes inactive or unregistered vehicles', () => {
   const vehiclesByNumber = new Map([
     ['UP14AA1001', { status: 'Active' }],
@@ -60,14 +68,14 @@ test('WheelsEye sync updates registered active vehicles and excludes inactive or
   );
 });
 
-test('GPS health reports defaults as pending and never treats unchecked or stale settings as live', () => {
+test('GPS health never treats unchecked or stale settings as live', () => {
   const originalUrl = process.env.WHEELSEYE_API_URL;
   delete process.env.WHEELSEYE_API_URL;
   try {
     const now = Date.parse('2026-11-17T12:00:00Z');
     assert.equal(
       getGpsConnectionStatus({ connectionStatus: 'Connected' }, 'WheelsEye GPS', now),
-      'Pending'
+      'Disconnected'
     );
     assert.equal(
       getGpsConnectionStatus({

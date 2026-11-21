@@ -268,8 +268,6 @@ export default function DashboardPage() {
   const [totalActiveVehicles, setTotalActiveVehicles] = useState(0);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [nextScheduledSyncAt, setNextScheduledSyncAt] = useState<string | null>(null);
-  const [isBackendSyncing, setIsBackendSyncing] = useState(false);
-  const [nextSyncCountdown, setNextSyncCountdown] = useState<string>('N/A');
   const [gpsSyncHealth, setGpsSyncHealth] = useState<GpsSyncHealth | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [syncingProviders, setSyncingProviders] = useState<string[]>([]);
@@ -580,10 +578,7 @@ export default function DashboardPage() {
       if (evalTimestamp) {
         setLastUpdated(evalTimestamp);
       }
-
-      if (data.next_scheduled_sync_at || data.next_sync_timestamp) {
-        setNextScheduledSyncAt(data.next_scheduled_sync_at || data.next_sync_timestamp || null);
-      }
+      setNextScheduledSyncAt(data.next_scheduled_sync_at || data.next_sync_timestamp || null);
 
       setGpsSyncHealth(data.gps_sync_health
         ? { ...data.gps_sync_health, providers: data.gpsProviderSyncHealth || [] }
@@ -598,68 +593,6 @@ export default function DashboardPage() {
     }
   }, []);
 
-  // Live countdown timer display bound to server-provided next scheduled sync slot (Requirement 9)
-  useEffect(() => {
-    let pollingWhileSyncing = false;
-
-    const calculateCountdown = () => {
-      const now = new Date();
-      if (!nextScheduledSyncAt) return 'N/A';
-      const targetTime = new Date(nextScheduledSyncAt);
-      if (isNaN(targetTime.getTime())) return 'N/A';
-
-      const diffMs = targetTime.getTime() - now.getTime();
-
-      // When countdown reaches 00:00 (Requirement 9):
-      // DO NOT assume that sync succeeded. Refresh backend sync status. Show "Syncing GPS..."
-      if (diffMs <= 1000) {
-        setIsBackendSyncing(true);
-
-        if (!pollingWhileSyncing) {
-          pollingWhileSyncing = true;
-          setTimeout(async () => {
-            try {
-              const statusData = await apiRequest<{
-                last_successful_sync_at?: string;
-                next_scheduled_sync_at?: string;
-                is_syncing?: boolean;
-              }>('/gps-sync/status');
-
-              if (statusData.last_successful_sync_at) {
-                setLastUpdated(statusData.last_successful_sync_at);
-              }
-              if (statusData.next_scheduled_sync_at) {
-                setNextScheduledSyncAt(statusData.next_scheduled_sync_at);
-              }
-              setIsBackendSyncing(Boolean(statusData.is_syncing));
-              await fetchSummary(false);
-            } catch {
-              setIsBackendSyncing(false);
-            } finally {
-              pollingWhileSyncing = false;
-            }
-          }, 3000);
-        }
-
-        return '00:00';
-      }
-
-      setIsBackendSyncing(false);
-      const totalSeconds = Math.max(0, Math.floor(diffMs / 1000));
-      const m = Math.floor(totalSeconds / 60);
-      const s = totalSeconds % 60;
-      return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-    };
-
-    setNextSyncCountdown(calculateCountdown());
-
-    const timer = setInterval(() => {
-      setNextSyncCountdown(calculateCountdown());
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [nextScheduledSyncAt, fetchSummary]);
-
   // Periodic polling interval (every 45 seconds) to ensure synchronization with server-side scheduler
   useEffect(() => {
     fetchSummary(true);
@@ -672,50 +605,84 @@ export default function DashboardPage() {
   }, [fetchSummary]);
 
   // Handle on-demand provider GPS sync
-  const handleTriggerSync = async (provider: 'WheelsEye GPS' = 'WheelsEye GPS') => {
-    const syncKey = 'wheels';
+  const handleTriggerSync = async () => {
+    const syncKey = 'all';
+    if (syncingProviders.includes(syncKey)) return;
     setSyncingProviders((current) => current.includes(syncKey) ? current : [...current, syncKey]);
     setAlert(null);
     try {
-      let result: {
+      const result = await apiRequest<{
         message?: string;
-        success?: boolean;
-        providerResults?: Array<{ provider: string; success: boolean; message?: string; error?: string }>;
-        last_evaluated_timestamp?: string;
-        last_successful_sync_at?: string;
-        next_scheduled_sync_at?: string;
-        lastSync?: string;
-        processedCount?: number;
-        vehiclesProcessed?: number;
-      };
-
-      result = await apiRequest<{
-        message: string;
-        last_evaluated_timestamp?: string;
-        last_successful_sync_at?: string;
-        next_scheduled_sync_at?: string;
-        lastSync?: string;
-        processedCount?: number;
-        vehiclesProcessed?: number;
-      }>('/gps/trigger-sync', {
+        jobId: string;
+      }>('/gps/sync/ALL', {
         method: 'POST',
-        body: JSON.stringify({ provider }),
-        timeoutMs: 120000,
+        timeoutMs: 15000,
       });
 
-      const updatedTime = result.last_successful_sync_at || result.last_evaluated_timestamp || result.lastSync;
-      if (updatedTime) setLastUpdated(updatedTime);
-      if (result.next_scheduled_sync_at) {
-        setNextScheduledSyncAt(result.next_scheduled_sync_at);
+      if (!result.jobId) {
+        throw new Error(result.message || 'GPS synchronization job was not created.');
       }
-      setAlert({
-        type: result.success === false ? 'error' : 'success',
-        message: result.providerResults
-          ? result.providerResults.map((item) => `${item.provider}: ${item.success ? 'Success' : item.error || item.message || 'Failed'}`).join(' • ')
-          : `${result.message || 'GPS synchronization completed.'} Evaluated positions for ${result.vehiclesProcessed || result.processedCount || 0} active vehicles.`,
-      });
 
-      await fetchSummary(false);
+      const startedAt = Date.now();
+      let completed = false;
+      while (Date.now() - startedAt < 5 * 60 * 1000) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const job = await apiRequest<{
+          status: 'RUNNING' | 'COMPLETED' | 'FAILED';
+          success?: boolean;
+          completedAt?: string;
+          wheelseye?: {
+            status?: string;
+            successCount?: number;
+            failedCount?: number;
+            error?: string;
+            lastSuccessfulSyncAt?: string | null;
+          };
+          fleetx?: {
+            status?: string;
+            successCount?: number;
+            failedCount?: number;
+            error?: string;
+            lastSuccessfulSyncAt?: string | null;
+          };
+          error?: string;
+        }>(`/gps/sync-job/${encodeURIComponent(result.jobId)}`, { timeoutMs: 10000 });
+
+        if (job.status === 'RUNNING') continue;
+        completed = true;
+        const wheelsSucceeded = job.wheelseye?.status === 'SUCCESS';
+        const fleetxSucceeded = job.fleetx?.status === 'SUCCESS';
+        const totalVehicles = (job.wheelseye?.successCount || 0) + (job.fleetx?.successCount || 0);
+        const successfulTimes = [
+          wheelsSucceeded ? job.wheelseye?.lastSuccessfulSyncAt : null,
+          fleetxSucceeded ? job.fleetx?.lastSuccessfulSyncAt : null,
+        ].filter((value): value is string => Boolean(value));
+        if (successfulTimes.length) {
+          setLastUpdated(successfulTimes.sort().slice(-1)[0]);
+        }
+
+        const providerResults = [
+          `WheelsEye: ${wheelsSucceeded ? 'Success' : `Failed${job.wheelseye?.error ? ` — ${job.wheelseye.error}` : ''}`}`,
+          `FleetX: ${fleetxSucceeded ? 'Success' : `Failed${job.fleetx?.error ? ` — ${job.fleetx.error}` : ''}`}`,
+        ];
+        const resultMessage = [
+          ...providerResults,
+          `Vehicles synchronized: ${totalVehicles}`,
+          successfulTimes.length
+            ? `Last successful sync: ${formatDateTime(successfulTimes.sort().slice(-1)[0])}`
+            : 'No provider sync succeeded.',
+        ].join(' • ');
+        setAlert({
+          type: wheelsSucceeded || fleetxSucceeded ? 'success' : 'error',
+          message: resultMessage,
+        });
+        await fetchSummary(false);
+        break;
+      }
+
+      if (!completed) {
+        setAlert({ type: 'error', message: 'GPS sync is still running. Refresh the dashboard to check the latest status.' });
+      }
       if (selectedPlant) {
         const data = await apiRequest<{
           plant: { id: string; name: string; location: string; radiusMeter: number | null; availableDrivers?: NearestDriverItem[] };
@@ -726,7 +693,7 @@ export default function DashboardPage() {
     } catch (err: any) {
       setAlert({
         type: 'error',
-        message: err.data?.message || err.message || `${provider} synchronization failed.`,
+        message: err.data?.message || err.message || 'GPS synchronization failed.',
       });
     } finally {
       setSyncingProviders((current) => current.filter((item) => item !== syncKey));
@@ -913,45 +880,26 @@ export default function DashboardPage() {
                 <span>Last evaluated:</span>
                 <strong className="text-slate-800 font-semibold">{formatDateTime(lastUpdated)}</strong>
               </p>
-              <span className="text-slate-300 hidden sm:inline">•</span>
-              {/* Global 30-Min Fixed Boundary Countdown Badge */}
-              <div
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200/90 text-emerald-800 text-xs font-semibold shadow-2xs select-none"
-                title="Synchronized to server-side 30-minute IST schedule slots (HH:00 and HH:30 IST)"
-              >
-                {isBackendSyncing ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 text-emerald-600 animate-spin" />
-                    <span className="font-bold text-emerald-700">Syncing GPS...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>(Next sync in:</span>
-                    <span className="font-mono font-bold text-emerald-700 tracking-tight">{nextSyncCountdown}</span>
-                    <span>)</span>
-                  </>
-                )}
-              </div>
+              <p className="text-xs text-slate-500 flex items-center gap-1.5 font-medium">
+                <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <span>Next GPS sync:</span>
+                <strong className="text-slate-800 font-semibold">{formatDateTime(nextScheduledSyncAt)}</strong>
+                <span>· Every 30 minutes</span>
+              </p>
             </div>
           </div>
 
           <div className="flex items-center flex-wrap gap-2.5">
-            <div className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 shadow-2xs">
-              <span>GPS auto-sync:</span>
-              <span>WheelsEye GPS • Auto-sync every 30 min · {gpsSyncHealth?.schedulerStatus || 'Checking status'}</span>
-            </div>
-
-
             {user?.role === 'Admin' && (
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  onClick={() => handleTriggerSync('WheelsEye GPS')}
-                  disabled={syncingProviders.includes('wheels') || isLoading}
+                  onClick={handleTriggerSync}
+                  disabled={syncingProviders.includes('all') || isLoading}
                   className="inline-flex items-center gap-2 px-3 py-2.5 bg-emerald-500 hover:bg-emerald-600 active:bg-emerald-700 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${syncingProviders.includes('wheels') ? 'animate-spin' : ''}`} />
-                  <span>{syncingProviders.includes('wheels') ? 'Syncing WheelsEye...' : 'Sync WheelsEye Now'}</span>
+                  <RefreshCw className={`w-3.5 h-3.5 ${syncingProviders.includes('all') ? 'animate-spin' : ''}`} />
+                  <span>{syncingProviders.includes('all') ? 'Syncing GPS...' : 'Sync GPS Now'}</span>
                 </button>
               </div>
             )}
@@ -1219,12 +1167,12 @@ export default function DashboardPage() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => handleTriggerSync('WheelsEye GPS')}
-                disabled={syncingProviders.includes('wheelseye gps')}
+                onClick={handleTriggerSync}
+                disabled={syncingProviders.includes('all')}
                 className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
                 title="Trigger an on-demand GPS sync to fetch the latest telemetry for all vehicles"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${syncingProviders.includes('wheelseye gps') ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`w-3.5 h-3.5 ${syncingProviders.includes('all') ? 'animate-spin' : ''}`} />
                 <span>{syncingProviders.includes('wheelseye gps') ? 'Syncing...' : 'Sync GPS'}</span>
               </button>
               <button

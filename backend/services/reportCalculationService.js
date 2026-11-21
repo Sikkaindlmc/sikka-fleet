@@ -628,11 +628,13 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
         dateRaw: date,
         status: isInProgress ? 'In progress' : 'Complete',
         inProgress: isInProgress,
+        dasnaMinutes: allocated.DASNA,
         saltPlantMinutes: allocated['Salt Plant'],
         teaPlantMinutes: allocated['Tea Plant'],
         outsideMinutes: allocated.Outside,
         noGpsDataMinutes: allocated['No GPS Data'],
         totalMinutes,
+        dasnaHrs: formatMinutes(allocated.DASNA),
         saltPlantHrs: formatMinutes(allocated['Salt Plant']),
         teaPlantHrs: formatMinutes(allocated['Tea Plant']),
         outsideHrs: formatMinutes(allocated.Outside),
@@ -653,6 +655,7 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
               vehicleNumber: row.vehicleNumber,
               vehicleNumberNormalized: row.vehicleNumberNormalized,
               date,
+              dasnaMinutes: row.dasnaMinutes,
               saltPlantMinutes: row.saltPlantMinutes,
               teaPlantMinutes: row.teaPlantMinutes,
               outsideMinutes: row.outsideMinutes,
@@ -669,6 +672,7 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
   }
 
   const totals = rows.reduce((result, row) => {
+    result.dasnaMinutes += row.dasnaMinutes;
     result.saltPlantMinutes += row.saltPlantMinutes;
     result.teaPlantMinutes += row.teaPlantMinutes;
     result.outsideMinutes += row.outsideMinutes;
@@ -676,6 +680,7 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
     result.totalMinutes += row.totalMinutes;
     return result;
   }, {
+    dasnaMinutes: 0,
     saltPlantMinutes: 0,
     teaPlantMinutes: 0,
     outsideMinutes: 0,

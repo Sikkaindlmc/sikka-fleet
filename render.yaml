@@ -33,4 +33,4 @@ services:
       - key: FLEETX_PASSWORD
         sync: false
       - key: GPS_SCHEDULER_MODE
-        value: server
+        value: github-actions

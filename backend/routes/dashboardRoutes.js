@@ -26,7 +26,11 @@ const mongoose = require('mongoose');
 const PlanAuditLog = require('../models/PlanAuditLog');
 const { isValidObjectId, sanitizeText, maskUrlSecret } = require('../utils/security');
 const { isGpsSchedulerRunning } = require('../services/gpsScheduler');
-const { getGpsConnectionStatus } = require('../utils/gpsProvider');
+const {
+  getGpsConnectionStatus,
+  isVehicleAssignedToProvider,
+  normalizeGpsProvider,
+} = require('../utils/gpsProvider');
 const { updateVehicleCurrentStatus } = require('../services/vehicleCurrentStatusService');
 const {
   filterActivePlans,
@@ -217,6 +221,26 @@ router.get('/summary', async (req, res) => {
       return failedQuery.fallback;
     });
     const [setting, lastSuccessfulSync, latestSyncLog, lastFailedSync] = metadataValues;
+    const [allProviderSettingsResult, allProviderSyncLogsResult] = await Promise.allSettled([
+      GpsSetting.find({ archived: { $ne: true } })
+        .select('provider connectionStatus lastSync lastSuccessAt last_sync_status next_scheduled_sync_at lastError lastErrorAt lastErrorCode vehicles_processed vehicles_updated vehicles_failed status')
+        .lean(),
+      GpsSyncLog.find({ archived: { $ne: true } })
+        .sort({ startedAt: -1 })
+        .limit(200)
+        .select('provider status startedAt completedAt lastEvaluatedTimestamp vehiclesProcessed vehiclesUpdated vehiclesFailed errorMessage')
+        .lean(),
+    ]);
+    const allProviderSettings = allProviderSettingsResult.status === 'fulfilled'
+      ? allProviderSettingsResult.value
+      : [];
+    const allProviderSyncLogs = allProviderSyncLogsResult.status === 'fulfilled'
+      ? allProviderSyncLogsResult.value
+      : [];
+    if (allProviderSettingsResult.status === 'rejected' || allProviderSyncLogsResult.status === 'rejected') {
+      console.error('[Dashboard Summary Data Warning] Provider-specific GPS sync status query failed.');
+      summaryWarnings.push('Provider-specific GPS sync status is temporarily unavailable.');
+    }
     const lastSuccessful = lastSuccessfulSync?.completedAt ||
       lastSuccessfulSync?.lastEvaluatedTimestamp ||
       setting?.last_evaluated_timestamp ||
@@ -225,21 +249,52 @@ router.get('/summary', async (req, res) => {
     const nextSync = getNextFixed30MinSlot(new Date());
     const syncStatus = latestSyncLog?.status || setting?.last_sync_status || 'IDLE';
     const activeProvider = setting;
-    const providerSyncHealth = [{
-      provider: 'WheelsEye GPS',
-      status: getGpsConnectionStatus(setting, 'WheelsEye GPS'),
-      lastSyncStatus: latestSyncLog?.status || setting?.last_sync_status || 'IDLE',
-      lastSuccessfulSyncAt: lastSuccessful,
-      lastFailedSyncAt: lastFailedSync?.completedAt || lastFailedSync?.startedAt || setting?.lastErrorAt || null,
-      nextScheduledSyncAt: setting?.next_scheduled_sync_at || nextSync,
-      vehiclesProcessed: latestSyncLog?.vehiclesProcessed ?? setting?.vehicles_processed ?? 0,
-      vehiclesUpdated: latestSyncLog?.vehiclesUpdated ?? setting?.vehicles_updated ?? 0,
-      registeredVehicleCount: snapshot.fleet.filter((item) => item.isRegistered).length,
-      validGpsVehicleCount: snapshot.fleet.filter((item) =>
-        item.isRegistered && item.providerLocations?.some((location) => location.hasGps)
-      ).length,
-      lastError: safeGpsErrorDetails(setting?.lastError || (latestSyncLog?.status === 'FAILED' ? latestSyncLog.errorMessage : '')),
-    }];
+    const providerSyncHealth = ['WheelsEye GPS', 'FleetX'].map((providerName) => {
+      const providerKey = normalizeGpsProvider(providerName, '');
+      const providerSetting = allProviderSettings.find((item) =>
+        normalizeGpsProvider(item.provider, '') === providerKey
+      ) || (providerKey === 'wheelseye' ? setting : null);
+      const providerLogs = allProviderSyncLogs.filter((item) =>
+        normalizeGpsProvider(item.provider, '') === providerKey
+      );
+      const latestProviderLog = providerLogs[0] || (providerKey === 'wheelseye' ? latestSyncLog : null);
+      const successfulProviderLog = providerLogs.find((item) => ['SUCCESS', 'PARTIAL'].includes(item.status)) ||
+        (providerKey === 'wheelseye' ? lastSuccessfulSync : null);
+      const failedProviderLog = providerLogs.find((item) => item.status === 'FAILED') ||
+        (providerKey === 'wheelseye' ? lastFailedSync : null);
+      const assignedVehicles = snapshot.fleet.filter((item) =>
+        item.isRegistered && isVehicleAssignedToProvider(item.vehicle, providerKey)
+      );
+      const nextProviderSync = providerSetting?.next_scheduled_sync_at &&
+        new Date(providerSetting.next_scheduled_sync_at) > new Date()
+        ? providerSetting.next_scheduled_sync_at
+        : nextSync;
+      const lastProviderSuccess = providerSetting?.lastSuccessAt ||
+        successfulProviderLog?.completedAt ||
+        successfulProviderLog?.lastEvaluatedTimestamp ||
+        null;
+      return {
+        provider: providerName,
+        status: getGpsConnectionStatus(providerSetting, providerName),
+        lastSyncStatus: latestProviderLog?.status || providerSetting?.last_sync_status || 'IDLE',
+        lastSuccessfulSyncAt: lastProviderSuccess,
+        lastFailedSyncAt: failedProviderLog?.completedAt ||
+          failedProviderLog?.startedAt ||
+          providerSetting?.lastErrorAt ||
+          null,
+        nextScheduledSyncAt: nextProviderSync,
+        vehiclesProcessed: latestProviderLog?.vehiclesProcessed ?? providerSetting?.vehicles_processed ?? 0,
+        vehiclesUpdated: latestProviderLog?.vehiclesUpdated ?? providerSetting?.vehicles_updated ?? 0,
+        registeredVehicleCount: assignedVehicles.length,
+        validGpsVehicleCount: assignedVehicles.filter((item) =>
+          item.providerLocations?.some((location) =>
+            normalizeGpsProvider(location.provider, '') === providerKey && location.hasGps
+          )
+        ).length,
+        lastError: safeGpsErrorDetails(providerSetting?.lastError ||
+          (latestProviderLog?.status === 'FAILED' ? latestProviderLog.errorMessage : '')),
+      };
+    });
     const schedulerMode = (process.env.GPS_SCHEDULER_MODE || 'github-actions').trim().toLowerCase();
     const schedulerStatus = schedulerMode === 'server'
       ? (isGpsSchedulerRunning() ? 'Running in backend' : 'Configured, not running')
