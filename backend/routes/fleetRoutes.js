@@ -8,6 +8,7 @@ const router = express.Router();
 const { verifyToken } = require('../middleware/auth');
 const { timingSafeCompare } = require('../utils/security');
 const { gpsSyncLimiter } = require('../middleware/rateLimiter');
+const { verifyCronSecret } = require('../middleware/verifyCronSecret');
 
 /**
  * Middleware requiring either:
@@ -88,7 +89,7 @@ async function handleSyncGps(req, res) {
 router.post('/sync-gps', gpsSyncLimiter, authorizeSyncCaller, handleSyncGps);
 
 // GET /api/fleet/sync-gps - Trigger GPS sync (Vercel Cron & HTTP health/runners)
-router.get('/sync-gps', gpsSyncLimiter, authorizeSyncCaller, handleSyncGps);
+router.get('/sync-gps', gpsSyncLimiter, verifyCronSecret, handleSyncGps);
 
 // Middleware for status checking (Accepts JWT token or CRON_SECRET)
 function authorizeStatusView(req, res, next) {

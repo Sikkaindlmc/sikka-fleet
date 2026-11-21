@@ -1,10 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const axios = require('axios');
-process.env.FLEETX_API_BASE_URL = process.env.FLEETX_API_BASE_URL || 'https://api.fleetx.io';
-process.env.FLEETX_BASIC_AUTH = process.env.FLEETX_BASIC_AUTH || 'Basic test';
-process.env.FLEETX_USERNAME = process.env.FLEETX_USERNAME || 'test-user';
-process.env.FLEETX_PASSWORD = process.env.FLEETX_PASSWORD || 'test-password';
+const { randomBytes } = require('node:crypto');
 const {
   normalizeFleetxVehicle,
   normalizeFleetxVehicleNumber,
@@ -30,8 +27,8 @@ test('FleetX normalization uses actual live response fields and matching candida
     },
   });
 
-  assert.equal(normalizeFleetxVehicleNumber('UP14TT8797_CAM'), 'UP14TT8797');
-  assert.deepEqual(result.vehicleNumberCandidates, ['UP14TT8797', '8797']);
+  assert.equal(normalizeFleetxVehicleNumber('up 14-tt 8797_cam'), 'UP14TT8797_CAM');
+  assert.deepEqual(result.vehicleNumberCandidates, ['UP14TT8797_CAM', '8797']);
   assert.equal(result.latitude, 28.640838);
   assert.equal(result.longitude, 77.438211);
   assert.equal(result.speed, 0);
@@ -58,13 +55,19 @@ test('FleetX missing or invalid GPS fields remain missing instead of becoming fa
 test('FleetX live API retries one 401 and sends no browser-only headers', async () => {
   const originalPost = axios.post;
   const originalGet = axios.get;
+  const envNames = ['FLEETX_BASIC_AUTH', 'FLEETX_USERNAME', 'FLEETX_PASSWORD'];
+  const originalEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]));
+  for (const name of envNames) process.env[name] = randomBytes(32).toString('hex');
+  const issuedTokens = [];
   let loginAttempts = 0;
   let liveAttempts = 0;
   const liveHeaders = [];
 
   axios.post = async () => {
     loginAttempts++;
-    return { status: 200, data: { access_token: `test-token-${loginAttempts}`, expires_in: 7200 } };
+    const token = randomBytes(32).toString('hex');
+    issuedTokens.push(token);
+    return { status: 200, data: { access_token: token, expires_in: 7200 } };
   };
   axios.get = async (_url, config) => {
     liveAttempts++;
@@ -95,9 +98,9 @@ test('FleetX live API retries one 401 and sends no browser-only headers', async 
     assert.equal(liveAttempts, 2);
     assert.equal(result.length, 1);
     assert.equal(result[0].vehicleNumber, 'UP14GT3942');
-    for (const headers of liveHeaders) {
+    for (const [index, headers] of liveHeaders.entries()) {
       assert.equal(headers.Accept, 'application/json');
-      assert.equal(headers.Authorization.startsWith('Bearer test-token-'), true);
+      assert.equal(headers.Authorization, `Bearer ${issuedTokens[index]}`);
       assert.equal(Object.hasOwn(headers, 'clientid'), false);
       assert.equal(Object.hasOwn(headers, 'origin'), false);
       assert.equal(Object.hasOwn(headers, 'referer'), false);
@@ -105,5 +108,9 @@ test('FleetX live API retries one 401 and sends no browser-only headers', async 
   } finally {
     axios.post = originalPost;
     axios.get = originalGet;
+    for (const [name, value] of Object.entries(originalEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   }
 });

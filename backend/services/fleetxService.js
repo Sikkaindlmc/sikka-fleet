@@ -28,9 +28,7 @@ function getSafeFleetxErrorCode(error) {
 }
 
 function normalizeFleetxVehicleNumber(number) {
-  let value = String(number || '').toUpperCase().trim();
-  value = value.replace(/\s*[_-]\s*CAM(?:ERA)?$/i, '').trim();
-  return value.replace(/[^A-Z0-9]/g, '');
+  return String(number || '').trim().toUpperCase().replace(/[\s-]+/g, '');
 }
 
 function parseFleetxTimestamp(rawTimestamp) {

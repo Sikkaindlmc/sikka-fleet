@@ -14,47 +14,21 @@ import {
 import { ApiError, apiRequest } from '../lib/api';
 import { useAuth } from '../lib/authContext';
 
-interface SikkaAiResult {
-  tool: string;
-  data: Record<string, unknown>;
-}
-
 interface SikkaAiReply {
   answer: string;
-  results: SikkaAiResult[];
-  suggestions?: string[];
   syncNotice?: string | null;
 }
 
 interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
-  results?: SikkaAiResult[];
-  suggestions?: string[];
   syncNotice?: string | null;
 }
 
 const QUICK_QUESTIONS = [
-  'Vehicles in Salt Plant',
-  'Show GPS sync status',
-  'How many vehicles are moving or stopped?',
   'Sync GPS now',
+  'Where is a vehicle now?',
 ];
-
-function formatIstTimestamp(value: unknown): string {
-  if (typeof value !== 'string' && !(value instanceof Date)) return 'record not available';
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return 'record not available';
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Kolkata',
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).format(date);
-}
 
 function renderAnswerText(text: string) {
   return text.split(/(\*\*[^*]+\*\*)/g).map((part, index) =>
@@ -117,8 +91,6 @@ export default function SikkaAiPanel() {
       setMessages((current) => [...current, {
         role: 'assistant',
         text: reply.answer,
-        results: reply.results,
-        suggestions: reply.suggestions,
         syncNotice: reply.syncNotice,
       }]);
     } catch (requestError) {
@@ -250,90 +222,6 @@ export default function SikkaAiPanel() {
                     {message.syncNotice && (
                       <p className="mt-2 text-xs font-medium text-amber-800">{message.syncNotice}</p>
                     )}
-                    {message.results?.map((result, resultIndex) => {
-                      const locationRecord = result.data.location &&
-                        typeof result.data.location === 'object' &&
-                        'vehicleNumber' in result.data.location
-                        ? result.data.location as Record<string, unknown>
-                        : 'vehicleNumber' in result.data
-                          ? result.data
-                          : null;
-                      const records = Array.isArray(result.data.vehicles)
-                        ? result.data.vehicles as Array<Record<string, unknown>>
-                        : locationRecord
-                          ? [locationRecord]
-                          : 'vehicleNumber' in result.data
-                            ? [result.data]
-                            : [];
-                      const isLocationResult = result.tool === 'get_vehicle_location';
-                      const isVehicleResult = isLocationResult || result.tool === 'get_vehicle_details';
-                      const syncResults = result.tool === 'sync_gps_now'
-                        ? result.data
-                        : result.data.syncResults;
-                      const providerEntries = syncResults && typeof syncResults === 'object'
-                        ? Object.entries(syncResults as Record<string, Record<string, unknown>>)
-                            .filter(([key]) => /wheels|fleetx/i.test(key))
-                        : [];
-                      return (
-                        <div key={`${result.tool}-${resultIndex}`}>
-                          {!isVehicleResult && records.slice(0, 30).map((record, recordIndex) => (
-                            <div
-                              key={`${String(record.vehicleNumber || recordIndex)}`}
-                              className="mt-2 rounded-lg border border-indigo-100 bg-white px-3 py-2 text-xs text-slate-700"
-                            >
-                              <p className="font-bold text-slate-900">{String(record.vehicleNumber || 'Vehicle')}</p>
-                              <p>{String(record.plantName || record.plantStatus || 'Plant/location record not available')}</p>
-                              <p>Source: {String(record.dataSource || record.provider || 'record not available')}</p>
-                              <p>Last GPS update: {formatIstTimestamp(record.gpsTimestamp)}</p>
-                            </div>
-                          ))}
-                          {Boolean((isLocationResult && locationRecord?.gpsTimestamp) || providerEntries.length > 0) && (
-                            <details className="mt-2 text-xs">
-                              <summary className="cursor-pointer font-semibold text-indigo-800">More details</summary>
-                              {isLocationResult && Boolean(locationRecord?.gpsTimestamp) && locationRecord && (
-                                <div className="mt-2 space-y-1 rounded-lg bg-white p-2 text-slate-700">
-                                  <p>Source: {String(locationRecord.dataSource || locationRecord.provider || 'record not available')}</p>
-                                  <p>Speed: {String(locationRecord.speed ?? 'record not available')}</p>
-                                  <p>Ignition: {String(locationRecord.ignition ?? 'record not available')}</p>
-                                  <p>Coordinates: {String(locationRecord.latitude ?? 'record not available')}, {String(locationRecord.longitude ?? 'record not available')}</p>
-                                  <p>Plant stay: {String(locationRecord.stayHours ?? 'record not available')}</p>
-                                  <p>Outside hours: {String(locationRecord.outsideHours ?? 'record not available')}</p>
-                                </div>
-                              )}
-                              {providerEntries.length > 0 && (
-                                <div className="mt-2 space-y-2">
-                                  {providerEntries.map(([provider, details]) => (
-                                    <div key={provider} className="rounded-lg bg-white p-2 text-slate-700">
-                                      <p className="font-semibold">{/wheel/i.test(provider) ? 'WheelsEye' : 'FleetX'}: {String(details.status || 'FAILED')}</p>
-                                      <p>{String(details.receivedCount || 0)} received, {String(details.matchedCount || 0)} matched, {String(details.savedCount || 0)} saved, {String(details.failedCount || 0)} failed</p>
-                                      {typeof details.errorCode === 'string' && <p>Error: {details.errorCode}</p>}
-                                      {typeof details.failureReasons === 'object' && details.failureReasons !== null && (
-                                        <p>Failure reasons: {Object.entries(details.failureReasons as Record<string, number>).map(([code, count]) => `${code} (${count})`).join(', ') || 'none'}</p>
-                                      )}
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </details>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {message.suggestions && message.suggestions.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {message.suggestions.map((suggestion) => (
-                          <button
-                            key={suggestion}
-                            type="button"
-                            onClick={() => void sendQuestion(suggestion)}
-                            disabled={isSending}
-                            className="rounded-full border border-indigo-200 bg-white px-3 py-1.5 text-[11px] font-medium text-indigo-800 transition hover:bg-indigo-50 disabled:opacity-50"
-                          >
-                            {suggestion}
-                          </button>
-                        ))}
-                      </div>
-                    )}
                   </div>
                 ))}
                 {isSending && (
@@ -379,7 +267,7 @@ export default function SikkaAiPanel() {
                   }}
                   maxLength={1000}
                   rows={2}
-                  placeholder="Ask about vehicles, GPS, plants, or reports..."
+                  placeholder="Ask to sync GPS or show a registered vehicle's current location..."
                   className="min-h-11 flex-1 resize-y rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
                 />
                 <button
@@ -394,7 +282,7 @@ export default function SikkaAiPanel() {
                 </button>
               </form>
               <p className="shrink-0 text-[10px] text-slate-400">
-                Uses Sikka Fleet records only. No future-location predictions.
+                SIKKA AI can only sync GPS and show current vehicle locations.
               </p>
             </div>
           )}

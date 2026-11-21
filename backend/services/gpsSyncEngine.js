@@ -20,7 +20,7 @@ const { getZoneId, reconcileZoneSession } = require('./zoneSessionService');
 const { getMissingProviderEnvironment } = require('../config/gpsConfig');
 
 function normalizeNumber(num) {
-  return String(num || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return normalizeVehicleNumber(num);
 }
 
 function getProviderSettingQuery(provider) {

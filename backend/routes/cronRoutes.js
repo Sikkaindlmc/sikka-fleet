@@ -7,36 +7,7 @@ const router = express.Router();
 
 const { timingSafeCompare } = require('../utils/security');
 const { verifyToken, requireRole } = require('../middleware/auth');
-
-/**
- * Middleware: Verify CRON_SECRET for security
- * Protects against unauthorized manual triggering of background cron jobs.
- * Employs timing-safe string comparison to protect against timing attacks.
- */
-function verifyCronSecret(req, res, next) {
-  const configuredSecret = process.env.CRON_SECRET;
-  if (!configuredSecret) {
-    return res.status(500).json({
-      success: false,
-      error: 'CRON_SECRET environment variable is not configured on the server.',
-    });
-  }
-
-  const authHeader = req.headers.authorization;
-  const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
-  const xCronSecret = req.headers['x-cron-secret'];
-
-  const callerSecret = bearerToken || xCronSecret;
-  if (callerSecret && timingSafeCompare(callerSecret, configuredSecret)) {
-    req.cronCaller = 'Authorized Cron Runner';
-    return next();
-  }
-
-  return res.status(401).json({
-    success: false,
-    error: 'Unauthorized: Invalid or missing CRON_SECRET header.',
-  });
-}
+const { verifyCronSecret } = require('../middleware/verifyCronSecret');
 
 /**
  * Common handler for /api/cron/sync-gps

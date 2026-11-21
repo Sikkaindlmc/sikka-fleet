@@ -12,6 +12,7 @@ const { verifyToken } = require('../middleware/auth');
 const { timingSafeCompare } = require('../utils/security');
 const { gpsSyncLimiter } = require('../middleware/rateLimiter');
 const { getCurrentIstSlotKey } = require('../services/gpsScheduler');
+const { verifyCronSecret } = require('../middleware/verifyCronSecret');
 
 /**
  * Middleware: Verify caller is either an authenticated user or authorized cron worker
@@ -166,6 +167,6 @@ async function handleTriggerSync(req, res) {
 router.post('/run', gpsSyncLimiter, authorizeGpsSyncCaller, handleTriggerSync);
 
 // GET /api/gps-sync/run - Vercel Cron GET runner
-router.get('/run', gpsSyncLimiter, authorizeGpsSyncCaller, handleTriggerSync);
+router.get('/run', gpsSyncLimiter, verifyCronSecret, handleTriggerSync);
 
 module.exports = router;
