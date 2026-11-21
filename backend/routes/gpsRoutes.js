@@ -15,6 +15,9 @@ const {
 
 const router = express.Router();
 
+const gpsSyncJobs = new Map();
+const GPS_SYNC_JOB_TTL_MS = 30 * 60 * 1000;
+
 const { maskUrlSecret, isSafeExternalUrl } = require('../utils/security');
 const { gpsSyncLimiter } = require('../middleware/rateLimiter');
 const {
@@ -369,31 +372,80 @@ router.get('/fleetx/history', async (req, res) => {
   }
 });
 
+// GET /api/gps/sync-job/:jobId - Provider-wise background synchronization status
+router.get('/sync-job/:jobId', async (req, res) => {
+  const job = gpsSyncJobs.get(String(req.params.jobId || '').trim());
+  if (!job) {
+    return res.status(404).json({ success: false, error: 'GPS synchronization job not found or expired.' });
+  }
+  return res.json(job);
+});
+
 // POST /api/gps/sync/:provider - Manual synchronization for a specific GPS provider
 router.post('/sync/:provider', gpsSyncLimiter, requireRole('Admin'), async (req, res) => {
   try {
     const { provider } = req.params;
     const { syncProviderGps } = require('../services/gpsSyncEngine');
-    if (/^(all|both)$/i.test(provider)) {
-      const [wheelseye, fleetx] = await Promise.allSettled([
-        syncProviderGps({ provider: 'WHEELSEYE', mode: 'MANUAL', caller: req.user?.username || 'Admin' }),
-        syncProviderGps({ provider: 'FLEETX', mode: 'MANUAL', caller: req.user?.username || 'Admin' }),
-      ]);
-      return res.json({
-        message: 'GPS provider synchronization completed.',
-        wheelseye: wheelseye.status === 'fulfilled' ? wheelseye.value : { success: false, error: wheelseye.reason?.message },
-        fleetx: fleetx.status === 'fulfilled' ? fleetx.value : { success: false, error: fleetx.reason?.message },
-      });
+    const normalizedProvider = /^(all|both)$/i.test(provider)
+      ? 'ALL'
+      : /^fleetx$/i.test(provider)
+        ? 'FLEETX'
+        : /^wheels/i.test(provider)
+          ? 'WHEELSEYE'
+          : '';
+    if (!normalizedProvider) {
+      return res.status(400).json({ error: 'Provider must be WheelsEye, FleetX, or All.' });
     }
-    const result = await syncProviderGps({
-      provider,
-      mode: 'MANUAL',
-      caller: req.user?.username || 'Admin',
+
+    const jobId = `gps_sync_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const job = {
+      jobId,
+      status: 'RUNNING',
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      provider: normalizedProvider,
+      wheelseye: { status: 'PENDING' },
+      fleetx: { status: 'PENDING' },
+    };
+    gpsSyncJobs.set(jobId, job);
+
+    setImmediate(async () => {
+      try {
+        if (normalizedProvider === 'ALL') {
+          const [wheelseye, fleetx] = await Promise.allSettled([
+            syncProviderGps({ provider: 'WHEELSEYE', mode: 'MANUAL', caller: req.user?.username || 'Admin' }),
+            syncProviderGps({ provider: 'FLEETX', mode: 'MANUAL', caller: req.user?.username || 'Admin' }),
+          ]);
+          job.wheelseye = wheelseye.status === 'fulfilled'
+            ? { status: wheelseye.value.success ? 'SUCCESS' : 'FAILED', ...wheelseye.value }
+            : { status: 'FAILED', success: false, error: wheelseye.reason?.message };
+          job.fleetx = fleetx.status === 'fulfilled'
+            ? { status: fleetx.value.success ? 'SUCCESS' : 'FAILED', ...fleetx.value }
+            : { status: 'FAILED', success: false, error: fleetx.reason?.message };
+        } else {
+          const result = await syncProviderGps({
+            provider: normalizedProvider,
+            mode: 'MANUAL',
+            caller: req.user?.username || 'Admin',
+          });
+          const providerKey = normalizedProvider === 'FLEETX' ? 'fleetx' : 'wheelseye';
+          job[providerKey] = { status: result.success ? 'SUCCESS' : 'FAILED', ...result };
+        }
+        job.status = 'COMPLETED';
+      } catch (error) {
+        job.status = 'FAILED';
+        job.error = error.message || 'GPS synchronization failed.';
+      } finally {
+        job.completedAt = new Date().toISOString();
+        setTimeout(() => gpsSyncJobs.delete(jobId), GPS_SYNC_JOB_TTL_MS);
+      }
     });
 
-    res.json({
-      message: `${result.provider} synchronization finished: ${result.successCount} updated, ${result.failedCount} failed.`,
-      ...result,
+    return res.status(202).json({
+      success: true,
+      jobId,
+      status: 'RUNNING',
+      message: 'GPS synchronization started. Poll the synchronization status for provider results.',
     });
   } catch (error) {
     console.error('[Provider Sync Error]:', error);
@@ -539,6 +591,20 @@ router.get('/live-vehicles', async (req, res) => {
         validGpsVehicleCount: locatedVehicleIds.size,
       };
     };
+    const fleetxCredentialsConfigured = Boolean(
+      (process.env.FLEETX_BASIC_AUTH || '').trim() &&
+      (process.env.FLEETX_USERNAME || '').trim() &&
+      (process.env.FLEETX_PASSWORD || '').trim()
+    );
+    const fleetxConnectionStatus = !fleetxCredentialsConfigured
+      ? 'Configuration Missing'
+      : fleetxSetting?.connectionStatus === 'AUTH_FAILED'
+        ? 'AUTH_FAILED'
+        : fleetxSetting?.connectionStatus === 'Connection Failed'
+          ? 'Disconnected'
+          : fleetxSetting?.lastSuccessAt || fleetxSetting?.lastSync
+            ? 'Connected'
+            : 'Pending';
 
     res.json({
       totalCount: liveVehicles.length,
@@ -553,7 +619,7 @@ router.get('/live-vehicles', async (req, res) => {
         ...getWheelsEyeCounts(),
       },
       fleetxStatus: {
-        connectionStatus: getGpsConnectionStatus(fleetxSetting, 'FleetX'),
+        connectionStatus: fleetxConnectionStatus,
         lastError: fleetxSetting?.lastError || '',
         lastErrorCode: fleetxSetting?.lastErrorCode || '',
         lastSuccessAt: fleetxSetting?.lastSuccessAt || null,

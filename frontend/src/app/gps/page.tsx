@@ -463,23 +463,58 @@ function GpsPageContent() {
 
   const handleProviderSync = async (provider: 'WheelsEye GPS' | 'FleetX' | 'All') => {
     const key = provider === 'FleetX' ? 'fleetx' : provider === 'All' ? 'all' : 'wheels';
+    if (syncingProviders.includes(key)) return;
     setSyncingProviders((current) => current.includes(key) ? current : [...current, key]);
     setAlert(null);
     try {
       const providerParam = provider === 'All' ? 'ALL' : provider;
       const result = await apiRequest<{
+        jobId?: string;
+        status?: string;
         message?: string;
         success?: boolean;
         wheelseye?: { successCount?: number; failedCount?: number };
         fleetx?: { successCount?: number; failedCount?: number };
       }>(`/gps/sync/${encodeURIComponent(providerParam)}`, {
         method: 'POST',
+        timeoutMs: 10000,
       });
-      setAlert({
-        type: 'success',
-        message: result.message || `${provider} synchronization completed.`,
-      });
-      await Promise.all([fetchLiveVehicles(false), fetchGpsSetting()]);
+      if (!result.jobId) {
+        throw new Error(result.message || 'GPS synchronization job was not created.');
+      }
+
+      setAlert({ type: 'success', message: result.message || 'GPS synchronization started.' });
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 5 * 60 * 1000) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const job = await apiRequest<{
+          status: 'RUNNING' | 'COMPLETED' | 'FAILED';
+          provider?: 'ALL' | 'WHEELSEYE' | 'FLEETX';
+          wheelseye?: { status?: string; successCount?: number; failedCount?: number; error?: string };
+          fleetx?: { status?: string; successCount?: number; failedCount?: number; error?: string };
+          error?: string;
+        }>(`/gps/sync-job/${encodeURIComponent(result.jobId)}`, {
+          timeoutMs: 10000,
+        });
+        if (job.status === 'RUNNING') continue;
+
+        const wheelsMessage = job.provider !== 'FLEETX'
+          ? (job.wheelseye?.status === 'SUCCESS'
+            ? `WheelsEye synchronized ${job.wheelseye.successCount ?? 0} vehicles`
+            : `WheelsEye failed${job.wheelseye?.error ? `: ${job.wheelseye.error}` : ''}`)
+          : '';
+        const fleetxMessage = job.provider !== 'WHEELSEYE'
+          ? (job.fleetx?.status === 'SUCCESS'
+            ? `FleetX synchronized ${job.fleetx.successCount ?? 0} vehicles`
+            : `FleetX failed${job.fleetx?.error ? `: ${job.fleetx.error}` : ''}`)
+          : '';
+        setAlert({
+          type: job.status === 'COMPLETED' ? 'success' : 'error',
+          message: [wheelsMessage, fleetxMessage].filter(Boolean).join('. ') + '.',
+        });
+        await Promise.all([fetchLiveVehicles(false), fetchGpsSetting()]);
+        break;
+      }
     } catch (err: any) {
       setAlert({
         type: 'error',
@@ -1318,7 +1353,9 @@ function GpsPageContent() {
                           Ignition: {record ? getIgnitionLabel(record.ignition) : 'N/A'}
                         </p>
                         <p className="mt-1 text-[11px] text-slate-600">
-                          Speed: {record ? formatVehicleSpeed(record.ignition, record.speed, record.movementStatus) : 'N/A'}
+                          Speed: {record?.speed === null || record?.speed === undefined
+                            ? 'N/A'
+                            : `${record.speed} km/h`}
                         </p>
                         <p className="mt-1 text-[11px] text-slate-600">
                           Provider time: {record?.timestamp ? formatDateTime(record.timestamp) : 'N/A'}

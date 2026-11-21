@@ -130,18 +130,26 @@ async function handleTriggerSync(req, res) {
   try {
     const source = req.isCron ? 'AUTO' : 'GPS-AUTO';
     const triggerType = req.isCron ? 'WEBHOOK_CRON' : (typeof req.body?.triggerType === 'string' ? req.body.triggerType.slice(0, 50) : 'USER_TRIGGER');
-    console.log(`[API /api/gps-sync/run] Triggered (Provider: WheelsEye GPS, Source: ${source}, Trigger: ${triggerType}, Caller: ${req.syncCaller})`);
+    console.log(`[API /api/gps-sync/run] Triggered (Providers: WheelsEye & FleetX, Source: ${source}, Trigger: ${triggerType}, Caller: ${req.syncCaller})`);
 
-    const options = {
-      source,
-      triggerType,
-      ...(req.isCron ? { slotKey: getCurrentIstSlotKey() } : {}),
-    };
-    const result = await executeGpsSync(options);
-    res.status(result.success ? 200 : 502).json({
-      success: result.success,
-      message: result.message || `${result.provider} synchronization ${result.success ? 'completed' : 'failed'}.`,
-      ...result,
+    const { syncProviderGps } = require('../services/gpsSyncEngine');
+    const [wheelseye, fleetx] = await Promise.allSettled([
+      syncProviderGps({ provider: 'WHEELSEYE', mode: 'AUTO', caller: req.syncCaller }),
+      syncProviderGps({ provider: 'FLEETX', mode: 'AUTO', caller: req.syncCaller }),
+    ]);
+    const wheelResult = wheelseye.status === 'fulfilled'
+      ? wheelseye.value
+      : { success: false, error: wheelseye.reason?.message };
+    const fleetResult = fleetx.status === 'fulfilled'
+      ? fleetx.value
+      : { success: false, error: fleetx.reason?.message };
+    const overallSuccess = Boolean(wheelResult.success || fleetResult.success);
+
+    res.status(overallSuccess ? 200 : 502).json({
+      success: overallSuccess,
+      message: 'Independent GPS synchronization completed.',
+      wheelseye: wheelResult,
+      fleetx: fleetResult,
     });
   } catch (error) {
     console.error('[API /api/gps-sync/run Error]:', error);

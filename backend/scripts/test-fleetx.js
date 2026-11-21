@@ -25,7 +25,11 @@ function printObject(label, value) {
 async function main() {
   console.log('========== FLEETX API DIAGNOSTIC ==========');
 
-  const baseUrl = (process.env.FLEETX_API_BASE_URL || 'https://api.fleetx.io').trim().replace(/\/$/, '');
+  const baseUrl = (
+    process.env.FLEETX_API_BASE_URL ||
+    process.env.FLEETX_BASE_URL ||
+    'https://api.fleetx.io'
+  ).trim().replace(/\/$/, '');
   const basicAuth = (process.env.FLEETX_BASIC_AUTH || '').trim();
   const username = (process.env.FLEETX_USERNAME || '').trim();
   const password = (process.env.FLEETX_PASSWORD || '').trim();

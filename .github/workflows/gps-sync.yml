@@ -1,4 +1,4 @@
-name: WheelsEye GPS 30-Minute Auto Sync
+name: GPS 30-Minute Auto Sync
 
 on:
   schedule:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   sync-gps:
-    name: Sync WheelsEye GPS
+    name: Sync WheelsEye and FleetX GPS
     runs-on: ubuntu-latest
     env:
       BACKEND_URL: ${{ secrets.BACKEND_URL }}

@@ -1,7 +1,10 @@
 const axios = require('axios');
 const FormData = require('form-data');
 
-const DEFAULT_FLEETX_BASE_URL = process.env.FLEETX_API_BASE_URL || 'https://api.fleetx.io';
+const DEFAULT_FLEETX_BASE_URL =
+  process.env.FLEETX_API_BASE_URL ||
+  process.env.FLEETX_BASE_URL ||
+  'https://api.fleetx.io';
 const DEFAULT_FLEETX_BASIC_AUTH = (process.env.FLEETX_BASIC_AUTH || '').trim();
 const DEFAULT_FLEETX_USERNAME = (process.env.FLEETX_USERNAME || '').trim();
 const DEFAULT_FLEETX_PASSWORD = (process.env.FLEETX_PASSWORD || '').trim();

@@ -22,7 +22,10 @@ function validateGpsUrl(name, value) {
 function validateGpsEnvironment() {
   const checks = [
     validateGpsUrl('WHEELSEYE_API_URL', process.env.WHEELSEYE_API_URL || DEFAULT_PROVIDER_URLS.wheelseye),
-    validateGpsUrl('FLEETX_API_BASE_URL', process.env.FLEETX_API_BASE_URL || DEFAULT_PROVIDER_URLS.fleetx),
+    validateGpsUrl(
+      'FLEETX_API_BASE_URL',
+      process.env.FLEETX_API_BASE_URL || process.env.FLEETX_BASE_URL || DEFAULT_PROVIDER_URLS.fleetx
+    ),
   ];
 
   const fleetxUsernameConfigured = Boolean(String(process.env.FLEETX_USERNAME || '').trim());

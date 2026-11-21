@@ -79,7 +79,11 @@ async function ensureFleetxSetting() {
     $or: [{ provider: /fleetx/i }, { apiUrl: /fleetx/i }],
   };
   const setting = await GpsSetting.findOne(query).sort({ updatedAt: -1 });
-  const apiUrl = (process.env.FLEETX_API_BASE_URL || 'https://api.fleetx.io').trim();
+  const apiUrl = (
+    process.env.FLEETX_API_BASE_URL ||
+    process.env.FLEETX_BASE_URL ||
+    'https://api.fleetx.io'
+  ).trim();
 
   if (!setting) {
     await GpsSetting.create({
