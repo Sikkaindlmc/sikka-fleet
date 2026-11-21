@@ -171,7 +171,11 @@ function GpsPageContent() {
       registeredVehicleCount?: number;
       validGpsVehicleCount?: number;
     } | null;
-  }>({ wheelsEye: null });
+    fleetx: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'> & {
+      registeredVehicleCount?: number;
+      validGpsVehicleCount?: number;
+    } | null;
+  }>({ wheelsEye: null, fleetx: null });
 
   // Auto-focus searched vehicle when vehicleParam arrives
   useEffect(() => {
@@ -279,6 +283,7 @@ function GpsPageContent() {
         apiUrl: string;
         lastSync: string;
         wheelsEyeStatus: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'>;
+        fleetxStatus: Pick<GpsSettingData, 'connectionStatus' | 'lastError' | 'lastErrorCode' | 'lastSuccessAt'>;
         vehicles: LiveVehicleItem[];
       }>('/gps/live-vehicles');
 
@@ -291,6 +296,7 @@ function GpsPageContent() {
       );
       setProviderStatuses({
         wheelsEye: res.wheelsEyeStatus || null,
+        fleetx: res.fleetxStatus || null,
       });
       setSetting((current) => current ? {
         ...current,
@@ -452,6 +458,35 @@ function GpsPageContent() {
       });
     } finally {
       setSyncingProviders((current) => current.filter((item) => item !== 'wheels'));
+    }
+  };
+
+  const handleProviderSync = async (provider: 'WheelsEye GPS' | 'FleetX' | 'All') => {
+    const key = provider === 'FleetX' ? 'fleetx' : provider === 'All' ? 'all' : 'wheels';
+    setSyncingProviders((current) => current.includes(key) ? current : [...current, key]);
+    setAlert(null);
+    try {
+      const providerParam = provider === 'All' ? 'ALL' : provider;
+      const result = await apiRequest<{
+        message?: string;
+        success?: boolean;
+        wheelseye?: { successCount?: number; failedCount?: number };
+        fleetx?: { successCount?: number; failedCount?: number };
+      }>(`/gps/sync/${encodeURIComponent(providerParam)}`, {
+        method: 'POST',
+      });
+      setAlert({
+        type: 'success',
+        message: result.message || `${provider} synchronization completed.`,
+      });
+      await Promise.all([fetchLiveVehicles(false), fetchGpsSetting()]);
+    } catch (err: any) {
+      setAlert({
+        type: 'error',
+        message: err.data?.message || err.message || `${provider} synchronization failed.`,
+      });
+    } finally {
+      setSyncingProviders((current) => current.filter((item) => item !== key));
     }
   };
 
@@ -850,6 +885,24 @@ function GpsPageContent() {
                       <RefreshCw className={`w-3.5 h-3.5 ${syncingProviders.includes('wheels') ? 'animate-spin' : ''}`} />
                       <span>{syncingProviders.includes('wheels') ? 'Syncing WheelsEye...' : 'Sync WheelsEye'}</span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => handleProviderSync('FleetX')}
+                      disabled={syncingProviders.includes('fleetx')}
+                      className="inline-flex items-center gap-2 px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${syncingProviders.includes('fleetx') ? 'animate-spin' : ''}`} />
+                      <span>{syncingProviders.includes('fleetx') ? 'Syncing FleetX...' : 'Sync FleetX'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleProviderSync('All')}
+                      disabled={syncingProviders.includes('all')}
+                      className="inline-flex items-center gap-2 px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${syncingProviders.includes('all') ? 'animate-spin' : ''}`} />
+                      <span>{syncingProviders.includes('all') ? 'Syncing All...' : 'Sync All GPS'}</span>
+                    </button>
                   </>
                 )}
                 <button
@@ -874,13 +927,13 @@ function GpsPageContent() {
             </div>
 
             {/* Top Status Strip */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
                 <span className="text-[10px] font-bold uppercase text-slate-400 block">
                   GPS Providers
                 </span>
                 <span className="text-sm font-extrabold text-slate-900 mt-0.5 block truncate">
-                  WheelsEye GPS
+                  WheelsEye + FleetX
                 </span>
               </div>
 
@@ -916,6 +969,32 @@ function GpsPageContent() {
                 {providerStatuses.wheelsEye?.lastError && (
                   <p className="mt-1 truncate text-[10px] font-medium text-rose-700" title={providerStatuses.wheelsEye.lastError}>
                     Error {providerStatuses.wheelsEye.lastErrorCode || ''}: {providerStatuses.wheelsEye.lastError}
+                  </p>
+                )}
+              </div>
+              <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
+                <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                  FleetX GPS
+                </span>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className={`w-2 h-2 rounded-full ${
+                    providerStatuses.fleetx?.connectionStatus === 'Connected' ? 'bg-emerald-500' : 'bg-amber-500'
+                  }`} />
+                  <span className="text-xs font-bold text-slate-800">
+                    {providerStatuses.fleetx?.connectionStatus || 'Pending'}
+                  </span>
+                </div>
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  Last sync: {providerStatuses.fleetx?.lastSuccessAt
+                    ? formatDateTime(providerStatuses.fleetx.lastSuccessAt)
+                    : 'N/A'}
+                </span>
+                <span className="text-[10px] text-slate-500 block">
+                  Vehicles: {providerStatuses.fleetx?.registeredVehicleCount ?? 0} registered / {providerStatuses.fleetx?.validGpsVehicleCount ?? 0} with GPS
+                </span>
+                {providerStatuses.fleetx?.lastError && (
+                  <p className="mt-1 truncate text-[10px] font-medium text-rose-700" title={providerStatuses.fleetx.lastError}>
+                    Error {providerStatuses.fleetx.lastErrorCode || ''}: {providerStatuses.fleetx.lastError}
                   </p>
                 )}
               </div>
@@ -1201,31 +1280,55 @@ function GpsPageContent() {
                   </div>
                 </div>
 
-                {selectedProviderRecords.length > 1 && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {selectedProviderRecords.map((record) => (
-                      <div key={`${record.vehicleNumber}:${record.provider}`} className="rounded-xl border border-slate-200 bg-white p-4">
+                    {(['WheelsEye GPS', 'FleetX'] as const).map((providerName) => {
+                      const record = selectedProviderRecords.find((item) => item.provider === providerName);
+                      const fleetName = providerName === 'WheelsEye GPS' ? 'WheelsEye' : 'FleetX';
+                      return (
+                      <div key={`${selectedVehicle.vehicleNumber}:${providerName}`} className="rounded-xl border border-slate-200 bg-white p-4">
                         <div className="flex items-center justify-between gap-2">
-                          <strong className="text-xs text-slate-900">{record.provider}</strong>
+                          <strong className="text-xs text-slate-900">{fleetName} GPS</strong>
                           <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                            record.geofence.status === 'Inside' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                            record?.hasGps
+                              ? record.geofence.status === 'Inside'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-800'
+                              : 'bg-slate-100 text-slate-600'
                           }`}>
-                            {record.geofence.status === 'Inside' ? `Inside ${record.geofence.plantName}` : record.geofence.status === 'Outside' ? 'Outside all plants' : 'No GPS data'}
+                            {record?.hasGps
+                              ? record.geofence.status === 'Inside'
+                                ? `Inside ${record.geofence.plantName}`
+                                : record.geofence.status === 'Outside'
+                                  ? 'Outside all plants'
+                                  : 'GPS available'
+                              : 'No GPS Data Available'}
                           </span>
                         </div>
                         <p className="mt-2 text-[11px] text-slate-600">
-                          Coordinates: {record.latitude !== null && record.longitude !== null
-                            ? `${record.latitude.toFixed(6)}, ${record.longitude.toFixed(6)}`
+                          Location: {record?.readableLocation && record.readableLocation !== 'N/A'
+                            ? record.readableLocation
                             : 'N/A'}
                         </p>
                         <p className="mt-1 text-[11px] text-slate-600">
-                          Provider time: {record.timestamp ? formatDateTime(record.timestamp) : 'N/A'}
+                          Coordinates: {record?.latitude !== null && record?.longitude !== null && record
+                            ? `${record.latitude?.toFixed(6)}, ${record.longitude?.toFixed(6)}`
+                            : 'N/A'}
                         </p>
                         <p className="mt-1 text-[11px] text-slate-600">
-                          Last sync: {record.systemSyncTimestamp ? formatDateTime(record.systemSyncTimestamp) : 'N/A'}
+                          Ignition: {record ? getIgnitionLabel(record.ignition) : 'N/A'}
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-600">
+                          Speed: {record ? formatVehicleSpeed(record.ignition, record.speed, record.movementStatus) : 'N/A'}
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-600">
+                          Provider time: {record?.timestamp ? formatDateTime(record.timestamp) : 'N/A'}
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-600">
+                          Last sync: {record?.systemSyncTimestamp ? formatDateTime(record.systemSyncTimestamp) : 'N/A'}
                         </p>
                       </div>
-                    ))}
+                      );
+                    })}
                     {selectedVehicle.locationDiscrepancyMeters !== null &&
                       selectedVehicle.locationDiscrepancyMeters !== undefined &&
                       Math.round(selectedVehicle.locationDiscrepancyMeters) > 0 && (
@@ -1234,7 +1337,6 @@ function GpsPageContent() {
                         </p>
                       )}
                   </div>
-                )}
 
                 {/* ========================================================================= */}
                 {/* LIVE MAP & READABLE LOCATION CARD (Requirements 24.7, 24.8, 24.9)         */}

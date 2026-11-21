@@ -46,11 +46,9 @@ interface FleetReportRow {
   dateRaw: string;
   saltPlantStay: string;
   teaPlantStay: string;
-  dasnaPlantStay: string;
   outsideTotal: string;
   saltPlantHrs: string;
   teaPlantHrs: string;
-  dasnaHrs: string;
   outsideHrs: string;
   noGpsDataHrs: string;
   totalHrs: string;
@@ -59,7 +57,6 @@ interface FleetReportRow {
 }
 
 interface FleetReportTotals {
-  dasnaHrs: string;
   saltPlantHrs: string;
   teaPlantHrs: string;
   outsideHrs: string;
@@ -75,7 +72,6 @@ interface DriverReportRow {
   dateRaw: string;
   saltPlantStay: string;
   teaPlantStay: string;
-  dasnaPlantStay: string;
   outsideTotal: string;
 }
 
@@ -312,7 +308,6 @@ export default function ReportPage() {
         const exportData = fleetReportRows.map((r) => ({
           'Date': r.date,
           'Vehicle No': r.vehicleNumber,
-          'DASNA hrs': r.dasnaHrs,
           'Salt Plant hrs': r.saltPlantHrs,
           'Tea Plant hrs': r.teaPlantHrs,
           'Outside hrs': r.outsideHrs,
@@ -325,7 +320,6 @@ export default function ReportPage() {
         ws['!cols'] = [
           { wch: 16 },
           { wch: 18 },
-          { wch: 14 },
           { wch: 16 },
           { wch: 15 },
           { wch: 15 },
@@ -348,7 +342,6 @@ export default function ReportPage() {
           'Date': r.date,
           'Salt Plant Stay Hour': r.saltPlantStay,
           'Tea Plant Stay Hour': r.teaPlantStay,
-          'Dasna Plant Stay Hour': r.dasnaPlantStay,
           'Outside Total Hour': r.outsideTotal,
         }));
 
@@ -360,7 +353,6 @@ export default function ReportPage() {
           { wch: 16 }, // Date
           { wch: 22 }, // Salt Plant Stay Hour
           { wch: 22 }, // Tea Plant Stay Hour
-          { wch: 24 }, // Dasna Plant Stay Hour
           { wch: 20 }, // Outside Total Hour
         ];
 
@@ -412,7 +404,7 @@ export default function ReportPage() {
               Stay Hours & Movement Report
             </h1>
             <p className="text-xs text-slate-500 mt-0.5">
-              Calculates accurate stay durations inside Salt, Tea &amp; Dasna plants and outside movements from actual GPS telematics
+              Calculates accurate stay durations inside Salt &amp; Tea plants and outside movements from actual GPS telematics
             </p>
           </div>
 
@@ -531,7 +523,6 @@ export default function ReportPage() {
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs font-bold text-slate-900 bg-white"
                   >
                     <option value="ALL">All statuses</option>
-                    <option value="DASNA">DASNA</option>
                     <option value="Salt Plant">Salt Plant</option>
                     <option value="Tea Plant">Tea Plant</option>
                     <option value="Outside">Outside</option>
@@ -696,7 +687,6 @@ export default function ReportPage() {
                     <tr>
                       <th className="px-6 py-3.5">Date</th>
                       <th className="px-6 py-3.5">Vehicle No</th>
-                      <th className="px-6 py-3.5 text-right">DASNA hrs</th>
                       <th className="px-6 py-3.5 text-right">Salt Plant hrs</th>
                       <th className="px-6 py-3.5 text-right">Tea Plant hrs</th>
                       <th className="px-6 py-3.5 text-right">Outside hrs</th>
@@ -708,7 +698,7 @@ export default function ReportPage() {
                   <tbody className="divide-y divide-slate-100 font-medium">
                     {filteredFleetRows.length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="px-6 py-10 text-center text-slate-400">
+                        <td colSpan={8} className="px-6 py-10 text-center text-slate-400">
                           No matching records found for this query.
                         </td>
                       </tr>
@@ -741,7 +731,6 @@ export default function ReportPage() {
                                   {row.vehicleNumber}
                                 </span>
                               </td>
-                              <td className="px-6 py-3.5 text-right font-mono">{row.dasnaHrs}</td>
                               <td className="px-6 py-3.5 text-right font-mono">{row.saltPlantHrs}</td>
                               <td className="px-6 py-3.5 text-right font-mono">{row.teaPlantHrs}</td>
                               <td className="px-6 py-3.5 text-right font-mono">{row.outsideHrs}</td>
@@ -751,7 +740,7 @@ export default function ReportPage() {
                             </tr>
                             {isExpanded && (
                               <tr>
-                                <td colSpan={9} className="bg-slate-50 px-6 py-4">
+                                <td colSpan={8} className="bg-slate-50 px-6 py-4">
                                   <div className="font-bold text-slate-700 mb-2">
                                     GPS status segments · {row.vehicleNumber} · {row.date} (IST)
                                   </div>
@@ -787,7 +776,6 @@ export default function ReportPage() {
                     <tfoot className="bg-slate-100 font-bold">
                       <tr>
                         <td className="px-6 py-3.5" colSpan={2}>Selected range totals</td>
-                        <td className="px-6 py-3.5 text-right font-mono">{fleetReportTotals.dasnaHrs}</td>
                         <td className="px-6 py-3.5 text-right font-mono">{fleetReportTotals.saltPlantHrs}</td>
                         <td className="px-6 py-3.5 text-right font-mono">{fleetReportTotals.teaPlantHrs}</td>
                         <td className="px-6 py-3.5 text-right font-mono">{fleetReportTotals.outsideHrs}</td>
@@ -813,14 +801,13 @@ export default function ReportPage() {
                       <th className="px-6 py-3.5">Date</th>
                       <th className="px-6 py-3.5 text-right">Salt Plant Stay Hour</th>
                       <th className="px-6 py-3.5 text-right">Tea Plant Stay Hour</th>
-                      <th className="px-6 py-3.5 text-right">Dasna Plant Stay Hour</th>
                       <th className="px-6 py-3.5 text-right">Outside Total Hour</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-medium">
                     {filteredDriverRows.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="px-6 py-10 text-center text-slate-400">
+                        <td colSpan={7} className="px-6 py-10 text-center text-slate-400">
                           No matching driver records found for this query.
                         </td>
                       </tr>
@@ -867,17 +854,6 @@ export default function ReportPage() {
                               }`}
                             >
                               {row.teaPlantStay}
-                            </span>
-                          </td>
-                          <td className="px-6 py-3.5 text-right font-mono font-bold whitespace-nowrap">
-                            <span
-                              className={`px-2.5 py-1 rounded-lg ${
-                                row.dasnaPlantStay !== '00:00'
-                                  ? 'bg-sky-50 text-sky-800 border border-sky-200'
-                                  : 'text-slate-400'
-                              }`}
-                            >
-                              {row.dasnaPlantStay}
                             </span>
                           </td>
                           <td className="px-6 py-3.5 text-right font-mono font-bold whitespace-nowrap">

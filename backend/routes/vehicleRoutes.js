@@ -34,19 +34,29 @@ function validateAndFormatMobile(mobile) {
 // GET /api/vehicles - List all vehicles
 router.get('/', async (req, res) => {
   try {
-    const [vehicles, wheelsEyeVehicleIds] = await Promise.all([
+    const [vehicles, wheelsEyeVehicleIds, fleetxVehicleIds] = await Promise.all([
       Vehicle.find().sort({ createdAt: -1 }),
       GpsHistory.distinct('vehicleId', {
         provider: /wheels.?eye/i,
         archived: { $ne: true },
       }),
+      GpsHistory.distinct('vehicleId', {
+        provider: /fleetx/i,
+        archived: { $ne: true },
+      }),
     ]);
     const wheelsEyeVehicleIdSet = new Set(wheelsEyeVehicleIds.filter(Boolean).map((id) => id.toString()));
+    const fleetxVehicleIdSet = new Set(fleetxVehicleIds.filter(Boolean).map((id) => id.toString()));
     res.json(vehicles.map((vehicle) => ({
       ...vehicle.toObject(),
-      gpsProvider: 'wheelseye',
-      gpsProviders: ['WheelsEye GPS'],
-      gpsStatus: wheelsEyeVehicleIdSet.has(vehicle._id.toString()) ? 'WheelsEye' : 'No GPS',
+      gpsProviders: [
+        ...(wheelsEyeVehicleIdSet.has(vehicle._id.toString()) ? ['WheelsEye GPS'] : []),
+        ...(fleetxVehicleIdSet.has(vehicle._id.toString()) ? ['FleetX'] : []),
+      ],
+      gpsStatus: [
+        ...(wheelsEyeVehicleIdSet.has(vehicle._id.toString()) ? ['WheelsEye'] : []),
+        ...(fleetxVehicleIdSet.has(vehicle._id.toString()) ? ['FleetX'] : []),
+      ].join(' + ') || 'No GPS',
     })));
   } catch (error) {
     console.error('[Get Vehicles Error]:', error);
@@ -57,7 +67,7 @@ router.get('/', async (req, res) => {
 // POST /api/vehicles - Add Vehicle
 router.post('/', async (req, res) => {
   try {
-    const { vehicleNumber, driverName, mobile, fleetType, ownerName, gpsDeviceId, status } = req.body;
+    const { vehicleNumber, driverName, mobile, fleetType, ownerName, gpsDeviceId, fleetxVehicleId, gps_mode, gps_provider, status } = req.body;
 
     if (!vehicleNumber || !vehicleNumber.trim()) {
       return res.status(400).json({ error: 'Vehicle number is required.' });
@@ -92,6 +102,10 @@ router.post('/', async (req, res) => {
       finalOwnerName = ownerName.trim();
     }
 
+    const cleanGpsMode = (gps_mode && gps_mode.toUpperCase() === 'MANUAL') ? 'MANUAL' : 'AUTO';
+    const providerValue = String(gps_provider || 'WHEELSEYE').toUpperCase();
+    const cleanGpsProvider = providerValue === 'FLEETX' ? 'FLEETX' : providerValue === 'BOTH' ? 'BOTH' : 'WHEELSEYE';
+
     const newVehicle = await Vehicle.create({
       vehicleNumber: normalizedVehicleNumber,
       driverName: finalDriverName,
@@ -99,8 +113,13 @@ router.post('/', async (req, res) => {
       fleetType,
       ownerName: finalOwnerName,
       gpsDeviceId: gpsDeviceId ? gpsDeviceId.trim() : normalizedVehicleNumber,
-      gpsProvider: 'wheelseye',
-      gpsProviders: ['WheelsEye GPS'],
+      gps_mode: cleanGpsMode,
+      gps_provider: cleanGpsProvider,
+      gpsProvider: cleanGpsProvider.toLowerCase(),
+      gpsProviders: cleanGpsProvider === 'BOTH'
+        ? ['WheelsEye GPS', 'FleetX']
+        : [cleanGpsProvider === 'FLEETX' ? 'FleetX' : 'WheelsEye GPS'],
+      fleetxVehicleId: fleetxVehicleId ? String(fleetxVehicleId).trim() : '',
       status: status === 'Inactive' ? 'Inactive' : 'Active',
     });
 
@@ -138,7 +157,7 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ error: 'Invalid vehicle ID format.' });
     }
 
-    const { vehicleNumber, driverName, mobile, fleetType, ownerName, gpsDeviceId, status } = req.body;
+    const { vehicleNumber, driverName, mobile, fleetType, ownerName, gpsDeviceId, fleetxVehicleId, gps_mode, gps_provider, status } = req.body;
 
     const vehicle = await Vehicle.findById(id);
     if (!vehicle) {
@@ -178,15 +197,26 @@ router.put('/:id', async (req, res) => {
       finalOwnerName = ownerName.trim();
     }
 
+    const cleanGpsMode = (gps_mode && gps_mode.toUpperCase() === 'MANUAL') ? 'MANUAL' : 'AUTO';
+    const providerValue = String(gps_provider || 'WHEELSEYE').toUpperCase();
+    const cleanGpsProvider = providerValue === 'FLEETX' ? 'FLEETX' : providerValue === 'BOTH' ? 'BOTH' : 'WHEELSEYE';
+
     vehicle.vehicleNumber = normalizedVehicleNumber;
     vehicle.driverName = finalDriverName;
     vehicle.mobile = formattedMobile;
     vehicle.fleetType = fleetType;
     vehicle.ownerName = finalOwnerName;
-    vehicle.gpsProvider = 'wheelseye';
-    vehicle.gpsProviders = ['WheelsEye GPS'];
+    vehicle.gps_mode = cleanGpsMode;
+    vehicle.gps_provider = cleanGpsProvider;
+    vehicle.gpsProvider = cleanGpsProvider.toLowerCase();
+    vehicle.gpsProviders = cleanGpsProvider === 'BOTH'
+      ? ['WheelsEye GPS', 'FleetX']
+      : [cleanGpsProvider === 'FLEETX' ? 'FleetX' : 'WheelsEye GPS'];
     if (gpsDeviceId !== undefined) {
       vehicle.gpsDeviceId = gpsDeviceId.trim();
+    }
+    if (fleetxVehicleId !== undefined) {
+      vehicle.fleetxVehicleId = String(fleetxVehicleId).trim();
     }
     vehicle.status = status === 'Inactive' ? 'Inactive' : 'Active';
 

@@ -123,7 +123,6 @@ router.get('/export', async (req, res) => {
         'Date': r.date,
         'Salt Plant Stay Hour': r.saltPlantStay,
         'Tea Plant Stay Hour': r.teaPlantStay,
-        'Dasna Plant Stay Hour': r.dasnaPlantStay,
         'Outside Total Hour': r.outsideTotal,
       }));
     } else {
@@ -139,7 +138,6 @@ router.get('/export', async (req, res) => {
       dataRows = result.rows.map((r) => ({
         'Date': r.date,
         'Vehicle No': r.vehicleNumber,
-        'DASNA hrs': r.dasnaHrs,
         'Salt Plant hrs': r.saltPlantHrs,
         'Tea Plant hrs': r.teaPlantHrs,
         'Outside hrs': r.outsideHrs,

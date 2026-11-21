@@ -22,6 +22,7 @@ const {
   encryptGpsCredential,
   maskGpsCredential,
 } = require('../utils/gpsCredentialCrypto');
+const { normalizeVehicleNumber } = require('../services/gpsTimelineService');
 
 function getClientApiUrl(setting) {
   if (!setting?.apiUrl) return '';
@@ -323,6 +324,85 @@ router.post('/test-connection', gpsSyncLimiter, async (req, res) => {
   }
 });
 
+// GET /api/gps/telematics-overview - Separate WheelsEye and FleetX GPS Telematics data
+router.get('/telematics-overview', async (req, res) => {
+  try {
+    const { getProviderTelematicsOverview } = require('../services/gpsSyncEngine');
+    const overview = await getProviderTelematicsOverview();
+    res.json(overview);
+  } catch (error) {
+    console.error('[GPS Telematics Overview Error]:', error);
+    res.status(500).json({ error: 'Failed to retrieve GPS telematics overview.' });
+  }
+});
+
+// GET /api/gps/fleetx/history - FleetX provider history for a selected vehicle and time range
+router.get('/fleetx/history', async (req, res) => {
+  try {
+    const Vehicle = require('../models/Vehicle');
+    const { fetchFleetxHistory } = require('../services/fleetxService');
+    const vehicleId = String(req.query.vehicleId || '').trim();
+    const vehicleNumber = String(req.query.vehicleNumber || '').trim();
+    const from = Number(req.query.from);
+    const to = Number(req.query.to);
+
+    let providerVehicleId = vehicleId;
+    if (!providerVehicleId && vehicleNumber) {
+      const normalized = normalizeVehicleNumber(vehicleNumber);
+      const vehicle = (await Vehicle.find()).find(
+        (item) => normalizeVehicleNumber(item.vehicleNumber) === normalized
+      );
+      providerVehicleId = vehicle?.fleetxVehicleId || '';
+    }
+    if (!providerVehicleId) {
+      return res.status(400).json({ error: 'A mapped FleetX vehicle ID is required.' });
+    }
+
+    const data = await fetchFleetxHistory({ vehicleId: providerVehicleId, from, to });
+    res.json({ success: true, vehicleId: providerVehicleId, data });
+  } catch (error) {
+    console.error('[FleetX History Error]:', error);
+    res.status(error.message?.includes('required') ? 400 : 502).json({
+      success: false,
+      error: error.message || 'Failed to retrieve FleetX history.',
+    });
+  }
+});
+
+// POST /api/gps/sync/:provider - Manual synchronization for a specific GPS provider
+router.post('/sync/:provider', gpsSyncLimiter, requireRole('Admin'), async (req, res) => {
+  try {
+    const { provider } = req.params;
+    const { syncProviderGps } = require('../services/gpsSyncEngine');
+    if (/^(all|both)$/i.test(provider)) {
+      const [wheelseye, fleetx] = await Promise.allSettled([
+        syncProviderGps({ provider: 'WHEELSEYE', mode: 'MANUAL', caller: req.user?.username || 'Admin' }),
+        syncProviderGps({ provider: 'FLEETX', mode: 'MANUAL', caller: req.user?.username || 'Admin' }),
+      ]);
+      return res.json({
+        message: 'GPS provider synchronization completed.',
+        wheelseye: wheelseye.status === 'fulfilled' ? wheelseye.value : { success: false, error: wheelseye.reason?.message },
+        fleetx: fleetx.status === 'fulfilled' ? fleetx.value : { success: false, error: fleetx.reason?.message },
+      });
+    }
+    const result = await syncProviderGps({
+      provider,
+      mode: 'MANUAL',
+      caller: req.user?.username || 'Admin',
+    });
+
+    res.json({
+      message: `${result.provider} synchronization finished: ${result.successCount} updated, ${result.failedCount} failed.`,
+      ...result,
+    });
+  } catch (error) {
+    console.error('[Provider Sync Error]:', error);
+    res.status(502).json({
+      error: error.message || 'Provider GPS synchronization failed.',
+    });
+  }
+});
+
 // POST /api/gps/trigger-sync - On-demand GPS sync trigger
 router.post('/trigger-sync', gpsSyncLimiter, requireRole('Admin'), async (req, res) => {
   try {
@@ -349,8 +429,12 @@ router.get('/live-vehicles', async (req, res) => {
   try {
     const { getReadableLocation } = require('../services/locationHelper');
 
-    const [wheelsEyeSetting, registeredVehicles] = await Promise.all([
+    const [wheelsEyeSetting, fleetxSetting, registeredVehicles] = await Promise.all([
       GpsSetting.findOne(getGpsSettingQuery()).sort({ updatedAt: -1 }),
+      GpsSetting.findOne({
+        archived: { $ne: true },
+        $or: [{ provider: /fleetx/i }, { apiUrl: /fleetx/i }],
+      }).sort({ updatedAt: -1 }),
       Vehicle.find({ status: 'Active' }).select('_id').lean(),
     ]);
     const snapshot = await getFleetGpsSnapshot();
@@ -441,6 +525,20 @@ router.get('/live-vehicles', async (req, res) => {
         validGpsVehicleCount: locatedVehicleIds.size,
       };
     };
+    const getFleetxCounts = () => {
+      const locatedVehicleIds = new Set(liveVehicles
+        .filter((vehicle) =>
+          vehicle.provider === 'FleetX' &&
+          vehicle.hasGps &&
+          Number.isFinite(vehicle.latitude) &&
+          Number.isFinite(vehicle.longitude)
+        )
+        .map((vehicle) => vehicle.vehicleId.toString()));
+      return {
+        registeredVehicleCount: registeredVehicles.length,
+        validGpsVehicleCount: locatedVehicleIds.size,
+      };
+    };
 
     res.json({
       totalCount: liveVehicles.length,
@@ -453,6 +551,13 @@ router.get('/live-vehicles', async (req, res) => {
         lastErrorCode: wheelsEyeSetting?.lastErrorCode || '',
         lastSuccessAt: wheelsEyeSetting?.lastSuccessAt || null,
         ...getWheelsEyeCounts(),
+      },
+      fleetxStatus: {
+        connectionStatus: getGpsConnectionStatus(fleetxSetting, 'FleetX'),
+        lastError: fleetxSetting?.lastError || '',
+        lastErrorCode: fleetxSetting?.lastErrorCode || '',
+        lastSuccessAt: fleetxSetting?.lastSuccessAt || null,
+        ...getFleetxCounts(),
       },
       vehicles: liveVehicles,
     });

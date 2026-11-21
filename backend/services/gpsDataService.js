@@ -28,6 +28,7 @@ const DEFAULT_GPS_PROVIDER = 'WheelsEye GPS';
 function normalizeGpsProvider(provider) {
   const value = String(provider || '').trim();
   if (/wheels.?eye/i.test(value)) return DEFAULT_GPS_PROVIDER;
+  if (/fleetx/i.test(value)) return 'FleetX';
   return '';
 }
 
@@ -266,11 +267,11 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false, al
   let history;
   if (allowPartial) {
     const historyResult = await runDashboardSnapshotQueries([{
-      name: 'WheelsEye GPS history',
+      name: 'GPS history',
       warning: 'GPS history is temporarily unavailable; saved vehicle status is used where available.',
       query: () => GpsHistory.find({
         archived: { $ne: true },
-        provider: /wheels.?eye/i,
+        $or: [{ provider: /wheels.?eye/i }, { provider: /fleetx/i }],
       }).sort({ gpsTimestamp: 1, syncTime: 1 }),
       fallback: [],
     }]);
@@ -279,7 +280,7 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false, al
   } else {
     history = await GpsHistory.find({
       archived: { $ne: true },
-      provider: /wheels.?eye/i,
+      $or: [{ provider: /wheels.?eye/i }, { provider: /fleetx/i }],
     }).sort({ gpsTimestamp: 1, syncTime: 1 });
   }
   const byVehicleId = new Map();
@@ -334,14 +335,19 @@ async function getFleetGpsSnapshot({ now = new Date(), dashboardOnly = false, al
         `${normalizeGpsProvider(sample.provider)}:${sample.gpsTimestamp}:${sample.latitude}:${sample.longitude}`;
       if (!sampleMap.has(sampleId)) sampleMap.set(sampleId, sample);
     }
-    const assignedProvider = DEFAULT_GPS_PROVIDER;
-    const vehicleSamples = [...sampleMap.values()].filter(
-      (sample) => normalizeGpsProvider(sample.provider) === assignedProvider
-    );
-    const vehicleStatuses = (statusesByVehicleId.get(vehicleId) || []).filter(
-      (status) => normalizeGpsProvider(status.provider) === assignedProvider
-    );
-    const providerNames = new Set([assignedProvider]);
+    const vehicleSamples = [...sampleMap.values()];
+    const vehicleStatuses = statusesByVehicleId.get(vehicleId) || [];
+    const providerNames = new Set();
+    for (const sample of vehicleSamples) providerNames.add(normalizeGpsProvider(sample.provider));
+    for (const status of vehicleStatuses) {
+      const provider = normalizeGpsProvider(status.provider);
+      if (provider) providerNames.add(provider);
+    }
+    if (providerNames.size === 0) {
+      providerNames.add(DEFAULT_GPS_PROVIDER);
+    }
+    providerNames.add(DEFAULT_GPS_PROVIDER);
+    providerNames.add('FleetX');
 
     let latestSample = latestProviderSample(vehicleSamples);
     let sampleProvider = latestSample ? normalizeGpsProvider(latestSample.provider) : null;

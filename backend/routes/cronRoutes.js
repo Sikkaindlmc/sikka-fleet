@@ -47,15 +47,22 @@ async function handleCronSync(req, res) {
     const triggerType = req.headers['x-vercel-id'] ? 'VERCEL_CRON' : 'CRON_WORKER_IST';
     console.log(`[API /api/cron/sync-gps] Triggered via ${triggerType} (${req.cronCaller || 'Caller'})`);
 
-    const result = await executeGpsSync({
-      source: 'AUTO',
-      triggerType,
-    });
+    const { syncProviderGps } = require('../services/gpsSyncEngine');
+    const [weResult, fxResult] = await Promise.allSettled([
+      syncProviderGps({ provider: 'WHEELSEYE', mode: 'AUTO', caller: triggerType }),
+      syncProviderGps({ provider: 'FLEETX', mode: 'AUTO', caller: triggerType }),
+    ]);
 
-    return res.status(result.success ? 200 : 502).json({
-      success: result.success,
-      message: result.message || 'WheelsEye GPS synchronization completed.',
-      ...result,
+    const wheelseye = weResult.status === 'fulfilled' ? weResult.value : { success: false, error: weResult.reason?.message };
+    const fleetx = fxResult.status === 'fulfilled' ? fxResult.value : { success: false, error: fxResult.reason?.message };
+
+    const overallSuccess = wheelseye.success || fleetx.success;
+
+    return res.status(overallSuccess ? 200 : 502).json({
+      success: overallSuccess,
+      message: '30-minute GPS synchronization finished for WheelsEye and FleetX.',
+      wheelseye,
+      fleetx,
     });
   } catch (error) {
     console.error('[API /api/cron/sync-gps Error]:', error);

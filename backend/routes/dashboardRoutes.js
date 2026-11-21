@@ -27,6 +27,7 @@ const PlanAuditLog = require('../models/PlanAuditLog');
 const { isValidObjectId, sanitizeText, maskUrlSecret } = require('../utils/security');
 const { isGpsSchedulerRunning } = require('../services/gpsScheduler');
 const { getGpsConnectionStatus } = require('../utils/gpsProvider');
+const { updateVehicleCurrentStatus } = require('../services/vehicleCurrentStatusService');
 const {
   filterActivePlans,
   getPlanExpiresAt,
@@ -592,8 +593,7 @@ router.post('/vehicles/:vehicleId/plan', async (req, res) => {
 
     let statusDoc = await VehicleCurrentStatus.findOne({ vehicleId });
     if (!statusDoc) {
-      statusDoc = await VehicleCurrentStatus.create({
-        vehicleId,
+      await updateVehicleCurrentStatus(vehicleId, {}, {
         status: 'Outside',
         current_geofence: 'UNKNOWN',
         latitude: null,
@@ -603,6 +603,7 @@ router.post('/vehicles/:vehicleId/plan', async (req, res) => {
         lastUpdatedAt: null,
         plans: [],
       });
+      statusDoc = await VehicleCurrentStatus.findOne({ vehicleId });
     }
 
     // RBAC: Check plant permission if user has restricted plant assignments and vehicle is inside a plant

@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const { executeGpsSync, getNextFixed30MinSlotIST } = require('./gpsSyncService');
+const { syncProviderGps } = require('./gpsSyncEngine');
 const GpsSetting = require('../models/GpsSetting');
 const PlanNotification = require('../models/PlanNotification');
 const { cleanupExpiredPlans } = require('../utils/planHelper');
@@ -8,6 +9,7 @@ let cronJob = null;
 let heartbeatTimer = null;
 let lastSlotAttempted = null;
 let isSchedulerRunning = false;
+let isSyncExecutionRunning = false;
 
 /**
  * Returns current IST slot identifier (e.g. "2026-10-10_14:00" or "2026-10-10_14:30").
@@ -34,37 +36,57 @@ function getCurrentIstSlotKey(refDate = new Date()) {
 }
 
 /**
- * Triggers automated 30-minute GPS sync execution.
+ * Triggers automated 30-minute GPS sync execution independently for WheelsEye & FleetX.
  */
 async function runScheduledGpsSync(triggerType = 'GPS_AUTO_SYNC_30MIN', slotKey = getCurrentIstSlotKey()) {
+  if (isSyncExecutionRunning) {
+    return {
+      wheelseye: { success: false, error: 'Sync already in progress' },
+      fleetx: { success: false, error: 'Sync already in progress' },
+    };
+  }
+  isSyncExecutionRunning = true;
   const now = new Date();
   const istString = now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
   const currentSlot = getCurrentIstSlotKey(now);
 
-  console.log(`[GPS Scheduler IST] [${istString}] Triggering server-side 30-minute sync (Slot: ${currentSlot})...`);
+  console.log(`[GPS Scheduler IST] [${istString}] Triggering independent 30-minute sync for WheelsEye & FleetX (Slot: ${currentSlot})...`);
 
+  let weResult;
+  let fxResult;
   try {
-    const result = await executeGpsSync({
-      source: 'AUTO',
-      triggerType,
-      slotKey,
-    });
-    if (!result.success) {
-      console.error('[GPS Scheduler] WheelsEye synchronization failed.', result.message);
-    }
-
-    // Auto-cleanup expired plans (Add Plan >12h, Next Trip Plan >24h)
-    try {
-      await cleanupExpiredPlans();
-    } catch (cleanupErr) {
-      console.warn('[GPS Scheduler Cleanup Warning]:', cleanupErr.message);
-    }
-
-    return result;
-  } catch (err) {
-    console.error(`[GPS Scheduler IST Error] Sync failed: ${err.message}`);
-    throw err;
+    // Run independent synchronizations for both providers in parallel
+    [weResult, fxResult] = await Promise.allSettled([
+      syncProviderGps({ provider: 'WHEELSEYE', mode: 'AUTO', caller: triggerType }),
+      syncProviderGps({ provider: 'FLEETX', mode: 'AUTO', caller: triggerType }),
+    ]);
+  } finally {
+    isSyncExecutionRunning = false;
   }
+
+  if (weResult.status === 'rejected') {
+    console.error('[GPS Scheduler] WheelsEye sync failed:', weResult.reason?.message);
+  } else {
+    console.log(`[GPS Scheduler] WheelsEye sync completed: ${weResult.value?.successCount} updated, ${weResult.value?.failedCount} failed.`);
+  }
+
+  if (fxResult.status === 'rejected') {
+    console.error('[GPS Scheduler] FleetX sync failed:', fxResult.reason?.message);
+  } else {
+    console.log(`[GPS Scheduler] FleetX sync completed: ${fxResult.value?.successCount} updated, ${fxResult.value?.failedCount} failed.`);
+  }
+
+  // Auto-cleanup expired plans (Add Plan >12h, Next Trip Plan >24h)
+  try {
+    await cleanupExpiredPlans();
+  } catch (cleanupErr) {
+    console.warn('[GPS Scheduler Cleanup Warning]:', cleanupErr.message);
+  }
+
+  return {
+    wheelseye: weResult.status === 'fulfilled' ? weResult.value : { success: false, error: weResult.reason?.message },
+    fleetx: fxResult.status === 'fulfilled' ? fxResult.value : { success: false, error: fxResult.reason?.message },
+  };
 }
 
 /**
@@ -116,7 +138,12 @@ function startGpsScheduler() {
       // Check when last successful sync occurred from database
       const settings = await GpsSetting.find({
         archived: { $ne: true },
-        $or: [{ provider: /wheels.?eye/i }, { apiUrl: /wheelseye/i }],
+        $or: [
+          { provider: /wheels.?eye/i },
+          { provider: /fleetx/i },
+          { apiUrl: /wheelseye/i },
+          { apiUrl: /fleetx/i },
+        ],
       }).sort({ updatedAt: -1 });
       const setting = settings[0];
       const lastSync = setting?.last_evaluated_timestamp || setting?.lastSync || null;
@@ -140,7 +167,12 @@ function startGpsScheduler() {
     try {
       const settings = await GpsSetting.find({
         archived: { $ne: true },
-        $or: [{ provider: /wheels.?eye/i }, { apiUrl: /wheelseye/i }],
+        $or: [
+          { provider: /wheels.?eye/i },
+          { provider: /fleetx/i },
+          { apiUrl: /wheelseye/i },
+          { apiUrl: /fleetx/i },
+        ],
       }).sort({ updatedAt: -1 });
       const setting = settings[0];
       const lastSync = setting?.last_evaluated_timestamp || setting?.lastSync || null;

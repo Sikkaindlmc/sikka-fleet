@@ -142,7 +142,7 @@ async function calcVehicleTodayHours(vehicleNumber, asOf = new Date()) {
   })));
 
   // Accumulate per category
-  const totalMs = { 'Salt Plant': 0, 'Tea Plant': 0, 'Dasna Plant': 0 };
+  const totalMs = { 'Salt Plant': 0, 'Tea Plant': 0 };
   for (const seg of normalized) {
     const oStart = Math.max(seg.start, dayStart.getTime());
     const oEnd   = Math.min(seg.end,   dayEnd.getTime());
@@ -152,7 +152,7 @@ async function calcVehicleTodayHours(vehicleNumber, asOf = new Date()) {
   }
 
   const elapsedMs = Math.max(dayEnd.getTime() - dayStart.getTime(), 0);
-  const plantMs   = (totalMs['Salt Plant'] || 0) + (totalMs['Tea Plant'] || 0) + (totalMs['Dasna Plant'] || 0);
+  const plantMs   = (totalMs['Salt Plant'] || 0) + (totalMs['Tea Plant'] || 0);
   const outsideMs = Math.max(elapsedMs - plantMs, 0);
 
   return {
@@ -161,7 +161,6 @@ async function calcVehicleTodayHours(vehicleNumber, asOf = new Date()) {
     plantBreakdown: {
       saltPlant:  msToHHMM(totalMs['Salt Plant']),
       teaPlant:   msToHHMM(totalMs['Tea Plant']),
-      dasnaPlant: msToHHMM(totalMs['Dasna Plant']),
     },
   };
 }
@@ -190,14 +189,13 @@ function msToHHMM(ms) {
 
 /**
  * Normalize plant name into standard report column categories
- * Salt Plant | Tea Plant | Dasna Plant | null
+ * Salt Plant | Tea Plant | null
  */
 function getPlantCategory(plantName) {
   if (!plantName) return null;
   const lower = plantName.toString().toLowerCase();
   if (lower.includes('salt')) return 'Salt Plant';
   if (lower.includes('tea')) return 'Tea Plant';
-  if (lower.includes('dasna')) return 'Dasna Plant';
   return null;
 }
 
@@ -298,7 +296,6 @@ function computeDailyDurations(normalizedSegments, dayStart, dayEnd) {
   const totals = {
     'Salt Plant': 0,
     'Tea Plant': 0,
-    'Dasna Plant': 0,
     // We'll compute Outside later to ensure 24h total
   };
 
@@ -315,13 +312,12 @@ function computeDailyDurations(normalizedSegments, dayStart, dayEnd) {
 
   // Calculate outside as remainder of 24h day
   const dayMs = 24 * 60 * 60 * 1000;
-  const plantMs = (totals['Salt Plant'] || 0) + (totals['Tea Plant'] || 0) + (totals['Dasna Plant'] || 0);
+  const plantMs = (totals['Salt Plant'] || 0) + (totals['Tea Plant'] || 0);
   const outsideMs = Math.max(dayMs - plantMs, 0);
 
   return {
     saltStay: msToHHMM(totals['Salt Plant'] || 0),
     teaStay: msToHHMM(totals['Tea Plant'] || 0),
-    dasnaStay: msToHHMM(totals['Dasna Plant'] || 0),
     outsideTotal: msToHHMM(outsideMs),
   };
 }
@@ -530,7 +526,6 @@ async function generateLegacyFleetReport({ fromDate, toDate, vehicleNumber }) {
         dateRaw: dStr,
         saltPlantStay: durations.saltStay,
         teaPlantStay: durations.teaStay,
-        dasnaPlantStay: durations.dasnaStay,
         outsideTotal: durations.outsideTotal,
       });
     }
@@ -633,13 +628,11 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
         dateRaw: date,
         status: isInProgress ? 'In progress' : 'Complete',
         inProgress: isInProgress,
-        dasnaMinutes: allocated.DASNA,
         saltPlantMinutes: allocated['Salt Plant'],
         teaPlantMinutes: allocated['Tea Plant'],
         outsideMinutes: allocated.Outside,
         noGpsDataMinutes: allocated['No GPS Data'],
         totalMinutes,
-        dasnaHrs: formatMinutes(allocated.DASNA),
         saltPlantHrs: formatMinutes(allocated['Salt Plant']),
         teaPlantHrs: formatMinutes(allocated['Tea Plant']),
         outsideHrs: formatMinutes(allocated.Outside),
@@ -647,7 +640,6 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
         totalHrs: formatMinutes(totalMinutes),
         saltPlantStay: formatMinutes(allocated['Salt Plant']),
         teaPlantStay: formatMinutes(allocated['Tea Plant']),
-        dasnaPlantStay: formatMinutes(allocated.DASNA),
         outsideTotal: formatMinutes(allocated.Outside),
         segments,
       };
@@ -661,7 +653,6 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
               vehicleNumber: row.vehicleNumber,
               vehicleNumberNormalized: row.vehicleNumberNormalized,
               date,
-              dasnaMinutes: row.dasnaMinutes,
               saltPlantMinutes: row.saltPlantMinutes,
               teaPlantMinutes: row.teaPlantMinutes,
               outsideMinutes: row.outsideMinutes,
@@ -678,7 +669,6 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
   }
 
   const totals = rows.reduce((result, row) => {
-    result.dasnaMinutes += row.dasnaMinutes;
     result.saltPlantMinutes += row.saltPlantMinutes;
     result.teaPlantMinutes += row.teaPlantMinutes;
     result.outsideMinutes += row.outsideMinutes;
@@ -686,7 +676,6 @@ async function generateFleetReport({ fromDate, toDate, vehicleNumber, plant = 'A
     result.totalMinutes += row.totalMinutes;
     return result;
   }, {
-    dasnaMinutes: 0,
     saltPlantMinutes: 0,
     teaPlantMinutes: 0,
     outsideMinutes: 0,

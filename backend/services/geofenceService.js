@@ -2,6 +2,7 @@ const Plant = require('../models/Plant');
 const Vehicle = require('../models/Vehicle');
 const PlantEntry = require('../models/PlantEntry');
 const VehicleCurrentStatus = require('../models/VehicleCurrentStatus');
+const { updateVehicleCurrentStatus } = require('./vehicleCurrentStatusService');
 const VehicleLocation = require('../models/VehicleLocation');
 const { GPS_STALE_THRESHOLD_MS: STALE_THRESHOLD_MS } = require('../config/gps');
 
@@ -290,47 +291,25 @@ async function processVehicleLocation(
   // 5. Update or create current status
   // lastEntryDateTime: when vehicle first entered this plant
   // lastUpdatedAt: when the scheduled or on-demand provider sync ran
-  if (currentStatus) {
-    currentStatus.currentPlantId = newPlantId;
-    currentStatus.current_plant = matchedPlant ? matchedPlant.plantName : null;
-    currentStatus.current_geofence = isNowInside ? 'INSIDE' : 'OUTSIDE';
-    currentStatus.status = newStatus;
-    currentStatus.latitude = latitude;
-    currentStatus.longitude = longitude;
-    currentStatus.distanceMeter = newDistance;
-    currentStatus.lastEntryDateTime = entryDateTime;
-    currentStatus.latest_gps_timestamp = gpsDate;
-    currentStatus.last_successful_sync_at = syncTime;
-    currentStatus.gps_status = plantEval.gps_status;
-    currentStatus.provider = source;
-    currentStatus.speed = null;
-    currentStatus.ignition = null;
-    currentStatus.movementStatus = null;
-    currentStatus.rawTelemetry = null;
-    currentStatus.lastUpdatedAt = syncTime;
-    await currentStatus.save();
-  } else {
-    currentStatus = await VehicleCurrentStatus.create({
-      vehicleId,
-      currentPlantId: newPlantId,
-      current_plant: matchedPlant ? matchedPlant.plantName : null,
-      current_geofence: isNowInside ? 'INSIDE' : 'OUTSIDE',
-      status: newStatus,
-      latitude,
-      longitude,
-      distanceMeter: newDistance,
-      latest_gps_timestamp: gpsDate,
-      last_successful_sync_at: syncTime,
-      gps_status: plantEval.gps_status,
-      provider: source,
-      speed: null,
-      ignition: null,
-      movementStatus: null,
-      rawTelemetry: null,
-      lastEntryDateTime: entryDateTime,
-      lastUpdatedAt: syncTime,
-    });
-  }
+  await updateVehicleCurrentStatus(vehicleId, {
+    currentPlantId: newPlantId,
+    current_plant: matchedPlant ? matchedPlant.plantName : null,
+    current_geofence: isNowInside ? 'INSIDE' : 'OUTSIDE',
+    status: newStatus,
+    latitude,
+    longitude,
+    distanceMeter: newDistance,
+    lastEntryDateTime: entryDateTime,
+    latest_gps_timestamp: gpsDate,
+    last_successful_sync_at: syncTime,
+    gps_status: plantEval.gps_status,
+    provider: source,
+    speed: null,
+    ignition: null,
+    movementStatus: null,
+    rawTelemetry: null,
+    lastUpdatedAt: syncTime,
+  });
 
   return {
     vehicleId,

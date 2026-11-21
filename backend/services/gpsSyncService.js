@@ -31,6 +31,8 @@ const { rebuildDailyGpsReports } = require('./reportCalculationService');
 const { istDateString } = require('./gpsTimelineService');
 const { getZoneId, reconcileZoneSession } = require('./zoneSessionService');
 const { decryptGpsCredential } = require('../utils/gpsCredentialCrypto');
+const { updateVehicleCurrentStatus } = require('./vehicleCurrentStatusService');
+const { runGpsSyncExclusive } = require('./gpsSyncCoordinator');
 const {
   getGpsConnectionStatus,
   DEFAULT_PROVIDER_URLS,
@@ -557,7 +559,7 @@ function getSafeWheelsEyeError(error) {
  * 7. Write to GpsSyncLog & CronExecutionLog
  * 8. Release Distributed Lock
  */
-async function executeGpsSync({
+async function runWheelsEyeGpsSync({
   source = 'AUTO',
   triggerType = 'GPS_AUTO_SYNC_30MIN',
   slotKey = null,
@@ -836,18 +838,13 @@ async function executeGpsSync({
       }
       if (lastProviderTimestamp && new Date(lastProviderTimestamp).getTime() === deviceTimestamp.getTime()) {
         if (!currentStatus) continue;
-        await VehicleCurrentStatus.updateOne(
-          { _id: currentStatus._id, latest_gps_timestamp: deviceTimestamp },
-          {
-            $set: {
-              last_successful_sync_at: syncTime,
-              last_sync_source: syncType,
-              lastSyncId: syncId,
-              lastSyncType: syncType,
-              lastUpdatedAt: syncTime,
-            },
-          }
-        );
+        await updateVehicleCurrentStatus(vehicle._id, {
+          last_successful_sync_at: syncTime,
+          last_sync_source: syncType,
+          lastSyncId: syncId,
+          lastSyncType: syncType,
+          lastUpdatedAt: syncTime,
+        });
         continue;
       }
 
@@ -1037,15 +1034,7 @@ async function executeGpsSync({
         lastUpdatedAt: syncTime,
       };
 
-      if (currentStatus) {
-        Object.assign(currentStatus, updatePayload);
-        await currentStatus.save();
-      } else {
-        await VehicleCurrentStatus.create({
-          vehicleId: vehicle._id,
-          ...updatePayload,
-        });
-      }
+      await updateVehicleCurrentStatus(vehicle._id, updatePayload);
 
       updatedCount++;
     }
@@ -1190,6 +1179,13 @@ async function executeGpsSync({
     // Always release distributed lock
     await releaseDistributedLock();
   }
+}
+
+function executeGpsSync(options = {}) {
+  return runGpsSyncExclusive(
+    () => runWheelsEyeGpsSync(options),
+    'WHEELSEYE_GPS_SYNC'
+  );
 }
 
 /**

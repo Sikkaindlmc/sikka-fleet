@@ -18,7 +18,7 @@ const gpsSyncLogSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['RUNNING', 'SUCCESS', 'FAILED'],
+      enum: ['RUNNING', 'SUCCESS', 'FAILED', 'PARTIAL'],
       default: 'RUNNING',
       index: true,
     },

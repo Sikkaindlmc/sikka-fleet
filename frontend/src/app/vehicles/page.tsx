@@ -19,13 +19,16 @@ interface VehicleRecord {
   fleetType: 'Own Fleet' | 'Hired' | 'Rental';
   ownerName?: string;
   gpsDeviceId?: string;
-  gpsProvider?: 'wheelseye';
+  gpsProvider?: string;
+  gps_mode?: 'AUTO' | 'MANUAL';
+  gps_provider?: 'WHEELSEYE' | 'FLEETX' | 'BOTH';
+  fleetxVehicleId?: string;
   status: 'Active' | 'Inactive';
   assignedDriverId?: string | null;
   assignmentType?: 'MANUAL' | 'AUTO_GPS' | 'NONE';
   assignedAt?: string | null;
   matchingDrivers?: NearestDriverItem[];
-  gpsStatus?: 'WheelsEye' | 'No GPS';
+  gpsStatus?: string;
   gpsProviders?: string[];
   createdAt: string;
   updatedAt: string;
@@ -62,6 +65,9 @@ export default function VehicleRegisterPage() {
     fleetType: 'Own Fleet' as 'Own Fleet' | 'Hired' | 'Rental',
     ownerName: '',
     gpsDeviceId: '',
+    gps_mode: 'AUTO' as 'AUTO' | 'MANUAL',
+    gps_provider: 'WHEELSEYE' as 'WHEELSEYE' | 'FLEETX' | 'BOTH',
+    fleetxVehicleId: '',
     status: 'Active' as 'Active' | 'Inactive',
   });
   const [formError, setFormError] = useState('');
@@ -127,6 +133,9 @@ export default function VehicleRegisterPage() {
       fleetType: 'Own Fleet',
       ownerName: '',
       gpsDeviceId: '',
+      gps_mode: 'AUTO',
+      gps_provider: 'WHEELSEYE',
+      fleetxVehicleId: '',
       status: 'Active',
     });
     setFormError('');
@@ -139,6 +148,9 @@ export default function VehicleRegisterPage() {
     // Extract 10 digits from '+91 9876543210'
     const rawDigits = vehicle.mobile ? clean10DigitPhone(vehicle.mobile) : '';
 
+    const providerVal = vehicle.gps_provider || (vehicle.gpsProvider?.toUpperCase() === 'FLEETX' ? 'FLEETX' : 'WHEELSEYE');
+    const modeVal = vehicle.gps_mode || 'AUTO';
+
     setFormData({
       vehicleNumber: vehicle.vehicleNumber,
       driverName: vehicle.driverName,
@@ -146,6 +158,9 @@ export default function VehicleRegisterPage() {
       fleetType: vehicle.fleetType,
       ownerName: vehicle.ownerName || '',
       gpsDeviceId: vehicle.gpsDeviceId || '',
+      fleetxVehicleId: vehicle.fleetxVehicleId || '',
+      gps_mode: modeVal,
+      gps_provider: providerVal,
       status: vehicle.status,
     });
     setFormError('');
@@ -267,6 +282,9 @@ export default function VehicleRegisterPage() {
           fleetType: formData.fleetType,
           ownerName: formData.ownerName.trim(),
           gpsDeviceId: formData.gpsDeviceId.trim() || formData.vehicleNumber.trim(),
+          fleetxVehicleId: formData.fleetxVehicleId.trim(),
+          gps_mode: formData.gps_mode,
+          gps_provider: formData.gps_provider,
           status: formData.status,
         }),
       });
@@ -317,6 +335,9 @@ export default function VehicleRegisterPage() {
           fleetType: formData.fleetType,
           ownerName: formData.ownerName.trim(),
           gpsDeviceId: formData.gpsDeviceId.trim(),
+          fleetxVehicleId: formData.fleetxVehicleId.trim(),
+          gps_mode: formData.gps_mode,
+          gps_provider: formData.gps_provider,
           status: formData.status,
         }),
       });
@@ -425,6 +446,7 @@ export default function VehicleRegisterPage() {
                 <thead className="bg-slate-50 text-slate-600 font-bold uppercase tracking-wider">
                   <tr>
                     <th className="px-6 py-3.5">Vehicle Number</th>
+                    <th className="px-6 py-3.5">GPS</th>
                     <th className="px-6 py-3.5">Driver Name</th>
                     <th className="px-6 py-3.5">Mobile</th>
                     <th className="px-6 py-3.5">Fleet Type</th>
@@ -444,17 +466,28 @@ export default function VehicleRegisterPage() {
                           <span className="font-extrabold text-slate-900 text-sm tracking-wide">
                             {v.vehicleNumber}
                           </span>
-                          {v.gpsStatus === 'WheelsEye' ? (
-                            <span
-                              className="rounded-md bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold text-emerald-800"
-                            >
-                              WheelsEye
-                            </span>
-                          ) : (
-                            <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-600">
-                              Not linked
-                            </span>
-                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex flex-col gap-1 items-start">
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                              (v.gps_provider || v.gpsProvider || '').toUpperCase() === 'FLEETX'
+                                ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                                : 'bg-blue-100 text-blue-800 border border-blue-200'
+                            }`}
+                          >
+                            {(v.gps_provider || v.gpsProvider || 'WHEELSEYE').toUpperCase() === 'FLEETX' ? 'FleetX' : 'WheelsEye'}
+                          </span>
+                          <span
+                            className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider ${
+                              (v.gps_mode || 'AUTO') === 'AUTO'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}
+                          >
+                            {v.gps_mode || 'AUTO'}
+                          </span>
                         </div>
                       </td>
                       <td className="px-6 py-4">
@@ -664,6 +697,47 @@ export default function VehicleRegisterPage() {
               </div>
             )}
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  GPS Mode *
+                </label>
+                <select
+                  value={formData.gps_mode}
+                  onChange={(e) => setFormData({ ...formData, gps_mode: e.target.value as any })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden bg-white"
+                  disabled={isSubmitting}
+                >
+                  <option value="AUTO">Auto (Every 30 mins)</option>
+                  <option value="MANUAL">Manual</option>
+                </select>
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  {formData.gps_mode === 'AUTO'
+                    ? 'Syncs automatically every 30 minutes'
+                    : 'Syncs only when initiated manually'}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  GPS Provider *
+                </label>
+                <select
+                  value={formData.gps_provider}
+                  onChange={(e) => setFormData({ ...formData, gps_provider: e.target.value as any })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden bg-white"
+                  disabled={isSubmitting}
+                >
+                  <option value="WHEELSEYE">WheelsEye</option>
+                  <option value="FLEETX">FleetX</option>
+                  <option value="BOTH">Both Providers</option>
+                </select>
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  {formData.gps_provider === 'FLEETX' ? 'FleetX Telematics API' : 'WheelsEye Telematics API'}
+                </p>
+              </div>
+            </div>
+
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                 Status
@@ -794,6 +868,47 @@ export default function VehicleRegisterPage() {
                 />
               </div>
             )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  GPS Mode *
+                </label>
+                <select
+                  value={formData.gps_mode}
+                  onChange={(e) => setFormData({ ...formData, gps_mode: e.target.value as any })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden bg-white"
+                  disabled={isSubmitting}
+                >
+                  <option value="AUTO">Auto (Every 30 mins)</option>
+                  <option value="MANUAL">Manual</option>
+                </select>
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  {formData.gps_mode === 'AUTO'
+                    ? 'Syncs automatically every 30 minutes'
+                    : 'Syncs only when initiated manually'}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  GPS Provider *
+                </label>
+                <select
+                  value={formData.gps_provider}
+                  onChange={(e) => setFormData({ ...formData, gps_provider: e.target.value as any })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm font-medium focus:border-emerald-500 focus:outline-hidden bg-white"
+                  disabled={isSubmitting}
+                >
+                  <option value="WHEELSEYE">WheelsEye</option>
+                  <option value="FLEETX">FleetX</option>
+                  <option value="BOTH">Both Providers</option>
+                </select>
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  {formData.gps_provider === 'FLEETX' ? 'FleetX Telematics API' : 'WheelsEye Telematics API'}
+                </p>
+              </div>
+            </div>
 
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">

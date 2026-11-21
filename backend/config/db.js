@@ -18,19 +18,6 @@ async function ensureWheelsEyeSetting() {
     archived: { $ne: true },
     $or: [{ provider: /wheels.?eye/i }, { apiUrl: /wheelseye/i }],
   };
-  await GpsSetting.deleteMany({
-    $nor: [{ provider: /wheels.?eye/i }, { apiUrl: /wheelseye/i }],
-  });
-  const legacyConfigExists = await mongoose.connection.db.listCollections({ name: 'gpsconfigs' }).hasNext();
-  if (legacyConfigExists) {
-    await mongoose.connection.db.collection('gpsconfigs').deleteMany({
-      provider: { $not: /wheels.?eye/i },
-    });
-  }
-  await mongoose.model('Vehicle').updateMany(
-    { $or: [{ gpsProvider: { $ne: 'wheelseye' } }, { gpsProviders: { $ne: ['WheelsEye GPS'] } }] },
-    { $set: { gpsProvider: 'wheelseye', gpsProviders: ['WheelsEye GPS'] } }
-  );
   const setting = await GpsSetting.findOne(query).sort({ updatedAt: -1 });
   if (!setting) {
     let apiUrl = (process.env.WHEELSEYE_API_URL || DEFAULT_PROVIDER_URLS.wheelseye).trim();
@@ -85,10 +72,48 @@ async function ensureWheelsEyeSetting() {
   );
 }
 
+async function ensureFleetxSetting() {
+  const GpsSetting = mongoose.model('GpsSetting');
+  const query = {
+    archived: { $ne: true },
+    $or: [{ provider: /fleetx/i }, { apiUrl: /fleetx/i }],
+  };
+  const setting = await GpsSetting.findOne(query).sort({ updatedAt: -1 });
+  const apiUrl = (process.env.FLEETX_API_BASE_URL || 'https://api.fleetx.io').trim();
+
+  if (!setting) {
+    await GpsSetting.create({
+      provider: 'FleetX',
+      apiUrl,
+      status: 'Active',
+      pollIntervalSeconds: 1800,
+    });
+    return;
+  }
+
+  await GpsSetting.updateOne(
+    { _id: setting._id },
+    {
+      $set: {
+        provider: 'FleetX',
+        apiUrl,
+        status: 'Active',
+      },
+      $unset: {
+        encryptedUsername: '',
+        encryptedPassword: '',
+        encryptedBasicAuth: '',
+        encryptedApiKey: '',
+      },
+    }
+  );
+}
+
 const connectDB = async () => {
   // Reuse existing connection if available (for serverless environments like Vercel)
   if (mongoose.connection.readyState >= 1) {
     await ensureWheelsEyeSetting();
+    await ensureFleetxSetting();
     return mongoose.connection;
   }
 
@@ -108,6 +133,7 @@ const connectDB = async () => {
         serverSelectionTimeoutMS: 8000,
       });
       await ensureWheelsEyeSetting();
+      await ensureFleetxSetting();
       console.log(`[Database] MongoDB Atlas Connected: ${conn.connection.host}/${conn.connection.name}`);
       return conn;
     } catch (err) {
@@ -123,6 +149,7 @@ const connectDB = async () => {
             serverSelectionTimeoutMS: 8000,
           });
           await ensureWheelsEyeSetting();
+          await ensureFleetxSetting();
           console.log(`[Database] MongoDB Atlas Connected via direct replica set: ${conn.connection.host}/${conn.connection.name}`);
           return conn;
         } catch (directErr) {
@@ -142,6 +169,7 @@ const connectDB = async () => {
       serverSelectionTimeoutMS: 3000,
     });
     await ensureWheelsEyeSetting();
+    await ensureFleetxSetting();
     console.log(`[Database] Local MongoDB Connected: ${conn.connection.host}/${conn.connection.name}`);
     return conn;
   } catch (err) {

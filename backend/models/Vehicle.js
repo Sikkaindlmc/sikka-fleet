@@ -34,9 +34,28 @@ const vehicleSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    fleetxVehicleId: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+
+    // GPS Configuration (Requirement 2 & 8)
+    gps_mode: {
+      type: String,
+      enum: ['AUTO', 'MANUAL'],
+      default: 'AUTO',
+    },
+    gps_provider: {
+      type: String,
+      enum: ['WHEELSEYE', 'FLEETX', 'BOTH'],
+      default: 'WHEELSEYE',
+    },
+
+    // Backward compatibility fields
     gpsProvider: {
       type: String,
-      enum: ['wheelseye'],
+      enum: ['wheelseye', 'fleetx', 'WHEELSEYE', 'FLEETX'],
       default: 'wheelseye',
       lowercase: true,
       trim: true,
@@ -44,10 +63,45 @@ const vehicleSchema = new mongoose.Schema(
     gpsProviders: {
       type: [{
         type: String,
-        enum: ['WheelsEye GPS'],
       }],
       default: ['WheelsEye GPS'],
     },
+
+    // Realtime GPS Telematics Snapshot on Vehicle Record (Requirement 8)
+    gps_latitude: {
+      type: Number,
+      default: null,
+    },
+    gps_longitude: {
+      type: Number,
+      default: null,
+    },
+    gps_speed: {
+      type: Number,
+      default: null,
+    },
+    gps_ignition_status: {
+      type: String,
+      default: null, // 'ON', 'OFF', 'N/A'
+    },
+    gps_location: {
+      type: String,
+      default: '',
+    },
+    gps_last_updated_at: {
+      type: Date,
+      default: null,
+    },
+    gps_sync_status: {
+      type: String,
+      enum: ['SUCCESS', 'FAILED', 'DATA_UNAVAILABLE', 'PENDING'],
+      default: 'PENDING',
+    },
+    gps_error_message: {
+      type: String,
+      default: '',
+    },
+
     status: {
       type: String,
       enum: ['Active', 'Inactive'],
