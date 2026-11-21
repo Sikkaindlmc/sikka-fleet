@@ -8,10 +8,12 @@ const {
   formatToolAnswer,
   getSuggestions,
   hasFuzzyKeyword,
+  getSyncNotice,
   hashQuery,
   localize,
   resolveVehicleReference,
   recognizeQuestion,
+  needsAiGpsSync,
   UNSUPPORTED_MESSAGE,
 } = require('../services/sikkaAiService');
 
@@ -19,6 +21,15 @@ const router = express.Router();
 const MAX_QUESTION_LENGTH = 1000;
 const AI_SYNC_COOLDOWN_MS = 2 * 60 * 1000;
 const AI_SYNC_COOLDOWN_KEY = 'gps-sync';
+
+function getSafeSyncErrorCode(error) {
+  const status = Number(error?.response?.status);
+  if (Number.isInteger(status) && status >= 100 && status <= 599) return `HTTP_${status}`;
+  const code = String(error?.code || '').toUpperCase();
+  if (/^[A-Z0-9_]{2,40}$/.test(code)) return code;
+  if (/timeout/i.test(String(error?.message || ''))) return 'REQUEST_TIMEOUT';
+  return 'SYNC_FAILED';
+}
 
 async function reserveAiSync(now = new Date()) {
   try {
@@ -84,9 +95,7 @@ router.post('/query', aiLimiter, async (req, res) => {
   if (!intent.suggestions && hasFuzzyKeyword(question)) {
     intent.suggestions = getSuggestions(intent.language, intent.args?.vehicleNumber || null);
   }
-  const requestsSync = intent.tool === 'sync_gps_now' ||
-    intent.tool === 'sync_then_location' ||
-    Boolean(intent.liveQuery && req.user.role === 'Admin');
+  const requestsSync = intent.tool === 'sync_gps_now' || intent.tool === 'sync_then_location';
   const audit = new SikkaAiAuditLog({
     userId: req.user._id,
     username: req.user.username || '',
@@ -161,7 +170,12 @@ router.post('/query', aiLimiter, async (req, res) => {
     }
 
     const isExplicitSync = intent.tool === 'sync_gps_now' || intent.tool === 'sync_then_location';
-    const shouldAutoSync = Boolean(intent.liveQuery && req.user.role === 'Admin' && !isExplicitSync);
+    const shouldAutoSync = Boolean(
+      !isExplicitSync &&
+      req.user.role === 'Admin' &&
+      await needsAiGpsSync(intent)
+    );
+    if (shouldAutoSync) audit.action = 'GPS_SYNC';
     let syncResults = null;
     let syncCooldown = false;
     if (isExplicitSync || shouldAutoSync) {
@@ -189,10 +203,11 @@ router.post('/query', aiLimiter, async (req, res) => {
             args: { provider: intent.args?.provider || null },
           }, req.user);
         } catch (syncError) {
-          console.error('[Sikka AI] GPS sync did not return provider results:', syncError.code || 'SYNC_FAILED');
+          const errorCode = getSafeSyncErrorCode(syncError);
+          console.error('[Sikka AI] GPS sync did not return provider results:', errorCode);
           syncResults = {
-            wheelseye: { status: 'FAILED', totalVehicles: 0, successCount: 0, failedCount: 0 },
-            fleetx: { status: 'FAILED', totalVehicles: 0, successCount: 0, failedCount: 0 },
+            wheelseye: { status: 'FAILED', totalVehicles: 0, receivedCount: 0, matchedCount: 0, savedCount: 0, successCount: 0, failedCount: 0, errorCode },
+            fleetx: { status: 'FAILED', totalVehicles: 0, receivedCount: 0, matchedCount: 0, savedCount: 0, successCount: 0, failedCount: 0, errorCode },
           };
         }
       }
@@ -224,9 +239,19 @@ router.post('/query', aiLimiter, async (req, res) => {
     if (providerStatuses.length) audit.resultCount += Object.keys(providerResults).length;
     audit.completedAt = new Date();
     await audit.save();
+    const suggestions = intent.suggestions || (
+      intent.tool === 'get_vehicle_location' && data.vehicleNumber
+        ? [
+            localize(intent.language, `Details of ${data.vehicleNumber}`, `${data.vehicleNumber} का विवरण`, `${data.vehicleNumber} ki details`),
+            localize(intent.language, `Plant stay hours for ${data.vehicleNumber}`, `${data.vehicleNumber} का प्लांट stay time`, `${data.vehicleNumber} ka plant stay time`),
+            localize(intent.language, `Where was ${data.vehicleNumber} yesterday?`, `${data.vehicleNumber} कल कहाँ थी?`, `${data.vehicleNumber} kal kahan thi?`),
+          ]
+        : []
+    );
     return res.json({
       answer: formatToolAnswer(results, intent.language),
-      suggestions: intent.suggestions || [],
+      syncNotice: getSyncNotice(results, intent.language),
+      suggestions,
       results,
     });
   } catch (error) {

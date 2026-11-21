@@ -1,6 +1,13 @@
 const crypto = require('crypto');
 const GpsSyncLock = require('../models/GpsSyncLock');
 
+function getSafeErrorCode(error) {
+  const status = Number(error?.response?.status);
+  if (Number.isInteger(status) && status >= 100 && status <= 599) return `HTTP_${status}`;
+  const code = String(error?.code || '').toUpperCase();
+  return /^[A-Z0-9_]{2,40}$/.test(code) ? code : 'LOCK_RELEASE_FAILED';
+}
+
 const LOCK_TTL_MS = 30 * 60 * 1000;
 const MAX_WAIT_MS = 10 * 60 * 1000;
 
@@ -63,7 +70,7 @@ async function runGpsSyncExclusive(run, operation = 'GPS sync') {
         { $set: { isLocked: false, expiresAt: new Date(0) } }
       );
     } catch (error) {
-      console.error(`[GPS Sync Lock] Failed to release lock for ${operation}:`, error.message);
+      console.error(`[GPS Sync Lock] Failed to release lock for ${operation}: ${getSafeErrorCode(error)}`);
     }
   }
 }

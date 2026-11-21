@@ -27,6 +27,15 @@ const {
 } = require('../utils/gpsCredentialCrypto');
 const { normalizeVehicleNumber } = require('../services/gpsTimelineService');
 
+function getSafeSyncErrorCode(error) {
+  const status = Number(error?.response?.status);
+  if (Number.isInteger(status) && status >= 100 && status <= 599) return `HTTP_${status}`;
+  const code = String(error?.code || '').toUpperCase();
+  if (/^[A-Z0-9_]{2,40}$/.test(code)) return code;
+  if (/timeout/i.test(String(error?.message || ''))) return 'REQUEST_TIMEOUT';
+  return 'SYNC_FAILED';
+}
+
 function getClientApiUrl(setting) {
   if (!setting?.apiUrl) return '';
   let url = setting.apiUrl;
@@ -368,10 +377,11 @@ router.get('/fleetx/history', async (req, res) => {
     const data = await fetchFleetxHistory({ vehicleId: providerVehicleId, from, to });
     res.json({ success: true, vehicleId: providerVehicleId, data });
   } catch (error) {
-    console.error('[FleetX History Error]:', error);
+    console.error('[FleetX History Error]:', getSafeSyncErrorCode(error));
     res.status(error.message?.includes('required') ? 400 : 502).json({
       success: false,
-      error: error.message || 'Failed to retrieve FleetX history.',
+      error: error.message?.includes('required') ? 'FleetX history parameters are required.' : 'Failed to retrieve FleetX history.',
+      errorCode: getSafeSyncErrorCode(error),
     });
   }
 });
@@ -438,11 +448,11 @@ router.post('/sync/:provider', gpsSyncLimiter, requireRole('Admin'), async (req,
             syncProviderGps({ provider: 'FLEETX', mode: 'MANUAL', caller: req.user?.username || 'Admin' }),
           ]);
           job.wheelseye = wheelseye.status === 'fulfilled'
-            ? { status: wheelseye.value.success ? 'SUCCESS' : 'FAILED', ...wheelseye.value }
-            : { status: 'FAILED', success: false, error: wheelseye.reason?.message };
+            ? { ...wheelseye.value, status: wheelseye.value.status || (wheelseye.value.success ? 'SUCCESS' : 'FAILED') }
+            : { status: 'FAILED', success: false, errorCode: getSafeSyncErrorCode(wheelseye.reason) };
           job.fleetx = fleetx.status === 'fulfilled'
-            ? { status: fleetx.value.success ? 'SUCCESS' : 'FAILED', ...fleetx.value }
-            : { status: 'FAILED', success: false, error: fleetx.reason?.message };
+            ? { ...fleetx.value, status: fleetx.value.status || (fleetx.value.success ? 'SUCCESS' : 'FAILED') }
+            : { status: 'FAILED', success: false, errorCode: getSafeSyncErrorCode(fleetx.reason) };
           job.success = Boolean(job.wheelseye.success || job.fleetx.success);
         } else {
           const result = await syncProviderGps({
@@ -451,13 +461,13 @@ router.post('/sync/:provider', gpsSyncLimiter, requireRole('Admin'), async (req,
             caller: req.user?.username || 'Admin',
           });
           const providerKey = normalizedProvider === 'FLEETX' ? 'fleetx' : 'wheelseye';
-          job[providerKey] = { status: result.success ? 'SUCCESS' : 'FAILED', ...result };
+          job[providerKey] = { ...result, status: result.status || (result.success ? 'SUCCESS' : 'FAILED') };
           job.success = Boolean(result.success);
         }
         job.status = 'COMPLETED';
       } catch (error) {
         job.status = 'FAILED';
-        job.error = error.message || 'GPS synchronization failed.';
+        job.errorCode = getSafeSyncErrorCode(error);
       } finally {
         job.completedAt = new Date().toISOString();
         setTimeout(() => gpsSyncJobs.delete(jobId), GPS_SYNC_JOB_TTL_MS);
@@ -471,9 +481,10 @@ router.post('/sync/:provider', gpsSyncLimiter, requireRole('Admin'), async (req,
       message: 'GPS synchronization started. Poll the synchronization status for provider results.',
     });
   } catch (error) {
-    console.error('[Provider Sync Error]:', error);
+    console.error('[Provider Sync Error]:', getSafeSyncErrorCode(error));
     res.status(502).json({
-      error: error.message || 'Provider GPS synchronization failed.',
+      error: 'Provider GPS synchronization failed.',
+      errorCode: getSafeSyncErrorCode(error),
     });
   }
 });
@@ -493,11 +504,10 @@ router.post('/trigger-sync', gpsSyncLimiter, requireRole('Admin'), async (req, r
       ...result,
     });
   } catch (error) {
-    console.error('[Trigger GPS Sync Error]:', error);
+    console.error('[Trigger GPS Sync Error]:', getSafeSyncErrorCode(error));
     res.status(502).json({
-      error: error.message || 'GPS synchronization failed.',
-      provider: error.provider || null,
-      providerStatus: error.providerStatus || null,
+      error: 'GPS synchronization failed.',
+      errorCode: getSafeSyncErrorCode(error),
     });
   }
 });
@@ -565,7 +575,7 @@ router.get('/live-vehicles', async (req, res) => {
         readableTime,
         readableLocation: location.latitude !== null && location.longitude !== null &&
           (location.latitude !== 0 || location.longitude !== 0)
-          ? getReadableLocation(location.latitude, location.longitude, snapshot.plants)
+          ? location.address || getReadableLocation(location.latitude, location.longitude, snapshot.plants)
           : 'N/A',
         gps_status: location.gpsStatus,
         connectionStatus: location.connectionStatus,
@@ -642,7 +652,7 @@ router.get('/live-vehicles', async (req, res) => {
       vehicles: liveVehicles,
     });
   } catch (error) {
-    console.error('[Live Vehicles Error]:', error);
+    console.error('[Live Vehicles Error]:', getSafeSyncErrorCode(error));
     res.status(500).json({ error: 'Failed to retrieve live telemetry vehicles.' });
   }
 });

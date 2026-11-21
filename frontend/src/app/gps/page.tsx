@@ -474,8 +474,8 @@ function GpsPageContent() {
         status?: string;
         message?: string;
         success?: boolean;
-        wheelseye?: { successCount?: number; failedCount?: number };
-        fleetx?: { successCount?: number; failedCount?: number };
+        wheelseye?: { successCount?: number; failedCount?: number; receivedCount?: number; matchedCount?: number; savedCount?: number };
+        fleetx?: { successCount?: number; failedCount?: number; receivedCount?: number; matchedCount?: number; savedCount?: number };
       }>(`/gps/sync/${encodeURIComponent(providerParam)}`, {
         method: 'POST',
         timeoutMs: 10000,
@@ -491,26 +491,38 @@ function GpsPageContent() {
         const job = await apiRequest<{
           status: 'RUNNING' | 'COMPLETED' | 'FAILED';
           provider?: 'ALL' | 'WHEELSEYE' | 'FLEETX';
-          wheelseye?: { status?: string; successCount?: number; failedCount?: number; error?: string };
-          fleetx?: { status?: string; successCount?: number; failedCount?: number; error?: string };
-          error?: string;
+          wheelseye?: { status?: string; receivedCount?: number; matchedCount?: number; savedCount?: number; successCount?: number; failedCount?: number; errorCode?: string; failureReasons?: Record<string, number> };
+          fleetx?: { status?: string; receivedCount?: number; matchedCount?: number; savedCount?: number; successCount?: number; failedCount?: number; errorCode?: string; failureReasons?: Record<string, number> };
+          errorCode?: string;
         }>(`/gps/sync-job/${encodeURIComponent(result.jobId)}`, {
           timeoutMs: 10000,
         });
         if (job.status === 'RUNNING') continue;
 
+        const getProviderSummary = (
+          label: string,
+          details: typeof job.wheelseye | typeof job.fleetx | undefined,
+        ) => {
+          if (!details) return '';
+          const counts = `${details.receivedCount ?? 0} received, ${details.matchedCount ?? 0} matched, ${details.savedCount ?? details.successCount ?? 0} saved`;
+          const reasons = Object.entries(details.failureReasons || {})
+            .map(([code, count]) => `${code} (${count})`)
+            .join(', ');
+          if (details.status === 'FAILED') {
+            return `${label}: FAILED${details.errorCode ? ` (${details.errorCode})` : reasons ? ` (${reasons})` : ''}; ${counts}`;
+          }
+          return `${label}: ${counts}${details.failedCount ? `, ${details.failedCount} failed${reasons ? ` (${reasons})` : ''}` : ''}`;
+        };
         const wheelsMessage = job.provider !== 'FLEETX'
-          ? (job.wheelseye?.status === 'SUCCESS'
-            ? `WheelsEye synchronized ${job.wheelseye.successCount ?? 0} vehicles`
-            : `WheelsEye failed${job.wheelseye?.error ? `: ${job.wheelseye.error}` : ''}`)
+          ? getProviderSummary('WheelsEye', job.wheelseye)
           : '';
         const fleetxMessage = job.provider !== 'WHEELSEYE'
-          ? (job.fleetx?.status === 'SUCCESS'
-            ? `FleetX synchronized ${job.fleetx.successCount ?? 0} vehicles`
-            : `FleetX failed${job.fleetx?.error ? `: ${job.fleetx.error}` : ''}`)
+          ? getProviderSummary('FleetX', job.fleetx)
           : '';
+        const providerFailed = [job.wheelseye, job.fleetx]
+          .some((details) => details?.status === 'FAILED' || details?.status === 'PARTIAL');
         setAlert({
-          type: job.status === 'COMPLETED' ? 'success' : 'error',
+          type: job.status === 'COMPLETED' && !providerFailed ? 'success' : 'error',
           message: [wheelsMessage, fleetxMessage].filter(Boolean).join('. ') + '.',
         });
         await Promise.all([fetchLiveVehicles(false), fetchGpsSetting()]);

@@ -10,9 +10,11 @@ const DriverPlantRecord = require('../models/DriverPlantRecord');
 const DriverLocation = require('../models/DriverLocation');
 const GpsSetting = require('../models/GpsSetting');
 const GpsSyncLog = require('../models/GpsSyncLog');
+const VehicleLocation = require('../models/VehicleLocation');
 const { GPS_STALE_THRESHOLD_MS } = require('../config/gps');
 const { getFleetGpsSnapshot } = require('./gpsDataService');
-const { getReadableLocation } = require('./locationHelper');
+const { getReadableLocation, isReadableProviderAddress } = require('./locationHelper');
+const { reverseGeocode } = require('./reverseGeocodeService');
 const { generateFleetReport } = require('./reportCalculationService');
 const {
   MAX_GPS_GAP_MS,
@@ -136,6 +138,10 @@ function formatIstTimestamp(value) {
   }).formatToParts(date);
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${values.day}-${values.month}-${values.year} ${values.hour}:${values.minute}`;
+}
+
+function formatLocationTimestamp(value) {
+  return formatIstTimestamp(value).replace(/^(\d{2}-\d{2}-\d{4}) /, '$1, ');
 }
 
 function providerLabel(provider) {
@@ -322,7 +328,7 @@ function recognizeQuestion(question, now = new Date()) {
   if (hasKeyword(question, ['daily report', 'gps report', 'report', 'रिपोर्ट']) && vehicleNumber) {
     return { tool: 'get_daily_report', args: { vehicleNumber, ...dateArgs }, language };
   }
-  if (hasKeyword(question, ['plan', 'trip plan', 'next trip']) && vehicleNumber) {
+  if ((hasKeyword(question, ['trip plan', 'next trip', 'plan details']) || hasWord(question, ['plan'])) && vehicleNumber) {
     return { tool: 'get_vehicle_plans', args: { vehicleNumber }, language };
   }
   if (hasKeyword(question, ['entry', 'exit', 'entered', 'exited', 'arrival', 'departure', 'visit', 'left', 'leave', 'nikli', 'nikla', 'bahar nikli', 'बाहर निकली', 'निकली', 'निकला']) ||
@@ -362,10 +368,10 @@ function recognizeQuestion(question, now = new Date()) {
       hasKeyword(question, ['vehicle', 'vehicles', 'fleet', 'gaadi', 'गाड़ी'])) {
     return { tool: 'get_fleet_status', args: {}, language, liveQuery: true };
   }
-  if (vehicleNumber && hasKeyword(question, ['stay', 'hours', 'ghante', 'ghanta', 'kitni der', 'कितने घंटे', 'कितनी देर'])) {
+  if (vehicleNumber && hasKeyword(question, ['details', 'detail', 'full info', 'more info', 'stay', 'hours', 'ghante', 'ghanta', 'kitni der', 'कितने घंटे', 'कितनी देर'])) {
     return dateRange
       ? { tool: 'get_daily_report', args: { vehicleNumber, ...dateArgs }, language }
-      : { tool: 'get_vehicle_location', args: { vehicleNumber, provider }, language, liveQuery: true };
+      : { tool: 'get_vehicle_details', args: { vehicleNumber, provider }, language, liveQuery: true };
   }
   const hasPastDate = Boolean(dateRange && !dateRange.error && !dateRange.clarification);
   if (vehicleNumber && (hasKeyword(question, ['history', 'historical', 'where was', 'location on', 'location at', 'gps trail', 'route history', 'kahan thi', 'kahan tha', 'कहाँ थी', 'कहाँ था']) || hasPastDate)) {
@@ -423,6 +429,83 @@ function gpsIsFresh(timestamp, now) {
     now.getTime() - gpsDate.getTime() <= GPS_STALE_THRESHOLD_MS);
 }
 
+function getSafeGeocoderErrorCode(error) {
+  const status = Number(error?.response?.status);
+  if (Number.isInteger(status) && status >= 100 && status <= 599) return `HTTP_${status}`;
+  const code = String(error?.code || '').toUpperCase();
+  if (/^[A-Z0-9_]{2,40}$/.test(code)) return code;
+  if (/timeout/i.test(String(error?.message || ''))) return 'REQUEST_TIMEOUT';
+  return 'GEOCODER_UNAVAILABLE';
+}
+
+function getSafeSyncErrorCode(error) {
+  const status = Number(error?.response?.status);
+  if (Number.isInteger(status) && status >= 100 && status <= 599) return `HTTP_${status}`;
+  const code = String(error?.code || '').toUpperCase();
+  if (/^[A-Z0-9_]{2,40}$/.test(code)) return code;
+  if (/timeout/i.test(String(error?.message || ''))) return 'REQUEST_TIMEOUT';
+  return 'SYNC_FAILED';
+}
+
+async function getReadableVehicleAddress({ location, item, vehicle, plants, provider, gpsTimestamp, plantStatus, plantName }) {
+  if (plantStatus === 'Inside' && plantName) return plantName;
+  const providerAddress = location.address || item.address || '';
+  let address = isReadableProviderAddress(providerAddress) ? providerAddress.trim() : '';
+  if (!address) {
+    try {
+      address = await reverseGeocode(location.latitude, location.longitude) || '';
+    } catch (error) {
+      console.warn('[Sikka AI] Reverse geocoding unavailable:', getSafeGeocoderErrorCode(error));
+    }
+  }
+  if (!address) {
+    address = getReadableLocation(location.latitude, location.longitude, plants);
+  }
+
+  const providerPattern = /fleetx/i.test(String(provider || '')) ? /fleetx/i : /wheels.?eye/i;
+  const timestamp = new Date(gpsTimestamp);
+  await Promise.all([
+    GpsHistory.updateOne(
+      { vehicleId: vehicle._id, provider: providerPattern, gpsTimestamp: timestamp },
+      { $set: { address } }
+    ),
+    VehicleLocation.updateOne(
+      { vehicleId: vehicle._id, provider: providerPattern, gpsDateTime: timestamp },
+      { $set: { address } }
+    ),
+    VehicleCurrentStatus.updateOne(
+      { vehicleId: vehicle._id, provider: providerPattern, archived: { $ne: true } },
+      { $set: { address } }
+    ),
+  ]);
+  return address;
+}
+
+async function needsAiGpsSync(intent, now = new Date()) {
+  const syncableTools = new Set([
+    'get_vehicle_location',
+    'get_vehicle_details',
+    'get_plant_availability',
+    'get_fleet_status',
+    'get_registered_vehicles',
+  ]);
+  if (!intent?.liveQuery || !syncableTools.has(intent.tool)) return false;
+  if (intent.args?.vehicleNumber) {
+    const resolution = await resolveVehicleReference(intent.args.vehicleNumber);
+    if (resolution.status !== 'matched') return false;
+    const snapshot = await getFleetGpsSnapshot({ allowPartial: true });
+    const item = snapshot.fleet.find((entry) => String(entry.vehicle._id) === String(resolution.vehicle._id));
+    if (!item) return true;
+    const location = intent.args.provider
+      ? item.providerLocations.find((entry) => providerLabel(entry.provider) === providerLabel(intent.args.provider))
+      : item;
+    const timestamp = location?.providerTimestamp || item.gpsTimestamp;
+    return !gpsIsFresh(timestamp, now);
+  }
+  const snapshot = await getFleetGpsSnapshot({ allowPartial: true });
+  return !gpsIsFresh(snapshot.lastUpdated, now);
+}
+
 async function getCurrentVehicleLocation({ vehicleNumber, provider }) {
   const vehicle = await findRegisteredVehicle(vehicleNumber);
   if (!vehicle) return { message: NOT_REGISTERED_MESSAGE };
@@ -432,7 +515,7 @@ async function getCurrentVehicleLocation({ vehicleNumber, provider }) {
   if (!item) {
     return { message: UNAVAILABLE_MESSAGE, vehicleNumber: vehicle.vehicleNumber };
   }
-  const location = provider
+  let location = provider
     ? item.providerLocations.find((entry) => providerLabel(entry.provider) === providerLabel(provider))
     : item;
   if (!location?.hasGps ||
@@ -441,17 +524,63 @@ async function getCurrentVehicleLocation({ vehicleNumber, provider }) {
       (location.latitude === 0 && location.longitude === 0)) {
     return { message: UNAVAILABLE_MESSAGE, vehicleNumber: vehicle.vehicleNumber };
   }
-  const gpsTimestamp = location.providerTimestamp || item.gpsTimestamp;
+  let gpsTimestamp = location.providerTimestamp || item.gpsTimestamp;
+  let usedPastFix = false;
+  const timestampDate = gpsTimestamp ? new Date(gpsTimestamp) : null;
+  if (!timestampDate || !Number.isFinite(timestampDate.getTime()) || timestampDate.getTime() > Date.now()) {
+    const pastFixQuery = {
+      vehicleId: vehicle._id,
+      archived: { $ne: true },
+      gpsTimestamp: { $lte: new Date() },
+    };
+    if (provider === 'FLEETX') pastFixQuery.provider = /fleetx/i;
+    if (provider === 'WHEELSEYE') pastFixQuery.provider = /wheels.?eye/i;
+    const pastFix = await GpsHistory.findOne(pastFixQuery)
+      .sort({ gpsTimestamp: -1 })
+      .lean();
+    if (!pastFix) return { message: UNAVAILABLE_MESSAGE, vehicleNumber: vehicle.vehicleNumber };
+    usedPastFix = true;
+    location = {
+      ...location,
+      provider: pastFix.provider,
+      providerTimestamp: pastFix.gpsTimestamp,
+      latitude: pastFix.latitude,
+      longitude: pastFix.longitude,
+      address: pastFix.address || '',
+      status: pastFix.geofence_status === 'INSIDE'
+        ? 'Inside'
+        : pastFix.geofence_status === 'OUTSIDE' ? 'Outside' : 'Unknown',
+      plantName: pastFix.plantName || null,
+      speed: pastFix.speed ?? null,
+      ignition: pastFix.ignition ?? null,
+      movementStatus: Number(pastFix.speed) > 0 ? 'Moving' : Number(pastFix.speed) === 0 ? 'Stopped' : 'Unknown',
+      stayHours: null,
+      outsideSince: null,
+      outsideHours: null,
+      gpsStatus: 'GPS STALE',
+      isStale: true,
+    };
+    gpsTimestamp = pastFix.gpsTimestamp;
+  }
   const isFresh = !location.isStale && gpsIsFresh(gpsTimestamp, new Date());
-  const plantStatus = location.status === 'Inside' || (!provider && item.status === 'Inside')
+  const plantStatus = location.status === 'Inside' || (!provider && !usedPastFix && item.status === 'Inside')
     ? 'Inside'
-    : location.status === 'Outside' || (!provider && item.status === 'Outside')
+    : location.status === 'Outside' || (!provider && !usedPastFix && item.status === 'Outside')
       ? 'Outside'
       : 'Unknown';
   const plantName = plantStatus === 'Inside'
-    ? location.plantName || item.plantName || null
+    ? location.plantName || (!usedPastFix ? item.plantName : null) || null
     : null;
-  const readableLocation = getReadableLocation(location.latitude, location.longitude, snapshot.plants);
+  const readableLocation = await getReadableVehicleAddress({
+    location,
+    item,
+    vehicle,
+    plants: snapshot.plants,
+    provider: location.provider || item.provider,
+    gpsTimestamp,
+    plantStatus,
+    plantName,
+  });
   return {
     message: isFresh ? 'Latest saved GPS fix.' : 'GPS data is older than 30 minutes; showing the saved fix.',
     vehicleNumber: vehicle.vehicleNumber,
@@ -468,9 +597,9 @@ async function getCurrentVehicleLocation({ vehicleNumber, provider }) {
     speed: location.speed ?? null,
     ignition: location.ignition ?? null,
     movementStatus: location.movementStatus || (Number(location.speed) > 0 ? 'Moving' : Number(location.speed) === 0 ? 'Stopped' : 'Unknown'),
-    stayHours: location.stayHours || item.stayHours || null,
-    outsideSince: item.outsideSince || null,
-    outsideHours: item.outsideHours || null,
+    stayHours: location.stayHours || (!usedPastFix ? item.stayHours : null) || null,
+    outsideSince: usedPastFix ? null : item.outsideSince || null,
+    outsideHours: location.outsideHours || (!usedPastFix ? item.outsideHours : null) || null,
     gpsStatus: location.gpsStatus || item.gpsStatus || 'GPS DATA UNAVAILABLE',
     isStale: !isFresh,
   };
@@ -506,7 +635,7 @@ async function getVehicleHistory(args) {
     });
   }
   const records = await historyQuery
-    .select('provider latitude longitude speed ignition gpsTimestamp geofence_status plantId plantName')
+    .select('provider latitude longitude address speed ignition gpsTimestamp geofence_status plantId plantName')
     .sort(args.targetTime ? { gpsTimestamp: -1 } : { gpsTimestamp: 1 })
     .limit(args.targetTime ? 1 : MAX_HISTORY_RECORDS)
     .lean();
@@ -523,7 +652,11 @@ async function getVehicleHistory(args) {
       dataSource: providerLabel(record.provider),
       latitude: record.latitude,
       longitude: record.longitude,
-      location: getReadableLocation(record.latitude, record.longitude, plants),
+      location: record.geofence_status === 'INSIDE'
+        ? record.plantName || getReadableLocation(record.latitude, record.longitude, plants)
+        : isReadableProviderAddress(record.address)
+          ? record.address
+          : getReadableLocation(record.latitude, record.longitude, plants),
       speed: record.speed ?? null,
       ignition: record.ignition ?? null,
       gpsTimestamp: record.gpsTimestamp,
@@ -545,7 +678,7 @@ async function getRegisteredVehicles() {
     provider: item.provider,
     dataSource: providerLabel(item.provider),
     location: item.hasGps
-      ? getReadableLocation(item.latitude, item.longitude, snapshot.plants)
+      ? item.address || getReadableLocation(item.latitude, item.longitude, snapshot.plants)
       : null,
     latitude: item.latitude,
     longitude: item.longitude,
@@ -1021,18 +1154,27 @@ async function syncProviders(user, provider = null, vehicleNumber = null) {
     try {
       results = { [key]: await syncProviderGps({ provider: providerName, mode: 'MANUAL', caller }) };
     } catch (error) {
-      results = { [key]: { success: false, errorMessage: error.message || `${providerName} sync failed.` } };
+      results = { [key]: { success: false, status: 'FAILED', errorCode: getSafeSyncErrorCode(error) } };
     }
   }
-  const normalized = (result) => ({
-    status: result.failedCount > 0
-      ? result.successCount > 0 ? 'PARTIAL' : 'FAILED'
-      : result.success ? 'SUCCESS' : 'FAILED',
-    totalVehicles: Number(result.totalVehicles || 0),
-    successCount: Number(result.successCount || 0),
-    failedCount: Number(result.failedCount || 0),
-    completedAt: new Date().toISOString(),
-  });
+  const normalized = (result) => {
+    const savedCount = Number(result.savedCount ?? result.successCount ?? 0);
+    return {
+      status: result.status || (result.failedCount > 0
+        ? savedCount > 0 ? 'PARTIAL' : 'FAILED'
+        : result.success ? 'SUCCESS' : 'FAILED'),
+      totalVehicles: Number(result.totalVehicles || 0),
+      receivedCount: Number(result.receivedCount || 0),
+      matchedCount: Number(result.matchedCount || 0),
+      savedCount,
+      unchangedCount: Number(result.unchangedCount || 0),
+      successCount: savedCount,
+      failedCount: Number(result.failedCount || 0),
+      failureReasons: result.failureReasons || {},
+      errorCode: result.errorCode || null,
+      completedAt: new Date().toISOString(),
+    };
+  };
   return Object.fromEntries(Object.entries(results).map(([key, result]) => [key, normalized(result)]));
 }
 
@@ -1040,6 +1182,8 @@ async function executeToolCall(call, user) {
   const args = call?.args && typeof call.args === 'object' && !Array.isArray(call.args) ? call.args : {};
   switch (call?.name) {
     case 'get_vehicle_location':
+      return getCurrentVehicleLocation(args);
+    case 'get_vehicle_details':
       return getCurrentVehicleLocation(args);
     case 'get_vehicle_history':
       return getVehicleHistory(args);
@@ -1091,49 +1235,56 @@ function formatToolAnswer(results, language = 'en') {
   const result = results[results.length - 1];
   if (!result) return UNSUPPORTED_MESSAGE;
   const data = result.data || {};
-  const syncResults = data.syncResults || (result.tool === 'sync_gps_now' ? data : null);
-  const syncText = syncResults
-    ? Object.entries(syncResults).map(([name, provider]) =>
-        `${name.toLowerCase().includes('wheel') ? 'WheelsEye' : 'FleetX'}: ${provider.status || 'FAILED'} ` +
-        `(${provider.successCount || 0}/${provider.totalVehicles || 0} updated, ${provider.failedCount || 0} failed)`
-      ).join('; ')
-    : '';
-  const syncSucceeded = syncResults &&
-    Object.values(syncResults).some((provider) => ['SUCCESS', 'PARTIAL'].includes(provider.status));
   const location = data.location && typeof data.location === 'object' ? data.location : data;
-  const isVehicleLocation = Boolean(location.vehicleNumber && location.gpsTimestamp);
+  const isVehicleLocation = Boolean(
+    ['get_vehicle_location', 'get_vehicle_details'].includes(result.tool) &&
+    location.vehicleNumber &&
+    location.gpsTimestamp
+  );
   let answer = data.message || 'Verified database results are shown below.';
-  if (isVehicleLocation) {
-    const updateTime = formatIstTimestamp(location.gpsTimestamp);
+  if (result.tool === 'future_refusal') {
+    answer = localize(
+      language,
+      FUTURE_DATA_MESSAGE,
+      'भविष्य की वाहन लोकेशन उपलब्ध नहीं है। Sikka AI केवल वर्तमान और पुराने रिकॉर्ड दिखाता है।',
+      'Future vehicle location available nahi hai. Sikka AI sirf current aur purane records dikhata hai.'
+    );
+  } else if (isVehicleLocation) {
+    const updateTime = formatLocationTimestamp(location.gpsTimestamp);
     const place = location.plantStatus === 'Inside'
-      ? `${location.plantName || 'Plant'}`
-      : location.plantStatus === 'Outside'
-        ? `Outside (${location.location || 'location not available'})`
-        : location.location || 'record not available';
-    const details = language === 'en'
-      ? [
-          `**${location.vehicleNumber}** — ${place}.`,
-          `Source: ${location.dataSource || providerLabel(location.provider)}; last GPS update: ${updateTime} (Asia/Kolkata).`,
-          `Coordinates: ${location.latitude}, ${location.longitude}; speed: ${location.speed ?? 'record not available'}; ignition: ${location.ignition ?? 'record not available'}.`,
-          location.stayHours ? `Plant stay: ${location.stayHours}.` : '',
-          location.outsideHours ? `Outside: ${location.outsideHours}${location.outsideSince ? ` since ${formatIstTimestamp(location.outsideSince)}` : ''}.` : '',
-        ]
-      : [
-          `**${location.vehicleNumber}** — ${place}.`,
-          localize(language,
-            `Source: ${location.dataSource || providerLabel(location.provider)}; last GPS update: ${updateTime} (Asia/Kolkata).`,
-            `स्रोत: ${location.dataSource || providerLabel(location.provider)}; अंतिम GPS अपडेट: ${updateTime} (Asia/Kolkata)।`,
-            `Source: ${location.dataSource || providerLabel(location.provider)}; last GPS update: ${updateTime} (Asia/Kolkata).`),
-          localize(language,
-            `Coordinates: ${location.latitude}, ${location.longitude}; speed: ${location.speed ?? 'record not available'}; ignition: ${location.ignition ?? 'record not available'}.`,
-            `निर्देशांक: ${location.latitude}, ${location.longitude}; गति: ${location.speed ?? 'record not available'}; ignition: ${location.ignition ?? 'record not available'}।`,
-            `Coordinates: ${location.latitude}, ${location.longitude}; speed: ${location.speed ?? 'record not available'}; ignition: ${location.ignition ?? 'record not available'}.`),
-          location.stayHours ? localize(language, `Plant stay: ${location.stayHours}.`, `प्लांट में समय: ${location.stayHours}।`, `Plant mein stay: ${location.stayHours}.`) : '',
-          location.outsideHours ? localize(language, `Outside: ${location.outsideHours}${location.outsideSince ? ` since ${formatIstTimestamp(location.outsideSince)}` : ''}.`, `बाहर का समय: ${location.outsideHours}${location.outsideSince ? `, ${formatIstTimestamp(location.outsideSince)} से` : ''}।`, `Bahar ka time: ${location.outsideHours}${location.outsideSince ? `, ${formatIstTimestamp(location.outsideSince)} se` : ''}.`) : '',
-        ];
-    answer = details.filter(Boolean).join(' ');
-  } else if (result.tool === 'get_vehicle_location' && data.vehicleNumber) {
-    answer = `${data.vehicleNumber}: ${data.message || UNAVAILABLE_MESSAGE} Source: record not available; last GPS update: record not available.`;
+      ? location.plantName || UNAVAILABLE_MESSAGE
+      : location.location || UNAVAILABLE_MESSAGE;
+    const compactAnswer = language === 'hi'
+      ? `अंतिम अपडेट: ${updateTime}\nवाहन: ${location.vehicleNumber}\nलोकेशन: ${place}`
+      : `Last Update: ${updateTime}\nVehicle: ${location.vehicleNumber}\nLocation: ${place}`;
+    if (result.tool === 'get_vehicle_location') {
+      answer = compactAnswer;
+    } else {
+      const details = language === 'hi'
+        ? [
+            `स्रोत: ${location.dataSource || providerLabel(location.provider)}`,
+            `गति: ${location.speed ?? 'record not available'}`,
+            `Ignition: ${location.ignition ?? 'record not available'}`,
+            `निर्देशांक: ${location.latitude}, ${location.longitude}`,
+            `प्लांट में समय: ${location.stayHours || 'record not available'}`,
+            `बाहर का समय: ${location.outsideHours || 'record not available'}`,
+          ]
+        : [
+            `Source: ${location.dataSource || providerLabel(location.provider)}`,
+            `Speed: ${location.speed ?? 'record not available'}`,
+            `Ignition: ${location.ignition ?? 'record not available'}`,
+            `Coordinates: ${location.latitude}, ${location.longitude}`,
+            `Plant stay: ${location.stayHours || 'record not available'}`,
+            `Outside hours: ${location.outsideHours || 'record not available'}`,
+          ];
+      answer = `${compactAnswer}\n\n${details.join('\n')}`;
+    }
+  } else if (['get_vehicle_location', 'get_vehicle_details'].includes(result.tool)) {
+    answer = data.message === NOT_REGISTERED_MESSAGE
+      ? NOT_REGISTERED_MESSAGE
+      : UNAVAILABLE_MESSAGE;
+  } else if (result.tool === 'sync_gps_now') {
+    answer = localize(language, 'GPS sync finished. See More details for provider results.', 'GPS sync पूरा हुआ। Provider नतीजों के लिए More details देखें।', 'GPS sync complete hua. Provider results ke liye More details dekhein.');
   } else if (result.tool === 'get_plant_availability') {
     const availability = data.plantAvailability || [];
     answer = availability.length
@@ -1205,7 +1356,7 @@ function formatToolAnswer(results, language = 'en') {
     );
   } else if (result.tool === 'get_vehicle_history' && Array.isArray(data.records) && data.records.length) {
     const records = data.records.slice(0, 5).map((record) =>
-      `${record.dataSource || providerLabel(record.provider)} ${formatIstTimestamp(record.gpsTimestamp)} (${record.plantStatus?.plantName || record.location || `${record.latitude}, ${record.longitude}`})`
+      `${record.dataSource || providerLabel(record.provider)} ${formatIstTimestamp(record.gpsTimestamp)} (${record.plantStatus?.plantName || record.location || UNAVAILABLE_MESSAGE})`
     ).join('; ');
     answer = localize(
       language,
@@ -1217,27 +1368,35 @@ function formatToolAnswer(results, language = 'en') {
       answer += localize(language, `; and ${data.records.length - 5} more.`, `; और ${data.records.length - 5} रिकॉर्ड।`, `; aur ${data.records.length - 5} records.`);
     }
   }
-  if (syncText) {
-    const successNote = syncSucceeded
-      ? localize(language, 'Sync completed just now.', 'Sync अभी पूरा हुआ।', 'Sync abhi complete hua.')
-      : '';
-    const prefix = localize(
-      language,
-      `${successNote} GPS sync result: ${syncText}.`,
-      `${successNote} GPS sync का परिणाम: ${syncText}.`,
-      `${successNote} GPS sync result: ${syncText}.`
-    );
-    answer = `${prefix} ${answer}`;
-  }
-  if (data.aiSyncCooldown) {
-    answer += localize(
-      language,
-      ' A Sikka AI sync was already started in the last two minutes; showing saved records.',
-      ' पिछले दो मिनट में Sikka AI sync चल चुका है; यहाँ saved records दिखाए गए हैं।',
-      ' Pichhle 2 minutes mein Sikka AI sync chal chuka hai; saved records dikhaye gaye hain.'
-    );
-  }
   return answer;
+}
+
+function getSyncNotice(results, language = 'en') {
+  const result = results?.[results.length - 1];
+  const data = result?.data || {};
+  if (data.aiSyncCooldown) {
+    return localize(
+      language,
+      'Live sync skipped. Showing the saved update.',
+      'लाइव सिंक नहीं किया गया। सेव्ड अपडेट दिखा रहे हैं।',
+      'Live sync skip hua. Saved update dikha rahe hain.'
+    );
+  }
+  const syncResults = data.syncResults || (result?.tool === 'sync_gps_now' ? data : null);
+  if (!syncResults) return null;
+  const failedProviders = Object.entries(syncResults)
+    .filter(([name, provider]) =>
+      /wheel|fleetx/i.test(name) && ['FAILED', 'PARTIAL'].includes(provider?.status)
+    )
+    .map(([name]) => name.toLowerCase().includes('wheel') ? 'WheelsEye' : 'FleetX');
+  if (!failedProviders.length) return null;
+  const providers = [...new Set(failedProviders)].join(' and ');
+  return localize(
+    language,
+    `Live sync failed${providers ? ` (${providers})` : ''}. Showing last saved update.`,
+    `लाइव सिंक${providers ? ` (${providers})` : ''} नहीं हुआ। आखिरी सेव्ड अपडेट दिखा रहे हैं।`,
+    `Live sync${providers ? ` (${providers})` : ''} fail hua. Aakhri saved update dikha rahe hain.`
+  );
 }
 
 module.exports = {
@@ -1251,10 +1410,13 @@ module.exports = {
   extractDateRange,
   extractVehicleToken,
   resolveVehicleReference,
+  gpsIsFresh,
   getSuggestions,
   localize,
   hasFuzzyKeyword,
   recognizeQuestion,
+  needsAiGpsSync,
   executeToolCall,
   formatToolAnswer,
+  getSyncNotice,
 };

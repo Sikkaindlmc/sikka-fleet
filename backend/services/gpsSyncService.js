@@ -16,7 +16,8 @@ const {
   calculateStayDuration,
   isValidFreshGpsTimestamp,
 } = require('./geofenceService');
-const { getReadableLocation } = require('./locationHelper');
+const { getReadableLocation, isReadableProviderAddress } = require('./locationHelper');
+const { reverseGeocode } = require('./reverseGeocodeService');
 const { isSafeExternalUrl } = require('../utils/security');
 const { executeAutomatedDriverAssignment } = require('./driverMatchingService');
 const {
@@ -40,6 +41,27 @@ const {
 
 const DEFAULT_WHEELSEYE_URL = (process.env.WHEELSEYE_API_URL || DEFAULT_PROVIDER_URLS.wheelseye).trim();
 const WHEELSEYE_PROVIDER = 'WheelsEye GPS';
+
+function getSafeSyncErrorCode(error) {
+  const status = Number(error?.response?.status);
+  if (Number.isInteger(status) && status >= 100 && status <= 599) return `HTTP_${status}`;
+  const code = String(error?.code || '').toUpperCase();
+  if (/^[A-Z0-9_]{2,40}$/.test(code)) return code;
+  if (/timeout/i.test(String(error?.message || ''))) return 'REQUEST_TIMEOUT';
+  return 'SYNC_FAILED';
+}
+
+async function getProviderReadableAddress(latitude, longitude, plants, plantName, providerAddress) {
+  if (plantName) return plantName;
+  if (isReadableProviderAddress(providerAddress)) return providerAddress.trim();
+  try {
+    const address = await reverseGeocode(latitude, longitude);
+    if (address) return address;
+  } catch (error) {
+    console.warn('[GPS geocoder] Reverse lookup unavailable:', getSafeSyncErrorCode(error));
+  }
+  return getReadableLocation(latitude, longitude, plants);
+}
 
 function buildProviderSettingQuery() {
   return {
@@ -259,7 +281,7 @@ async function releaseDistributedLock() {
     );
     activeLockOwners.delete(lockId);
   } catch (err) {
-    console.warn('[Distributed Lock Release Warning]:', err.message);
+    console.warn('[Distributed Lock Release Warning]:', getSafeSyncErrorCode(err));
   }
 }
 
@@ -650,7 +672,9 @@ async function runWheelsEyeGpsSync({
         authFailed: err.response?.status === 401 || err.response?.status === 403,
         credentialSource: 'none',
       };
-      apiStatus = `ERROR: ${err.message}`;
+      const errorCode = getSafeSyncErrorCode(err);
+      providerStatus.error = errorCode;
+      apiStatus = `ERROR: ${errorCode}`;
     }
 
     const syncTime = new Date();
@@ -658,7 +682,8 @@ async function runWheelsEyeGpsSync({
     // 5. API Failure Handling (Requirement 5 & 19):
     // DO NOT mark vehicles outside! DO NOT overwrite valid previous coordinates with null/zeros!
     if (fetchError) {
-      console.error(`[GPS Sync API Failure] (${gpsProvider}, ${source}): ${fetchError.message}`);
+      const errorCode = getSafeSyncErrorCode(fetchError);
+      console.error(`[GPS Sync API Failure] (${gpsProvider}, ${source}): ${errorCode}`);
 
       await GpsSetting.findOneAndUpdate(
         buildProviderSettingQuery(),
@@ -667,7 +692,7 @@ async function runWheelsEyeGpsSync({
             provider: gpsProvider,
             connectionStatus: providerStatus.authFailed ? 'AUTH_FAILED' : 'Connection Failed',
             last_sync_status: 'FAILED',
-            lastError: providerStatus.error || fetchError.message,
+            lastError: errorCode,
             lastErrorAt: syncTime,
             lastErrorCode: providerStatus.status,
             lastCredentialSource: providerStatus.credentialSource || 'none',
@@ -686,7 +711,7 @@ async function runWheelsEyeGpsSync({
         syncLogDoc.completedAt = completedAt;
         syncLogDoc.executionTimeMs = durationMs;
         syncLogDoc.apiResponseStatus = apiStatus;
-        syncLogDoc.errorMessage = fetchError.message;
+        syncLogDoc.errorMessage = errorCode;
         syncLogDoc.nextScheduledSyncAt = nextSlot;
         await syncLogDoc.save();
       }
@@ -694,11 +719,11 @@ async function runWheelsEyeGpsSync({
         cronLogDoc.status = 'FAILED';
         cronLogDoc.completedAt = completedAt;
         cronLogDoc.durationMs = durationMs;
-        cronLogDoc.errorDetails = fetchError.message;
+        cronLogDoc.errorDetails = errorCode;
         await cronLogDoc.save();
       }
 
-      const syncError = new Error(`${gpsProvider} API request failed: ${fetchError.message}`);
+      const syncError = new Error(`${gpsProvider} API request failed: ${errorCode}`);
       syncError.provider = gpsProvider;
       syncError.providerStatus = providerStatus;
       throw syncError;
@@ -773,6 +798,9 @@ async function runWheelsEyeGpsSync({
             provider: item.provider,
             latitude: item.latitude,
             longitude: item.longitude,
+            address: historyPlantEval.isInside
+              ? historyPlantEval.plantName || ''
+              : isReadableProviderAddress(item.address) ? item.address.trim() : '',
             speed: rawSpeed ?? null,
             ignition: rawIgnition ?? null,
             gpsTimestamp: item.timestamp,
@@ -823,7 +851,6 @@ async function runWheelsEyeGpsSync({
       const speed = item.speed;
       const ignition = item.ignition;
       const movementStatus = item.movementStatus || null;
-      const address = item.address || (hasCoordinates ? getReadableLocation(lat, lon, activePlants) : '');
 
       // Geofence & Plant Status Calculation using SINGLE SOURCE OF TRUTH (geofenceService)
       const currentStatus = await VehicleCurrentStatus.findOne({
@@ -866,6 +893,13 @@ async function runWheelsEyeGpsSync({
       const geofenceStatus = isInside ? 'INSIDE' : 'OUTSIDE';
       const plantId = plantEval.plantId;
       const plantName = isInside ? plantEval.plantName : '';
+      const address = await getProviderReadableAddress(
+        lat,
+        lon,
+        activePlants,
+        plantName,
+        item.address
+      );
       const distanceMeter = plantEval.distanceMeter;
       const gpsFreshness = plantEval.gps_status;
 
@@ -913,7 +947,31 @@ async function runWheelsEyeGpsSync({
           providerTransitionTimestamp: item.providerTransitionTimestamp || null,
           vehicleNumberNormalized: normalizeVehicleNumber(vehicle.vehicleNumber),
         });
+      } else if (existingLocation) {
+        await VehicleLocation.updateOne(
+          { _id: existingLocation._id },
+          { $set: { address } }
+        );
       }
+
+      await GpsHistory.updateOne(
+        {
+          vehicleNumberNormalized: normalizeVehicleNumber(vehicle.vehicleNumber),
+          provider: item.provider || WHEELSEYE_PROVIDER,
+          gpsTimestamp: deviceTimestamp,
+        },
+        { $set: { address } }
+      );
+
+      vehicle.gps_latitude = lat;
+      vehicle.gps_longitude = lon;
+      vehicle.gps_speed = speed;
+      vehicle.gps_ignition_status = ignition === null || ignition === undefined
+        ? null
+        : ignition ? 'ON' : 'OFF';
+      vehicle.gps_location = address;
+      vehicle.gps_last_updated_at = deviceTimestamp;
+      await vehicle.save();
 
       const sessionResult = await reconcileZoneSession({
         vehicleId: vehicle._id,
@@ -1065,8 +1123,8 @@ async function runWheelsEyeGpsSync({
       });
       reportsRebuilt = true;
     } catch (error) {
-      reportRebuildError = error.message;
-      console.error('[GPS Report Rebuild Error]:', error);
+      reportRebuildError = getSafeSyncErrorCode(error);
+      console.error('[GPS Report Rebuild Error]:', getSafeSyncErrorCode(error));
     }
 
     // 8. Automated Driver-to-Vehicle Assignment using GPS Proximity
@@ -1074,7 +1132,7 @@ async function runWheelsEyeGpsSync({
     try {
       assignmentStats = await executeAutomatedDriverAssignment();
     } catch (assignmentErr) {
-      console.error('[GPS Sync Driver Assignment Error]:', assignmentErr.message);
+      console.error('[GPS Sync Driver Assignment Error]:', getSafeSyncErrorCode(assignmentErr));
     }
 
     // 9. Next scheduled 30-minute slot in Asia/Kolkata (IST)

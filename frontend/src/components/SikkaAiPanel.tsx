@@ -23,6 +23,7 @@ interface SikkaAiReply {
   answer: string;
   results: SikkaAiResult[];
   suggestions?: string[];
+  syncNotice?: string | null;
 }
 
 interface ChatMessage {
@@ -30,6 +31,7 @@ interface ChatMessage {
   text: string;
   results?: SikkaAiResult[];
   suggestions?: string[];
+  syncNotice?: string | null;
 }
 
 const QUICK_QUESTIONS = [
@@ -116,6 +118,7 @@ export default function SikkaAiPanel() {
         text: reply.answer,
         results: reply.results,
         suggestions: reply.suggestions,
+        syncNotice: reply.syncNotice,
       }]);
     } catch (requestError) {
       setError(
@@ -219,17 +222,17 @@ export default function SikkaAiPanel() {
                     }`}
                   >
                     <p className="whitespace-pre-wrap">{renderAnswerText(message.text)}</p>
+                    {message.syncNotice && (
+                      <p className="mt-2 text-xs font-medium text-amber-800">{message.syncNotice}</p>
+                    )}
                     {message.results?.map((result, resultIndex) => {
-                      const recordCount = Array.isArray(result.data.records)
-                        ? result.data.records.length
-                        : Array.isArray(result.data.vehicles)
-                          ? result.data.vehicles.length
-                          : null;
                       const locationRecord = result.data.location &&
                         typeof result.data.location === 'object' &&
                         'vehicleNumber' in result.data.location
                         ? result.data.location as Record<string, unknown>
-                        : null;
+                        : 'vehicleNumber' in result.data
+                          ? result.data
+                          : null;
                       const records = Array.isArray(result.data.vehicles)
                         ? result.data.vehicles as Array<Record<string, unknown>>
                         : locationRecord
@@ -237,9 +240,18 @@ export default function SikkaAiPanel() {
                           : 'vehicleNumber' in result.data
                             ? [result.data]
                             : [];
+                      const isLocationResult = result.tool === 'get_vehicle_location';
+                      const isVehicleResult = isLocationResult || result.tool === 'get_vehicle_details';
+                      const syncResults = result.tool === 'sync_gps_now'
+                        ? result.data
+                        : result.data.syncResults;
+                      const providerEntries = syncResults && typeof syncResults === 'object'
+                        ? Object.entries(syncResults as Record<string, Record<string, unknown>>)
+                            .filter(([key]) => /wheels|fleetx/i.test(key))
+                        : [];
                       return (
                         <div key={`${result.tool}-${resultIndex}`}>
-                          {records.slice(0, 30).map((record, recordIndex) => (
+                          {!isVehicleResult && records.slice(0, 30).map((record, recordIndex) => (
                             <div
                               key={`${String(record.vehicleNumber || recordIndex)}`}
                               className="mt-2 rounded-lg border border-indigo-100 bg-white px-3 py-2 text-xs text-slate-700"
@@ -250,14 +262,35 @@ export default function SikkaAiPanel() {
                               <p>Last GPS update: {formatIstTimestamp(record.gpsTimestamp)}</p>
                             </div>
                           ))}
-                          <details className="mt-2 text-xs">
-                            <summary className="cursor-pointer font-semibold text-indigo-800">
-                              Show verified data{recordCount === null ? '' : ` (${recordCount} records)`}
-                            </summary>
-                            <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-white p-2 text-[10px] leading-relaxed text-slate-700">
-                              {JSON.stringify(result.data, null, 2)}
-                            </pre>
-                          </details>
+                          {Boolean((isLocationResult && locationRecord?.gpsTimestamp) || providerEntries.length > 0) && (
+                            <details className="mt-2 text-xs">
+                              <summary className="cursor-pointer font-semibold text-indigo-800">More details</summary>
+                              {isLocationResult && Boolean(locationRecord?.gpsTimestamp) && locationRecord && (
+                                <div className="mt-2 space-y-1 rounded-lg bg-white p-2 text-slate-700">
+                                  <p>Source: {String(locationRecord.dataSource || locationRecord.provider || 'record not available')}</p>
+                                  <p>Speed: {String(locationRecord.speed ?? 'record not available')}</p>
+                                  <p>Ignition: {String(locationRecord.ignition ?? 'record not available')}</p>
+                                  <p>Coordinates: {String(locationRecord.latitude ?? 'record not available')}, {String(locationRecord.longitude ?? 'record not available')}</p>
+                                  <p>Plant stay: {String(locationRecord.stayHours ?? 'record not available')}</p>
+                                  <p>Outside hours: {String(locationRecord.outsideHours ?? 'record not available')}</p>
+                                </div>
+                              )}
+                              {providerEntries.length > 0 && (
+                                <div className="mt-2 space-y-2">
+                                  {providerEntries.map(([provider, details]) => (
+                                    <div key={provider} className="rounded-lg bg-white p-2 text-slate-700">
+                                      <p className="font-semibold">{/wheel/i.test(provider) ? 'WheelsEye' : 'FleetX'}: {String(details.status || 'FAILED')}</p>
+                                      <p>{String(details.receivedCount || 0)} received, {String(details.matchedCount || 0)} matched, {String(details.savedCount || 0)} saved, {String(details.failedCount || 0)} failed</p>
+                                      {typeof details.errorCode === 'string' && <p>Error: {details.errorCode}</p>}
+                                      {typeof details.failureReasons === 'object' && details.failureReasons !== null && (
+                                        <p>Failure reasons: {Object.entries(details.failureReasons as Record<string, number>).map(([code, count]) => `${code} (${count})`).join(', ') || 'none'}</p>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </details>
+                          )}
                         </div>
                       );
                     })}

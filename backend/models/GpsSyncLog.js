@@ -58,6 +58,14 @@ const gpsSyncLogSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    telemetryReceived: { type: Number, default: 0 },
+    vehiclesMatched: { type: Number, default: 0 },
+    vehiclesSaved: { type: Number, default: 0 },
+    unchangedCount: { type: Number, default: 0 },
+    failureReasons: {
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({}),
+    },
     plantEntriesRecorded: {
       type: Number,
       default: 0,

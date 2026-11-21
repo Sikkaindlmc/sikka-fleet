@@ -13,6 +13,15 @@ let cachedToken = null;
 let tokenExpiresAt = null;
 let tokenLoginPromise = null;
 
+function getSafeFleetxErrorCode(error) {
+  const status = Number(error?.response?.status);
+  if (Number.isInteger(status) && status >= 100 && status <= 599) return `HTTP_${status}`;
+  const code = String(error?.code || '').toUpperCase();
+  if (/^[A-Z0-9_]{2,40}$/.test(code)) return code;
+  if (/timeout/i.test(String(error?.message || ''))) return 'REQUEST_TIMEOUT';
+  return 'REQUEST_FAILED';
+}
+
 function normalizeFleetxVehicleNumber(number) {
   let value = String(number || '').toUpperCase().trim();
   value = value.replace(/\s*[_-]\s*CAM(?:ERA)?$/i, '').trim();
@@ -91,9 +100,9 @@ async function getFleetxToken(forceRefresh = false) {
     } catch (err) {
       cachedToken = null;
       tokenExpiresAt = null;
-      const msg = err.response?.data?.error_description || err.response?.data?.message || err.message;
-      console.error(`[FleetX Auth Error]: ${msg} (Status: ${err.response?.status || 'N/A'})`);
-      throw new Error(`FleetX Authentication Failed: ${msg}`);
+      const errorCode = getSafeFleetxErrorCode(err);
+      console.error(`[FleetX Auth Error]: ${errorCode}`);
+      throw new Error(`FleetX Authentication Failed: ${errorCode}`);
     } finally {
       tokenLoginPromise = null;
     }
@@ -207,8 +216,7 @@ async function fetchFleetxLiveTelemetry() {
       return list.map(normalizeFleetxVehicle).filter(Boolean);
     }
 
-    const msg = err.response?.data?.error_description || err.response?.data?.message || err.message;
-    throw new Error(`FleetX Live API error: ${msg}`);
+    throw new Error(`FleetX Live API error: ${getSafeFleetxErrorCode(err)}`);
   }
 }
 
@@ -284,7 +292,7 @@ async function fetchFleetxHistory({ vehicleId, from, to }) {
       const retryResponse = await fetchHistory(token);
       return retryResponse.data;
     }
-    throw new Error(`FleetX History API error: ${err.response?.data?.message || err.message}`);
+    throw new Error(`FleetX History API error: ${getSafeFleetxErrorCode(err)}`);
   }
 }
 

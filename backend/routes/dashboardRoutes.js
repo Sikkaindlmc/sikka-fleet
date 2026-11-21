@@ -406,7 +406,7 @@ router.get('/plants/:plantId/vehicles', async (req, res) => {
         const vehicle = item.vehicle;
         const status = item.storedStatus;
         const readableLoc = item.latitude !== null && item.longitude !== null
-          ? getReadableLocation(item.latitude, item.longitude, activePlants)
+          ? item.address || getReadableLocation(item.latitude, item.longitude, activePlants)
           : 'N/A';
         return {
           id: vehicle._id || `gps-unregistered-${item.vehicle.vehicleNumber}`,
@@ -721,7 +721,7 @@ router.post('/vehicles/:vehicleId/plan', async (req, res) => {
         }
       }
 
-      let location = statusDoc.readableLocation || statusDoc.location;
+      let location = statusDoc.readableLocation || statusDoc.location || statusDoc.address;
       if (!location && typeof statusDoc.latitude === 'number' && typeof statusDoc.longitude === 'number') {
         const { getReadableLocation } = require('../services/locationHelper');
         const activePlants = await Plant.find({ status: 'Active' });
@@ -850,7 +850,7 @@ router.delete('/vehicles/:vehicleId/plan', async (req, res) => {
       plantName = statusDoc.status === 'Outside' ? 'Outside' : 'Plant';
     }
 
-    let location = statusDoc.readableLocation || statusDoc.location;
+    let location = statusDoc.readableLocation || statusDoc.location || statusDoc.address;
     if (!location && typeof statusDoc.latitude === 'number' && typeof statusDoc.longitude === 'number') {
       const { getReadableLocation } = require('../services/locationHelper');
       const activePlants = await Plant.find({ status: 'Active' });
@@ -977,7 +977,7 @@ router.get('/outside/vehicles', async (req, res) => {
         movementStatus: status?.movementStatus || null,
         dataCheck: false,
         readableLocation: item.latitude !== null && item.longitude !== null
-          ? getReadableLocation(item.latitude, item.longitude, snapshot.plants)
+          ? item.address || getReadableLocation(item.latitude, item.longitude, snapshot.plants)
           : 'N/A',
         latest_gps_timestamp: item.gpsTimestamp,
         gps_status: item.gpsStatus,
@@ -1037,7 +1037,7 @@ router.get('/outside/drivers', async (req, res) => {
         );
 
         const key = dMobile || dName;
-        const readableLoc = getReadableLocation(st.latitude, st.longitude, activePlants);
+        const readableLoc = st.address || getReadableLocation(st.latitude, st.longitude, activePlants);
 
         driversMap.set(key, {
           id: matchedDriver ? matchedDriver._id : `veh-${v._id}`,
@@ -1208,7 +1208,7 @@ router.get('/plants/:plantId/export', async (req, res) => {
             : 'None';
 
         const readableLoc = typeof st.latitude === 'number' && typeof st.longitude === 'number'
-          ? getReadableLocation(st.latitude, st.longitude, activePlants)
+          ? st.address || getReadableLocation(st.latitude, st.longitude, activePlants)
           : 'N/A';
         const entryDate = st.lastEntryDateTime || null;
         const gpsDate = st.latest_gps_timestamp || null;

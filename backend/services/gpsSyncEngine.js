@@ -10,7 +10,8 @@ const { normalizeVehicleNumber } = require('./gpsTimelineService');
 const { fetchWheelseyeLiveTelemetry } = require('./wheelseyeService');
 const { fetchFleetxLiveTelemetry, normalizeFleetxVehicleNumber } = require('./fleetxService');
 const { getVehiclePlantStatus, calculateStayDuration } = require('./geofenceService');
-const { getReadableLocation } = require('./locationHelper');
+const { getReadableLocation, isReadableProviderAddress } = require('./locationHelper');
+const { reverseGeocode } = require('./reverseGeocodeService');
 const { updateVehicleCurrentStatus } = require('./vehicleCurrentStatusService');
 const { runGpsSyncExclusive } = require('./gpsSyncCoordinator');
 const { isVehicleAssignedToProvider } = require('../utils/gpsProvider');
@@ -18,13 +19,59 @@ const { evaluateGeofenceConfirmation } = require('./geofenceConfirmation');
 const { getZoneId, reconcileZoneSession } = require('./zoneSessionService');
 
 function normalizeNumber(num) {
-  return (num || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return String(num || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
 function getProviderSettingQuery(provider) {
   return provider === 'FLEETX'
     ? { $or: [{ provider: /fleetx/i }, { apiUrl: /fleetx/i }] }
     : { $or: [{ provider: /wheels/i }, { apiUrl: /wheelseye/i }] };
+}
+
+function getSafeErrorCode(error) {
+  const status = Number(error?.response?.status);
+  if (Number.isInteger(status) && status >= 100 && status <= 599) return `HTTP_${status}`;
+  const code = String(error?.code || '').toUpperCase();
+  if (/^[A-Z0-9_]{2,40}$/.test(code)) return code;
+  if (/timeout/i.test(String(error?.message || ''))) return 'REQUEST_TIMEOUT';
+  return 'SYNC_FAILED';
+}
+
+function recordFailure(failureReasons, code) {
+  failureReasons[code] = (failureReasons[code] || 0) + 1;
+}
+
+function sanitizeStoredError(value) {
+  const message = String(value || '').trim();
+  if (!message) return '';
+  if (/^[A-Z0-9_]{2,40}$/.test(message)) return message;
+  const status = message.match(/\bHTTP[_\s]+(\d{3})\b/i);
+  if (status) return `HTTP_${status[1]}`;
+  if (/timeout/i.test(message)) return 'REQUEST_TIMEOUT';
+  return 'SYNC_FAILED';
+}
+
+function getSyncOutcome({ fetchFailed, failedCount, savedCount, unchangedCount }) {
+  const status = fetchFailed
+    ? 'FAILED'
+    : failedCount === 0
+      ? 'SUCCESS'
+      : savedCount > 0 || unchangedCount > 0
+        ? 'PARTIAL'
+        : 'FAILED';
+  return { status, success: status !== 'FAILED' };
+}
+
+async function getProviderLocationText(latitude, longitude, plants, plantName, providerAddress) {
+  if (plantName) return plantName;
+  if (isReadableProviderAddress(providerAddress)) return providerAddress.trim();
+  try {
+    const address = await reverseGeocode(latitude, longitude);
+    if (address) return address;
+  } catch (error) {
+    console.warn('[GPS geocoder] Reverse lookup unavailable:', getSafeErrorCode(error));
+  }
+  return getReadableLocation(latitude, longitude, plants);
 }
 
 /**
@@ -88,7 +135,7 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
       { upsert: true, setDefaultsOnInsert: true }
     );
   } catch (settingError) {
-    console.warn(`[GPS Sync Engine] Could not mark ${targetProvider} as syncing:`, settingError.message);
+    console.warn(`[GPS Sync Engine] Could not mark ${targetProvider} as syncing: ${getSafeErrorCode(settingError)}`);
   }
 
   let telemetryItems = [];
@@ -102,8 +149,9 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
     }
   } catch (err) {
     fetchError = err;
-    console.error(`[GPS Sync Engine] Telemetry fetch failed for ${targetProvider}: ${err.message}`);
+    console.error(`[GPS Sync Engine] Telemetry fetch failed for ${targetProvider}: ${getSafeErrorCode(err)}`);
   }
+  const receivedCount = Array.isArray(telemetryItems) ? telemetryItems.length : 0;
 
   // Map telemetry items by normalized vehicle number
   const telemetryByNumber = new Map();
@@ -114,7 +162,7 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
           ? item.vehicleNumberCandidates
           : [item.vehicleNumber, item.vehicleName].filter(Boolean).map(normalizeFleetxVehicleNumber);
         for (const candidate of candidates) {
-          if (candidate) telemetryByNumber.set(candidate, item);
+          if (candidate) telemetryByNumber.set(normalizeNumber(candidate), item);
         }
       }
     }
@@ -122,11 +170,17 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
 
   let successCount = 0;
   let failedCount = 0;
+  let matchedCount = 0;
+  let unchangedCount = 0;
+  const failureReasons = {};
   const now = new Date();
 
   for (const vehicle of registeredVehicles) {
+    let failureCounted = false;
+    try {
     const cleanNum = normalizeNumber(vehicle.vehicleNumber);
     const telemetry = telemetryByNumber.get(cleanNum);
+    if (telemetry) matchedCount++;
 
     const providerName = targetProvider === 'FLEETX' ? 'FleetX' : 'WheelsEye GPS';
     const curStatus = await VehicleCurrentStatus.findOne({ vehicleId: vehicle._id });
@@ -139,14 +193,24 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
       .sort({ gpsTimestamp: -1 })
       .lean();
 
-    if (fetchError || !telemetry || telemetry.latitude === null || telemetry.longitude === null) {
+    const hasValidCoordinates = telemetry &&
+      Number.isFinite(telemetry.latitude) &&
+      Number.isFinite(telemetry.longitude) &&
+      telemetry.latitude >= -90 && telemetry.latitude <= 90 &&
+      telemetry.longitude >= -180 && telemetry.longitude <= 180 &&
+      !(telemetry.latitude === 0 && telemetry.longitude === 0);
+    if (fetchError || !telemetry || !hasValidCoordinates) {
       failedCount++;
-      const errorMsg = fetchError
-        ? `API Error: ${fetchError.message}`
-        : 'Vehicle not returned in GPS telematics stream';
+      failureCounted = true;
+      const errorCode = fetchError
+        ? getSafeErrorCode(fetchError)
+        : !telemetry
+          ? 'VEHICLE_NOT_RETURNED'
+          : 'INVALID_COORDINATES';
+      recordFailure(failureReasons, errorCode);
 
       vehicle.gps_sync_status = fetchError ? 'FAILED' : 'DATA_UNAVAILABLE';
-      vehicle.gps_error_message = errorMsg;
+      vehicle.gps_error_message = errorCode;
       await vehicle.save();
 
       await updateVehicleCurrentStatus(vehicle._id, {
@@ -168,8 +232,19 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
 
     if (!gpsTimestamp) {
       failedCount++;
+      failureCounted = true;
+      recordFailure(failureReasons, 'GPS_TIMESTAMP_MISSING');
       vehicle.gps_sync_status = 'DATA_UNAVAILABLE';
-      vehicle.gps_error_message = 'GPS record timestamp is missing';
+      vehicle.gps_error_message = 'GPS_TIMESTAMP_MISSING';
+      await vehicle.save();
+      continue;
+    }
+    if (gpsTimestamp > now) {
+      failedCount++;
+      failureCounted = true;
+      recordFailure(failureReasons, 'FUTURE_GPS_TIMESTAMP');
+      vehicle.gps_sync_status = 'DATA_UNAVAILABLE';
+      vehicle.gps_error_message = 'FUTURE_GPS_TIMESTAMP';
       await vehicle.save();
       continue;
     }
@@ -181,10 +256,9 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
       ? new Date(previousProviderFix.gpsTimestamp)
       : sameProviderStatusTime;
     if (latestStoredTimestamp && !Number.isNaN(latestStoredTimestamp.getTime()) && gpsTimestamp <= latestStoredTimestamp) {
+      unchangedCount++;
       continue;
     }
-
-    const readableLoc = getReadableLocation(lat, lon, activePlants) || telemetry.address || 'Outside';
 
     let prevEntryTime = curStatus ? curStatus.lastEntryDateTime : null;
     let prevExitTime = curStatus ? curStatus.lastExitDateTime : null;
@@ -217,6 +291,13 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
       (isInside && curStatus?.currentPlantId?.toString() === plantId?.toString()
         ? curStatus.current_plant
         : '');
+    const readableLoc = await getProviderLocationText(
+      lat,
+      lon,
+      activePlants,
+      isInside ? plantName : '',
+      telemetry.address
+    );
     const transitionTime = confirmation.transitionGpsTimestamp || gpsTimestamp;
 
     let entryDateTime = isInside ? prevEntryTime : null;
@@ -308,6 +389,7 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
       status: isInside ? 'Inside' : 'Outside',
       latitude: lat,
       longitude: lon,
+      address: readableLoc,
       distanceMeter: plantEval.distanceMeter,
       latest_gps_timestamp: gpsTimestamp,
       last_successful_sync_at: now,
@@ -317,7 +399,6 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
       speed,
       ignition: isIgnition,
       movementStatus: telemetry.status === 'Moving' ? 'Moving' : telemetry.status === 'Stopped' ? 'Stopped' : null,
-      address: readableLoc,
       lastEntryDateTime: entryDateTime,
       lastExitPlantName: prevExitPlant,
       lastExitDateTime: prevExitTime,
@@ -367,6 +448,7 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
           longitude: lon,
           speed,
           ignition: isIgnition,
+          address: readableLoc,
           syncTime: now,
           syncId,
           syncType: isAuto ? 'AUTO' : 'MANUAL',
@@ -383,17 +465,34 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
     );
 
     successCount++;
+    } catch (syncError) {
+      const errorCode = getSafeErrorCode(syncError);
+      if (!failureCounted) failedCount++;
+      recordFailure(failureReasons, errorCode);
+      try {
+        vehicle.gps_sync_status = 'FAILED';
+        vehicle.gps_error_message = errorCode;
+        await vehicle.save();
+      } catch (statusError) {
+        console.error(`[GPS Sync Engine] Could not mark ${targetProvider} vehicle failure: ${getSafeErrorCode(statusError)}`);
+      }
+      console.error(`[GPS Sync Engine] ${targetProvider} vehicle update failed: ${errorCode}`);
+    }
   }
 
   const completedAt = new Date();
   const durationMs = completedAt.getTime() - startedAt.getTime();
-  const overallStatus = fetchError
-    ? 'FAILED'
-    : failedCount === 0
-    ? 'SUCCESS'
-    : successCount > 0
-    ? 'PARTIAL'
-    : 'FAILED';
+  const { status: overallStatus, success: syncSucceeded } = getSyncOutcome({
+    fetchFailed: Boolean(fetchError),
+    failedCount,
+    savedCount: successCount,
+    unchangedCount,
+  });
+  console.log(
+    `[GPS Sync Result] ${targetProvider === 'FLEETX' ? 'FleetX' : 'WheelsEye'}: ` +
+    `${receivedCount} received, ${matchedCount} matched, ${successCount} saved, ` +
+    `${failedCount} failed${Object.keys(failureReasons).length ? ` (${JSON.stringify(failureReasons)})` : ''}.`
+  );
 
   // Record history in GpsSyncLog
   try {
@@ -409,13 +508,18 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
       vehiclesProcessed: registeredVehicles.length,
       vehiclesUpdated: successCount,
       vehiclesFailed: failedCount,
-      apiResponseStatus: fetchError ? `ERROR: ${fetchError.message}` : '200 OK',
-      errorMessage: fetchError ? fetchError.message : '',
+      telemetryReceived: receivedCount,
+      vehiclesMatched: matchedCount,
+      vehiclesSaved: successCount,
+      unchangedCount,
+      failureReasons,
+      apiResponseStatus: fetchError ? getSafeErrorCode(fetchError) : '200 OK',
+      errorMessage: fetchError ? getSafeErrorCode(fetchError) : '',
       executionTimeMs: durationMs,
       provider: targetProvider === 'FLEETX' ? 'FleetX' : 'WheelsEye GPS',
     });
   } catch (logErr) {
-    console.warn('[GPS Sync Log Error]:', logErr.message);
+    console.warn('[GPS Sync Log Error]:', getSafeErrorCode(logErr));
   }
 
   // Update GpsSetting document for provider
@@ -433,29 +537,37 @@ async function runProviderGpsSync({ provider = 'WHEELSEYE', mode = 'AUTO', calle
           last_evaluated_timestamp: completedAt,
           last_sync_status: overallStatus,
           last_sync_source: isAuto ? 'GPS-AUTO' : 'MANUAL',
-          lastError: fetchError ? fetchError.message : '',
+          lastError: fetchError ? getSafeErrorCode(fetchError) : failedCount ? Object.keys(failureReasons).join(',') : '',
+          lastErrorCode: fetchError ? getSafeErrorCode(fetchError) : failedCount ? Object.keys(failureReasons)[0] : '',
           connectionStatus: fetchError ? 'Connection Failed' : 'Connected',
           ...(fetchError ? {} : { lastSuccessAt: completedAt }),
           ...(fetchError ? { lastErrorAt: completedAt } : { lastErrorAt: null }),
           lastConnectionCheckAt: completedAt,
           vehicles_processed: registeredVehicles.length,
           vehicles_updated: successCount,
+          vehicles_failed: failedCount,
         },
       },
       { upsert: true }
     );
   } catch (setErr) {
-    console.warn('[GpsSetting Update Warning]:', setErr.message);
+    console.warn('[GpsSetting Update Warning]:', getSafeErrorCode(setErr));
   }
 
   return {
-    success: !fetchError,
+    success: syncSucceeded,
+    status: overallStatus,
     provider: targetProvider,
     mode,
     totalVehicles: registeredVehicles.length,
+    receivedCount,
+    matchedCount,
+    savedCount: successCount,
+    unchangedCount,
     successCount,
     failedCount,
-    errorMessage: fetchError ? fetchError.message : null,
+    failureReasons,
+    errorCode: fetchError ? getSafeErrorCode(fetchError) : null,
     durationMs,
     lastSuccessfulSyncAt: fetchError ? null : completedAt,
   };
@@ -477,10 +589,10 @@ async function syncBothGpsProviders({ mode = 'MANUAL', caller = 'Admin' } = {}) 
   return {
     wheelseye: wheelsEye.status === 'fulfilled'
       ? wheelsEye.value
-      : { success: false, errorMessage: wheelsEye.reason?.message || 'WheelsEye sync failed.' },
+      : { success: false, status: 'FAILED', errorCode: getSafeErrorCode(wheelsEye.reason), totalVehicles: 0, receivedCount: 0, matchedCount: 0, savedCount: 0, failedCount: 0, failureReasons: {} },
     fleetx: fleetx.status === 'fulfilled'
       ? fleetx.value
-      : { success: false, errorMessage: fleetx.reason?.message || 'FleetX sync failed.' },
+      : { success: false, status: 'FAILED', errorCode: getSafeErrorCode(fleetx.reason), totalVehicles: 0, receivedCount: 0, matchedCount: 0, savedCount: 0, failedCount: 0, failureReasons: {} },
   };
 }
 
@@ -569,7 +681,7 @@ async function getProviderTelematicsOverview() {
         : 'N/A',
       googleMapsUrl,
       syncStatus: syncStatusBadge,
-      errorMessage: v.gps_error_message || '',
+      errorMessage: sanitizeStoredError(v.gps_error_message),
       geofence: {
         status: plantEval.status,
         plantName: plantEval.plantName,
@@ -620,4 +732,5 @@ module.exports = {
   syncProviderGps,
   syncBothGpsProviders,
   getProviderTelematicsOverview,
+  getSyncOutcome,
 };

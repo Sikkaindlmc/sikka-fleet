@@ -7,6 +7,8 @@ const {
   extractDateRange,
   extractVehicleToken,
   formatToolAnswer,
+  getSyncNotice,
+  gpsIsFresh,
   getSuggestions,
   hasFuzzyKeyword,
   hashQuery,
@@ -36,6 +38,13 @@ test('rejects future dates and invalid history ranges', () => {
   assert.equal(validatePastRange({ from: '2026-11-17', to: '2026-11-17' }, now).end.toISOString(), now.toISOString());
 });
 
+test('live GPS freshness uses the 30-minute threshold and rejects future timestamps', () => {
+  const nowMs = now.getTime();
+  assert.equal(gpsIsFresh(new Date(nowMs - 30 * 60 * 1000), now), true);
+  assert.equal(gpsIsFresh(new Date(nowMs - 30 * 60 * 1000 - 1), now), false);
+  assert.equal(gpsIsFresh(new Date(nowMs + 1), now), false);
+});
+
 test('query audit hashes are deterministic and do not return the prompt', () => {
   assert.equal(hashQuery('Where is UP14AA1001?'), hashQuery('Where is UP14AA1001?'));
   assert.notEqual(hashQuery('Where is UP14AA1001?'), 'Where is UP14AA1001?');
@@ -62,6 +71,9 @@ test('recognizes vehicle number formats, current and plant questions, and fuzzy 
   assert.equal(extractVehicleToken('UP-14-GT-0600 kahan hai'), 'UP14GT0600');
   assert.equal(extractVehicleToken('show vehicle ending 0600'), '0600');
   assert.equal(recognizeQuestion('where is UP14GT0600').tool, 'get_vehicle_location');
+  assert.equal(recognizeQuestion('UP14GT0600 location').tool, 'get_vehicle_location');
+  assert.equal(recognizeQuestion('up 14 gt 0600 kahan hai').tool, 'get_vehicle_location');
+  assert.equal(recognizeQuestion('1442 location').args.vehicleNumber, '1442');
   assert.equal(recognizeQuestion('UP14GT0600 abhi kahan hai').language, 'hinglish');
   const plantIntent = recognizeQuestion('vehicles in Salt Plant');
   assert.equal(plantIntent.tool, 'get_plant_availability');
@@ -89,9 +101,13 @@ test('distinguishes ambiguous tomorrow/yesterday, resolves past Hindi, and refus
 test('required missing-data responses use the documented exact wording', () => {
   assert.equal(NOT_REGISTERED_MESSAGE, 'This vehicle is not registered in Sikka Fleet.');
   assert.equal(UNAVAILABLE_MESSAGE, 'Required information is not available in the Sikka Fleet database.');
+  assert.match(
+    formatToolAnswer([{ tool: 'future_refusal', data: { message: FUTURE_DATA_MESSAGE } }], 'hi'),
+    /भविष्य की वाहन लोकेशन/
+  );
 });
 
-test('location answers include the real source and an Asia/Kolkata GPS timestamp', () => {
+test('location answers contain only three lines and format the GPS time in Asia/Kolkata', () => {
   const answer = formatToolAnswer([{
     tool: 'get_vehicle_location',
     data: {
@@ -106,8 +122,45 @@ test('location answers include the real source and an Asia/Kolkata GPS timestamp
       ignition: false,
     },
   }]);
-  assert.match(answer, /UP14GT0600/);
-  assert.match(answer, /WheelsEye/);
-  assert.match(answer, /17-11-2026 17:30/);
-  assert.match(answer, /Salt Plant/);
+  assert.equal(answer, 'Last Update: 17-11-2026, 17:30\nVehicle: UP14GT0600\nLocation: Salt Plant');
+  assert.doesNotMatch(answer, /WheelsEye|28\.5|77\.2|Speed|Ignition/i);
+});
+
+test('location answers use Hindi labels and expose telemetry only for a details request', () => {
+  const data = {
+    vehicleNumber: 'UP14GT0600',
+    dataSource: 'FleetX',
+    gpsTimestamp: '2026-11-17T12:00:00.000Z',
+    plantStatus: 'Outside',
+    location: 'Hapur, Uttar Pradesh',
+    latitude: 28.5,
+    longitude: 77.2,
+    speed: 25,
+    ignition: true,
+    stayHours: '00:00',
+    outsideHours: '01:20',
+  };
+  assert.equal(
+    formatToolAnswer([{ tool: 'get_vehicle_location', data }], 'hi'),
+    'अंतिम अपडेट: 17-11-2026, 17:30\nवाहन: UP14GT0600\nलोकेशन: Hapur, Uttar Pradesh'
+  );
+  const details = formatToolAnswer([{ tool: 'get_vehicle_details', data }]);
+  assert.match(details, /FleetX/);
+  assert.match(details, /Speed: 25/);
+  assert.match(details, /Coordinates: 28\.5, 77\.2/);
+  assert.equal(
+    getSyncNotice([{ tool: 'get_vehicle_location', data: { syncResults: { wheelseye: { status: 'FAILED' } } } }]),
+    'Live sync failed (WheelsEye). Showing last saved update.'
+  );
+  assert.equal(
+    getSyncNotice([{ tool: 'get_vehicle_location', data: { syncResults: { wheelseye: { status: 'SUCCESS' } } } }]),
+    null
+  );
+});
+
+test('detail, location, and requested provider phrases keep the local intent routing', () => {
+  assert.equal(recognizeQuestion('UP14GT0600 location').tool, 'get_vehicle_location');
+  assert.equal(recognizeQuestion('up 14 gt 0600 kahan hai').tool, 'get_vehicle_location');
+  assert.equal(recognizeQuestion('details of UP14GT0600').tool, 'get_vehicle_details');
+  assert.equal(recognizeQuestion('UP14GT0600 plant stay hours').tool, 'get_vehicle_details');
 });

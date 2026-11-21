@@ -26,6 +26,7 @@ const DailyGpsReport = require('./DailyGpsReport');
 const GpsCredentialAuditLog = require('./GpsCredentialAuditLog');
 const SikkaAiAuditLog = require('./SikkaAiAuditLog');
 const SikkaAiSyncCooldown = require('./SikkaAiSyncCooldown');
+const GpsGeocodeCache = require('./GpsGeocodeCache');
 
 module.exports = {
   User,
@@ -44,6 +45,7 @@ module.exports = {
   GpsCredentialAuditLog,
   SikkaAiAuditLog,
   SikkaAiSyncCooldown,
+  GpsGeocodeCache,
   PlantEntry,
   PlantEntryEvent,
   GpsSetting,

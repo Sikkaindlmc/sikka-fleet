@@ -13,6 +13,7 @@ const gpsHistorySchema = new mongoose.Schema(
     archived: { type: Boolean, default: false, index: true },
     latitude: { type: Number, required: true },
     longitude: { type: Number, required: true },
+    address: { type: String, default: '' },
     speed: { type: mongoose.Schema.Types.Mixed, default: null },
     ignition: { type: mongoose.Schema.Types.Mixed, default: null },
     gpsTimestamp: { type: Date, required: true },
